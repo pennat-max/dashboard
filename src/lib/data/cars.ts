@@ -4,6 +4,9 @@ import type { Car, CarsSortField, SortOrder } from "@/types/car";
 
 const TABLE = process.env.NEXT_PUBLIC_SUPABASE_CARS_TABLE ?? "cars";
 
+/** PostgREST / Supabase จำกัดจำนวนแถวต่อคำขอ (ปกติ 1,000) — ต้องดึงหลายรอบ */
+const PAGE_SIZE = 1000;
+
 /**
  * ไม่ดึง raw_data (JSON ใหญ่มาก) — ลดขนาดและเลี่ยงขีดจำกัด cache 2MB ของ Next
  */
@@ -112,13 +115,20 @@ export type CarsQueryResult = { cars: Car[]; error: string | null };
 export async function fetchCarsForDashboard(): Promise<CarsQueryResult> {
   try {
     const supabase = createAnonClient();
-    const { data, error } = await supabase
-      .from(TABLE)
-      .select(CARS_SELECT_LEAN)
-      .order("updated_at", { ascending: false });
+    const all: Car[] = [];
+    for (let from = 0; ; from += PAGE_SIZE) {
+      const { data, error } = await supabase
+        .from(TABLE)
+        .select(CARS_SELECT_LEAN)
+        .order("updated_at", { ascending: false })
+        .range(from, from + PAGE_SIZE - 1);
 
-    if (error) return { cars: [], error: error.message };
-    return { cars: rowsAsCars(data), error: null };
+      if (error) return { cars: [], error: error.message };
+      const batch = rowsAsCars(data);
+      all.push(...batch);
+      if (batch.length < PAGE_SIZE) break;
+    }
+    return { cars: all, error: null };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return { cars: [], error: msg };
@@ -173,34 +183,43 @@ export async function fetchCarsList(
     const supabase = createAnonClient();
     const { field, order } = parseSort(params.sort, params.order);
 
-    let query = supabase.from(TABLE).select(CARS_SELECT_LEAN);
+    const buildBase = () => {
+      let q = supabase.from(TABLE).select(CARS_SELECT_LEAN);
 
-    const q = params.q?.trim();
-    if (q) {
-      const pattern = `%${q}%`;
-      query = query.or(
-        `brand.ilike.${pattern},model.ilike.${pattern},chassis_number.ilike.${pattern},plate_number.ilike.${pattern},spec.ilike.${pattern}`
-      );
+      const search = params.q?.trim();
+      if (search) {
+        const pattern = `%${search}%`;
+        q = q.or(
+          `brand.ilike.${pattern},model.ilike.${pattern},chassis_number.ilike.${pattern},plate_number.ilike.${pattern},spec.ilike.${pattern}`
+        );
+      }
+
+      if (params.status && params.status !== "all") {
+        q = q.eq("status", params.status);
+      }
+
+      if (params.destination && params.destination !== "all") {
+        const d = params.destination;
+        q = q.or(`country.eq.${d},destination_port.eq.${d}`);
+      }
+
+      return q.order(field, {
+        ascending: order === "asc",
+        nullsFirst: false,
+      });
+    };
+
+    const all: Car[] = [];
+    for (let from = 0; ; from += PAGE_SIZE) {
+      const { data, error } = await buildBase().range(from, from + PAGE_SIZE - 1);
+
+      if (error) return { cars: [], error: error.message };
+      const batch = rowsAsCars(data);
+      all.push(...batch);
+      if (batch.length < PAGE_SIZE) break;
     }
 
-    if (params.status && params.status !== "all") {
-      query = query.eq("status", params.status);
-    }
-
-    if (params.destination && params.destination !== "all") {
-      const d = params.destination;
-      query = query.or(`country.eq.${d},destination_port.eq.${d}`);
-    }
-
-    query = query.order(field, {
-      ascending: order === "asc",
-      nullsFirst: false,
-    });
-
-    const { data, error } = await query;
-
-    if (error) return { cars: [], error: error.message };
-    return { cars: rowsAsCars(data), error: null };
+    return { cars: all, error: null };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return { cars: [], error: msg };

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Menu } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import { DeploySiteLink } from "@/components/layout/deploy-site-link";
 import { DashboardNavLinks } from "@/components/layout/dashboard-nav";
 import { cn } from "@/lib/utils";
 
@@ -51,8 +52,11 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
                 </span>
                 <div className="font-heading text-base font-semibold">Export Cars</div>
               </div>
-              <div className="p-3">
+              <div className="space-y-4 p-3">
                 <DashboardNavLinks />
+                <div className="border-t border-border pt-3">
+                  <DeploySiteLink />
+                </div>
               </div>
             </SheetContent>
           </Sheet>
