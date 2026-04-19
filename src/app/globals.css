@@ -1,8 +1,8 @@
+@import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+
+@config "../../tailwind.config.ts";
 
 @layer utilities {
   .text-balance {
@@ -16,7 +16,17 @@
     --font-sans: var(--font-sans);
   }
   :root {
-    --background: oklch(1 0 0);
+    /* โซนหน้า — พื้นหลังแยกโทนอ่อน */
+    --tone-sky: oklch(0.965 0.025 240);
+    --tone-emerald: oklch(0.965 0.03 165);
+    --tone-amber: oklch(0.97 0.04 85);
+    --tone-violet: oklch(0.965 0.035 290);
+    --tone-rose: oklch(0.97 0.025 15);
+    --shell-ink: oklch(0.22 0.045 260);
+    --shell-sidebar: oklch(0.2 0.05 265);
+    --shell-glow: oklch(0.62 0.16 195);
+
+    --background: oklch(0.99 0.006 265);
     --foreground: oklch(0.145 0 0);
     --card: oklch(1 0 0);
     --card-foreground: oklch(0.145 0 0);
@@ -34,11 +44,11 @@
     --border: oklch(0.922 0 0);
     --input: oklch(0.922 0 0);
     --ring: oklch(0.708 0 0);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
+    --chart-1: oklch(0.62 0.17 240);
+    --chart-2: oklch(0.6 0.16 165);
+    --chart-3: oklch(0.72 0.16 85);
+    --chart-4: oklch(0.58 0.2 290);
+    --chart-5: oklch(0.62 0.2 15);
     --radius: 0.625rem;
     --sidebar: oklch(0.985 0 0);
     --sidebar-foreground: oklch(0.145 0 0);
@@ -50,7 +60,16 @@
     --sidebar-ring: oklch(0.708 0 0);
   }
   .dark {
-    --background: oklch(0.145 0 0);
+    --tone-sky: oklch(0.28 0.06 240);
+    --tone-emerald: oklch(0.28 0.06 165);
+    --tone-amber: oklch(0.3 0.06 85);
+    --tone-violet: oklch(0.28 0.07 290);
+    --tone-rose: oklch(0.28 0.06 15);
+    --shell-ink: oklch(0.16 0.04 265);
+    --shell-sidebar: oklch(0.18 0.045 265);
+    --shell-glow: oklch(0.72 0.14 195);
+
+    --background: oklch(0.16 0.025 265);
     --foreground: oklch(0.985 0 0);
     --card: oklch(0.205 0 0);
     --card-foreground: oklch(0.985 0 0);
@@ -68,11 +87,11 @@
     --border: oklch(1 0 0 / 10%);
     --input: oklch(1 0 0 / 15%);
     --ring: oklch(0.556 0 0);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
+    --chart-1: oklch(0.72 0.14 240);
+    --chart-2: oklch(0.72 0.13 165);
+    --chart-3: oklch(0.78 0.14 85);
+    --chart-4: oklch(0.7 0.16 290);
+    --chart-5: oklch(0.72 0.16 15);
     --sidebar: oklch(0.205 0 0);
     --sidebar-foreground: oklch(0.985 0 0);
     --sidebar-primary: oklch(0.488 0.243 264.376);
@@ -83,7 +102,7 @@
     --sidebar-ring: oklch(0.556 0 0);
   }
   * {
-    @apply border-border outline-ring/50;
+    @apply border-border;
   }
   body {
     @apply bg-background text-foreground;

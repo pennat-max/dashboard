@@ -1,36 +1,90 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# แดชบอร์ดจัดการรถมือสองส่งออก
 
-## Getting Started
+แอป Next.js 14 (App Router) + TypeScript + Tailwind CSS + shadcn/ui อ่านข้อมูลจริงจากตาราง **`public.cars`** ใน Supabase — **ไม่ต้องล็อกอิน** เปิด URL แล้วใช้งานได้ทันที (รวมบนมือถือ)
 
-First, run the development server:
+## ความสามารถ
+
+- หน้าแรกไป **ภาพรวม** ทันที
+- หน้า **ภาพรวม**: KPI, กราฟแท่งตามสถานะ, กราฟพื้นที่ตามเดือน (จาก `created_at`)
+- หน้า **รายการรถ**: ค้นหา, กรองสถานะ/ปลายทาง, เรียงลำดับ
+- หน้า **รายละเอียดรถ** ตาม `id`
+- Responsive (sidebar บนเดสก์ท็อป + เมนู Sheet บนมือถือ)
+
+## ความต้องการของระบบ
+
+- Node.js 18+
+- โปรเจกต์ Supabase พร้อมตาราง `cars` และ **RLS policy ให้ role `anon` อ่านได้** (ดูด้านล่าง)
+
+## การติดตั้ง
+
+### 1. ติดตั้งแพ็กเกจ
+
+```bash
+cd used-car-export-dashboard
+npm install
+```
+
+### 2. ตั้งค่า environment
+
+คัดลอก `env.example` เป็น `.env.local` แล้วใส่ค่าจาก Supabase:
+
+- เปิด **Project Settings → API**
+- `NEXT_PUBLIC_SUPABASE_URL` = Project URL
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY` = `anon` `public` key
+
+```bash
+copy env.example .env.local
+```
+
+ถ้าชื่อตารางไม่ใช่ `cars` ให้ตั้ง `NEXT_PUBLIC_SUPABASE_CARS_TABLE` ตามจริง
+
+### 3. โครงสร้างตาราง `cars` (อ้างอิง)
+
+ไฟล์ `supabase/schema.sql` เป็นสคีมาตัวอย่าง — ถ้าตารางจริงต่างออกไป ให้ปรับ `src/types/car.ts` และ `src/lib/data/cars.ts`
+
+### 4. Row Level Security (สำคัญ)
+
+แอปใช้ **anon key โดยไม่มี session ล็อกอิน** ดังนั้นต้องมี policy ให้ **role `anon`** สามารถ **SELECT** ตาราง `cars` ได้
+
+- ถ้าสร้าง DB จาก `supabase/schema.sql` จะมี policy `cars_select_anon` อยู่แล้ว
+- ถ้าโปรเจกต์มีตารางอยู่แล้ว ให้รัน `supabase/policy-anon-select.sql` ใน **SQL Editor** (หรือคัดลอกคำสั่ง `create policy "cars_select_anon" ...` จาก `schema.sql`)
+
+### 5. รันโหมดพัฒนา
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+เปิด [http://localhost:3000](http://localhost:3000) — ไป `/dashboard` ทันที
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### 6. Build โปรดักชัน
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm run build
+npm start
+```
 
-## Learn More
+## โครงสร้างโฟลเดอร์หลัก
 
-To learn more about Next.js, take a look at the following resources:
+```
+src/
+  app/
+    (app)/           # layout มี sidebar — /dashboard, /cars
+  components/        # UI, กราฟ (recharts), layout
+  lib/data/          # ดึงข้อมูลจาก Supabase, KPI, aggregate
+  lib/supabase/      # client ฝั่ง browser / server
+  types/car.ts       # ชนิดข้อมูลสอดคล้องกับตาราง cars
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## เทคโนโลยี
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- [Next.js 14](https://nextjs.org/) (App Router)
+- [Supabase](https://supabase.com/) — Postgres + API
+- [Tailwind CSS](https://tailwindcss.com/)
+- [shadcn/ui](https://ui.shadcn.com/)
+- [Recharts](https://recharts.org/) สำหรับกราฟ
 
-## Deploy on Vercel
+## หมายเหตุ
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- การอ่านแบบเปิดสาธารณะใช้ได้เฉพาะที่ **anon key** ทำได้ตาม RLS — อย่าใส่ข้อมูลลับในตารางที่เปิด `anon` read หากไม่ตั้งใจเผยแพร่
+- ถ้า URL รูปรถ (`image_url`) โหลดไม่ขึ้น ให้ตรวจ `next.config.mjs` และ domain ของไฟล์
