@@ -10,7 +10,9 @@ import {
   carStockLabel,
   carTitleLine,
 } from "@/lib/car-fields";
+import { getDictionary } from "@/i18n/dictionaries";
 import { fetchCarById } from "@/lib/data/cars";
+import { getLocale } from "@/lib/locale";
 import { formatDate, formatKm, formatThb } from "@/lib/format";
 import { ArrowLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -83,12 +85,14 @@ function DetailSectionBlock({ section }: { section: DetailSection }) {
 }
 
 export default async function CarDetailPage({ params }: PageProps) {
+  const locale = await getLocale();
+  const dict = getDictionary(locale);
   const { id } = params;
   const { car, error } = await fetchCarById(id);
   if (error) {
     return (
       <div className="mx-auto flex max-w-3xl flex-col gap-6">
-        <SupabaseErrorBanner message={error} />
+        <SupabaseErrorBanner message={error} labels={dict.error} />
         <Link href="/cars" className={cn(buttonVariants({ variant: "outline" }), "w-fit")}>
           กลับไปรายการ
         </Link>

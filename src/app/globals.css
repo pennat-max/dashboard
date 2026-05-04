@@ -10,6 +10,14 @@
   }
 }
 
+/** mobile `/m/*` — override critical fallback ที่จำกัด main เป็น 72rem */
+@layer base {
+  [data-mobile-fullscreen] {
+    max-width: none !important;
+    margin-inline: 0 !important;
+  }
+}
+
 @layer base {
   .theme {
     --font-heading: var(--font-sans);

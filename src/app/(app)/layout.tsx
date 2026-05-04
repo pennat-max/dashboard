@@ -1,5 +1,17 @@
 import { DashboardShell } from "@/components/layout/dashboard-shell";
+import { getDictionary } from "@/i18n/dictionaries";
+import { getLocale } from "@/lib/locale";
 
-export default function AppLayout({ children }: { children: React.ReactNode }) {
-  return <DashboardShell>{children}</DashboardShell>;
+export default async function AppLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  const locale = await getLocale();
+  const dict = getDictionary(locale);
+  return (
+    <DashboardShell locale={locale} dict={dict}>
+      {children}
+    </DashboardShell>
+  );
 }

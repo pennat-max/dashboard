@@ -1,7 +1,9 @@
+import "./globals.css";
 import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
-import "./globals.css";
 import { Inter } from "next/font/google";
+import { CRITICAL_APP_CSS } from "@/lib/critical-app-fallback-css";
+import { getLocale } from "@/lib/locale";
 import { cn } from "@/lib/utils";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
@@ -18,6 +20,10 @@ const geistMono = localFont({
 });
 
 function metadataBaseUrl(): URL {
+  // dev: ใช้ localhost เท่านั้น — ถ้าใช้ URL deploy ใน .env จะไม่กระทบการโหลด /_next/static
+  if (process.env.NODE_ENV === "development") {
+    return new URL("http://localhost:3000");
+  }
   const manual = process.env.NEXT_PUBLIC_APP_URL?.trim();
   if (manual) {
     const u = manual.replace(/\/$/, "");
@@ -38,25 +44,37 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
+  /** iOS / notch — ให้พื้นหลังล้ำไปถึงขอบจริงของจอ */
+  viewportFit: "cover",
+  /** Chrome Android — แถบที่อยู่ทับ viewport แทนการหดความสูง */
+  interactiveWidget: "overlays-content",
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#fafafa" },
-    { media: "(prefers-color-scheme: dark)", color: "#0a0a0a" },
+    { media: "(prefers-color-scheme: light)", color: "#f1f5f9" },
+    { media: "(prefers-color-scheme: dark)", color: "#0f172a" },
   ],
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const locale = await getLocale();
   return (
-    <html lang="th" className={cn("font-sans", inter.variable)}>
+    <html lang={locale === "en" ? "en" : "th"} className={cn("font-sans", inter.variable)}>
       <body
+        data-app-root
         className={cn(
           `${geistSans.variable} ${geistMono.variable} antialiased`,
           "min-h-screen bg-background text-foreground"
         )}
       >
+        {/* สำรองทันทีที่ body — App Router ไม่แนะนำแทรก <head> ใน layout; :where() ไม่แย่ง specificity กับ Tailwind */}
+        <style
+          dangerouslySetInnerHTML={{
+            __html: CRITICAL_APP_CSS,
+          }}
+        />
         {children}
       </body>
     </html>

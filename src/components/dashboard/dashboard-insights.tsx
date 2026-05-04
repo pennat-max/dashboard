@@ -1,109 +1,352 @@
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import type { BuyerCount, ModelYearInsight } from "@/lib/data/aggregate";
-import { Users } from "lucide-react";
+ "use client";
+
+import { useEffect, useMemo, useState } from "react";
+import { BuyerBarChart, EntityCountBarChart } from "@/components/dashboard/inventory-charts";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import type { Dictionary } from "@/i18n/dictionaries";
+import type { BuyerCount } from "@/lib/data/aggregate";
 
 type Props = {
   byBuyer: BuyerCount[];
-  modelYear: ModelYearInsight | null;
+  byAgentCurrentMonthBeForward: BuyerCount[];
+  byAgentPreviousMonthBeForward: BuyerCount[];
+  byAgentTwoMonthsAgoBeForward: BuyerCount[];
+  byAgentAllMonthsBeForward: BuyerCount[];
+  byAgentCurrentMonthStock: BuyerCount[];
+  byAgentPreviousMonthStock: BuyerCount[];
+  byAgentTwoMonthsAgoStock: BuyerCount[];
+  byAgentAllMonthsStock: BuyerCount[];
+  byAgentCurrentMonthAllBuyer: BuyerCount[];
+  byAgentPreviousMonthAllBuyer: BuyerCount[];
+  byAgentTwoMonthsAgoAllBuyer: BuyerCount[];
+  byAgentAllMonthsAllBuyer: BuyerCount[];
+  insights: Dictionary["insights"];
+  agentPreviousMonthLabel: string;
+  agentTwoMonthsAgoLabel: string;
 };
 
-export function DashboardInsights({ byBuyer, modelYear }: Props) {
+type AgentRangeKey = "currentMonth" | "last3Months" | "twoMonthsAgo" | "all";
+type AgentBuyerKey = "all" | "beForward" | "stock";
+
+export function DashboardInsights({
+  byBuyer,
+  byAgentCurrentMonthBeForward,
+  byAgentPreviousMonthBeForward,
+  byAgentTwoMonthsAgoBeForward,
+  byAgentAllMonthsBeForward,
+  byAgentCurrentMonthStock,
+  byAgentPreviousMonthStock,
+  byAgentTwoMonthsAgoStock,
+  byAgentAllMonthsStock,
+  byAgentCurrentMonthAllBuyer,
+  byAgentPreviousMonthAllBuyer,
+  byAgentTwoMonthsAgoAllBuyer,
+  byAgentAllMonthsAllBuyer,
+  insights,
+  agentPreviousMonthLabel,
+  agentTwoMonthsAgoLabel,
+}: Props) {
+  const [agentRange, setAgentRange] = useState<AgentRangeKey>("all");
+  const [agentBuyer, setAgentBuyer] = useState<AgentBuyerKey>("all");
+  const [agentChartFullscreen, setAgentChartFullscreen] = useState(false);
+  const [comparedAgents, setComparedAgents] = useState<string[]>([]);
+  const openAgentChartFullscreen = () => {
+    if (typeof window !== "undefined" && window.innerWidth < 768) {
+      setAgentChartFullscreen(true);
+    }
+  };
+  const closeAgentChartFullscreen = () => setAgentChartFullscreen(false);
+  const toggleComparedAgent = (agentName: string) => {
+    if (!agentName) return;
+    setComparedAgents((prev) => {
+      if (prev.includes(agentName)) return prev.filter((v) => v !== agentName);
+      return [...prev, agentName];
+    });
+  };
+
+  useEffect(() => {
+    if (!agentChartFullscreen || typeof window === "undefined") return;
+
+    const orientation = window.screen.orientation as (ScreenOrientation & {
+      lock?: (orientation: "landscape") => Promise<void>;
+      unlock?: () => void;
+    }) | null;
+
+    void orientation?.lock?.("landscape").catch(() => undefined);
+
+    return () => {
+      orientation?.unlock?.();
+    };
+  }, [agentChartFullscreen]);
+  const selectedAgents = useMemo(() => {
+    if (agentBuyer === "beForward") {
+      if (agentRange === "currentMonth") return byAgentCurrentMonthBeForward;
+      if (agentRange === "last3Months") return byAgentPreviousMonthBeForward;
+      if (agentRange === "twoMonthsAgo") return byAgentTwoMonthsAgoBeForward;
+      return byAgentAllMonthsBeForward;
+    }
+    if (agentBuyer === "stock") {
+      if (agentRange === "currentMonth") return byAgentCurrentMonthStock;
+      if (agentRange === "last3Months") return byAgentPreviousMonthStock;
+      if (agentRange === "twoMonthsAgo") return byAgentTwoMonthsAgoStock;
+      return byAgentAllMonthsStock;
+    }
+    if (agentRange === "currentMonth") return byAgentCurrentMonthAllBuyer;
+    if (agentRange === "last3Months") return byAgentPreviousMonthAllBuyer;
+    if (agentRange === "twoMonthsAgo") return byAgentTwoMonthsAgoAllBuyer;
+    return byAgentAllMonthsAllBuyer;
+  }, [
+    agentBuyer,
+    agentRange,
+    byAgentCurrentMonthBeForward,
+    byAgentPreviousMonthBeForward,
+    byAgentTwoMonthsAgoBeForward,
+    byAgentAllMonthsBeForward,
+    byAgentCurrentMonthStock,
+    byAgentPreviousMonthStock,
+    byAgentTwoMonthsAgoStock,
+    byAgentAllMonthsStock,
+    byAgentCurrentMonthAllBuyer,
+    byAgentPreviousMonthAllBuyer,
+    byAgentTwoMonthsAgoAllBuyer,
+    byAgentAllMonthsAllBuyer,
+  ]);
+  const comparedRows = useMemo(
+    () => selectedAgents.filter((row) => comparedAgents.includes(row.buyer)),
+    [selectedAgents, comparedAgents],
+  );
+
   return (
-    <div className="grid gap-6 lg:grid-cols-2">
+    <div className="space-y-5">
+      <div className="space-y-5">
       <Card className="border border-border/80 bg-card shadow-sm">
-        <CardHeader className="border-b border-border/80 pb-4">
-          <div className="flex items-start gap-3">
-            <span className="flex size-9 shrink-0 items-center justify-center rounded-md border border-border bg-muted/50 text-muted-foreground">
-              <Users className="size-4" aria-hidden />
-            </span>
-            <div className="min-w-0 space-y-1">
-              <CardTitle className="text-base font-semibold">ขายให้ใคร (ตาม buyer)</CardTitle>
-              <CardDescription>
-                แถวที่มีชื่อใน <code className="rounded border border-border bg-muted px-1 font-mono text-[0.7rem]">buyer</code>{" "}
-                — เรียงจำนวนคันจากมากไปน้อย
-              </CardDescription>
-            </div>
-          </div>
-        </CardHeader>
         <CardContent className="pt-4">
+          <h3 className="mb-3 text-sm font-semibold text-foreground">{insights.buyerTitle}</h3>
           {byBuyer.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              ยังไม่มีข้อมูลผู้ซื้อในคอลัมน์ buyer
-            </p>
+            <p className="text-sm text-muted-foreground">{insights.buyerEmpty}</p>
           ) : (
-            <div className="max-h-[320px] overflow-auto rounded-md border border-border">
-              <Table>
-                <TableHeader>
-                  <TableRow className="border-b bg-muted/40 hover:bg-muted/40">
-                    <TableHead className="font-medium">ผู้ซื้อ</TableHead>
-                    <TableHead className="w-28 text-end font-medium">จำนวน (คัน)</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {byBuyer.map((row) => (
-                    <TableRow key={row.buyer} className="border-border/80">
-                      <TableCell className="font-medium">{row.buyer}</TableCell>
-                      <TableCell className="text-end tabular-nums text-muted-foreground">
-                        {new Intl.NumberFormat("th-TH").format(row.count)}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
+            <BuyerBarChart data={byBuyer} units={insights.units} />
           )}
         </CardContent>
       </Card>
+      <Card className="relative overflow-hidden border-2 border-amber-200/80 bg-card shadow-md shadow-amber-500/10 dark:border-amber-500/30">
+        <div
+          className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-amber-400 via-amber-500 to-orange-400"
+          aria-hidden
+        />
+        <CardContent className="pt-4">
+          <h3 className="mb-2 text-sm font-semibold text-foreground">
+            {insights.agentTitle}
+            <span className="ml-2 text-xs font-normal text-muted-foreground">
+              ({insights.agentInteractionHint})
+            </span>
+          </h3>
 
-      <Card className="border border-border/80 bg-card shadow-sm">
-        <CardHeader className="border-b border-border/80 pb-4">
-          <CardTitle className="text-base font-semibold">Model year ที่ขายดี</CardTitle>
-          <CardDescription>
-            จากรถที่ถือว่า &quot;ขาย/ดีลปิด&quot; — ปีที่มีจำนวนมากสุด และคันที่ยังไม่ปิดดีลในปีเดียวกัน
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4 pt-4">
-          {!modelYear ? (
-            <p className="text-sm text-muted-foreground">
-              ยังไม่มีข้อมูลเพียงพอสำหรับจัดอันดับปี
-            </p>
+          <div className="mb-4 grid gap-2 rounded-lg border border-border/70 bg-muted/30 p-2 md:grid-cols-2">
+            <div>
+              <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                {insights.agentBuyerScopeLabel}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="xs"
+                  variant={agentBuyer === "all" ? "default" : "outline"}
+                  onClick={() => setAgentBuyer("all")}
+                >
+                  {insights.agentBuyerAll}
+                </Button>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant={agentBuyer === "beForward" ? "default" : "outline"}
+                  onClick={() => setAgentBuyer("beForward")}
+                >
+                  {insights.agentBuyerBeForward}
+                </Button>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant={agentBuyer === "stock" ? "default" : "outline"}
+                  onClick={() => setAgentBuyer("stock")}
+                >
+                  {insights.agentBuyerStock}
+                </Button>
+              </div>
+            </div>
+            <div>
+              <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                {insights.agentMonthRangeLabel}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="xs"
+                  variant={agentRange === "currentMonth" ? "default" : "outline"}
+                  onClick={() => setAgentRange("currentMonth")}
+                >
+                  {insights.agentFilterCurrent}
+                </Button>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant={agentRange === "last3Months" ? "default" : "outline"}
+                  onClick={() => setAgentRange("last3Months")}
+                >
+                  {agentPreviousMonthLabel}
+                </Button>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant={agentRange === "twoMonthsAgo" ? "default" : "outline"}
+                  onClick={() => setAgentRange("twoMonthsAgo")}
+                >
+                  {agentTwoMonthsAgoLabel}
+                </Button>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant={agentRange === "all" ? "default" : "outline"}
+                  onClick={() => setAgentRange("all")}
+                >
+                  {insights.agentFilterAll}
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          {selectedAgents.length === 0 ? (
+            <p className="text-sm text-muted-foreground">{insights.agentEmpty}</p>
           ) : (
             <>
-              <dl className="grid gap-4 rounded-md border border-border bg-muted/20 p-4">
-                <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-border/60 pb-3">
-                  <dt className="text-sm text-muted-foreground">ปีที่ขายมากสุด</dt>
-                  <dd className="font-heading text-2xl font-semibold tabular-nums text-foreground">
-                    {modelYear.topYear}
-                  </dd>
-                </div>
-                <div className="flex flex-wrap items-baseline justify-between gap-2">
-                  <dt className="text-sm text-muted-foreground">จำนวนที่ขาย/ปิดดีล (ปีนี้)</dt>
-                  <dd className="text-lg font-semibold tabular-nums">
-                    {new Intl.NumberFormat("th-TH").format(modelYear.soldCount)} คัน
-                  </dd>
-                </div>
-                <div className="flex flex-wrap items-baseline justify-between gap-2 border-t border-border/60 pt-3">
-                  <dt className="text-sm text-muted-foreground">เหลือในสต็อก (ปีเดียวกัน)</dt>
-                  <dd className="text-lg font-semibold tabular-nums text-foreground">
-                    {new Intl.NumberFormat("th-TH").format(modelYear.remainingInStock)} คัน
-                  </dd>
-                </div>
-              </dl>
-              <p className="text-xs leading-relaxed text-muted-foreground">
-                ปีมาจาก c_year / model_year — กลุ่ม &quot;ไม่ระบุปี&quot; หากไม่มีข้อมูล
+              <div className="mb-2 flex items-center justify-end md:hidden">
+                <Button type="button" size="xs" variant="outline" onClick={openAgentChartFullscreen}>
+                  {insights.agentFullscreenButton}
+                </Button>
+              </div>
+              <div className="block w-full text-start">
+                <EntityCountBarChart
+                  data={selectedAgents}
+                  units={insights.units}
+                  selectedAgentNames={comparedAgents}
+                  onAgentSelect={toggleComparedAgent}
+                />
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground md:hidden">
+                {insights.agentMobileHint}
               </p>
+              <div className="mt-2 rounded-md border border-border/70 bg-muted/20 px-2 py-1.5 text-xs">
+                {comparedRows.length === 0 ? (
+                  <p className="text-muted-foreground">{insights.agentCompareHint}</p>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    {comparedRows.map((row) => (
+                      <span key={row.buyer} className="font-medium text-foreground">
+                        {row.buyer}: <span className="tabular-nums">{row.count}</span> {insights.units}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
             </>
           )}
         </CardContent>
       </Card>
+      </div>
+
+      {agentChartFullscreen && selectedAgents.length > 0 ? (
+        <div className="fixed inset-0 z-50 bg-background p-3 md:hidden">
+          <div className="mb-2 flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-foreground">{insights.agentTitle}</h3>
+            <Button type="button" size="xs" variant="outline" onClick={closeAgentChartFullscreen}>
+              {insights.agentFullscreenClose}
+            </Button>
+          </div>
+          <p className="mb-2 text-[11px] text-muted-foreground">{insights.agentFullscreenLandscapeHint}</p>
+          <div className="mb-2 grid gap-2 rounded-lg border border-border/70 bg-muted/30 p-2">
+            <div>
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                {insights.agentBuyerScopeLabel}
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                <Button
+                  type="button"
+                  size="xs"
+                  variant={agentBuyer === "all" ? "default" : "outline"}
+                  onClick={() => setAgentBuyer("all")}
+                >
+                  {insights.agentBuyerAll}
+                </Button>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant={agentBuyer === "beForward" ? "default" : "outline"}
+                  onClick={() => setAgentBuyer("beForward")}
+                >
+                  {insights.agentBuyerBeForward}
+                </Button>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant={agentBuyer === "stock" ? "default" : "outline"}
+                  onClick={() => setAgentBuyer("stock")}
+                >
+                  {insights.agentBuyerStock}
+                </Button>
+              </div>
+            </div>
+            <div>
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                {insights.agentMonthRangeLabel}
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                <Button
+                  type="button"
+                  size="xs"
+                  variant={agentRange === "currentMonth" ? "default" : "outline"}
+                  onClick={() => setAgentRange("currentMonth")}
+                >
+                  {insights.agentFilterCurrent}
+                </Button>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant={agentRange === "last3Months" ? "default" : "outline"}
+                  onClick={() => setAgentRange("last3Months")}
+                >
+                  {agentPreviousMonthLabel}
+                </Button>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant={agentRange === "twoMonthsAgo" ? "default" : "outline"}
+                  onClick={() => setAgentRange("twoMonthsAgo")}
+                >
+                  {agentTwoMonthsAgoLabel}
+                </Button>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant={agentRange === "all" ? "default" : "outline"}
+                  onClick={() => setAgentRange("all")}
+                >
+                  {insights.agentFilterAll}
+                </Button>
+              </div>
+            </div>
+          </div>
+          <div className="h-[calc(100vh-12.5rem)] overflow-hidden">
+            <EntityCountBarChart
+              data={selectedAgents}
+              units={insights.units}
+              selectedAgentNames={comparedAgents}
+              onAgentSelect={toggleComparedAgent}
+            />
+          </div>
+        </div>
+      ) : null}
+
     </div>
   );
 }
