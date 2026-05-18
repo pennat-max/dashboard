@@ -3,6 +3,19 @@ import { createServiceRoleClient } from "@/lib/supabase/service-role";
 
 const TABLE = "order_tracking_photos";
 const BUCKET = "order-tracking-photos";
+const PROD_ORDER_PHOTOS_LIST_URL = "https://used-car-export-dashboard.vercel.app/api/m/order-photos/list";
+
+function hasUsableServiceRoleKey(): boolean {
+  const key = String(process.env.SUPABASE_SERVICE_ROLE_KEY ?? "").trim();
+  return Boolean(key && key !== "??");
+}
+
+async function fetchProductionPhotoList(searchParams: URLSearchParams) {
+  const url = `${PROD_ORDER_PHOTOS_LIST_URL}?${searchParams.toString()}`;
+  const res = await fetch(url, { cache: "no-store" });
+  const json = await res.json().catch(() => null);
+  return NextResponse.json(json ?? { carPhotos: [], itemPhotosByItemId: {} }, { status: res.status });
+}
 
 type PhotoRow = {
   id: string;
@@ -28,6 +41,10 @@ export async function GET(request: Request) {
     const carId = carIdRaw && Number.isFinite(Number(carIdRaw)) ? Number(carIdRaw) : null;
     if (!carRowId && carId == null) {
       return NextResponse.json({ error: "car_row_id or car_id required" }, { status: 400 });
+    }
+
+    if (!hasUsableServiceRoleKey() && !process.env.VERCEL) {
+      return fetchProductionPhotoList(searchParams);
     }
 
     const supabase = createServiceRoleClient();
