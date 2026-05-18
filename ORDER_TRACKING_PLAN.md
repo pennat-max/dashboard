@@ -92,6 +92,7 @@ Sales creates request -> Store checks stock -> Store orders/receives parts -> Ga
 - **Phase 5+:** Evidence, Sheet sync, controlled edits, two-way sync — **not done**.
 
 ## Notes
+- May 2026 performance pass: `/m/orders` keeps the same UI/data/business logic while debouncing vehicle search, reusing memoized filter/count inputs, aggregating sale chip counts in one pass, and grouping card items in one memoized pass.
 - RLS: anon reads may be allowed per your policies; **writes** for intake use **service role** on the API route, not the browser anon client.
 - Next planning choices:
   1. Persist **card** item status changes (same or new API contract).

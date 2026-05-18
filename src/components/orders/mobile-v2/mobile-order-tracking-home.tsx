@@ -643,6 +643,8 @@ type MobileOrderTrackingHomeProps = {
   disableDemoFallback?: boolean;
   /** โหลดสรุปก่อน แล้วค่อย hydrate รายการรถอัตโนมัติ */
   deferCarsHydration?: boolean;
+  /** สถานะขายที่เลือกไว้ตั้งแต่เปิดหน้า */
+  initialSaleStatusFilters?: SaleStatusFilterValue[];
 };
 
 const ORDERS: Order[] = [
@@ -914,6 +916,17 @@ function matchesVehicleSearch(order: Order, raw: string): boolean {
     norm(order.chassis).includes(n) ||
     order.car.toLowerCase().includes(q.toLowerCase())
   );
+}
+
+function useDebouncedValue<T>(value: T, delayMs: number): T {
+  const [debounced, setDebounced] = useState(value);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebounced(value), delayMs);
+    return () => window.clearTimeout(timer);
+  }, [value, delayMs]);
+
+  return debounced;
 }
 
 function itemMatchesStaffFilter(assignee: string | undefined | null, staffSelection: string): boolean {
@@ -2679,10 +2692,26 @@ function OrderCard({
     toolbarLineFilterActive && !toolbarOthersExpanded && itemsOutsideToolbarFilter.length > 0;
   const itemsEffective = suppressToolbarOthers ? itemsScoped : items;
 
-  const waiting = itemsEffective.filter((item) => WAITING_SET.has(item.status));
-  const done = itemsEffective.filter((item) => item.good || DONE_SET.has(item.status));
-  const activeItems = itemsEffective.filter((item) => item.status !== "จบ");
-  const hiddenDoneItems = itemsEffective.filter((item) => item.status === "จบ");
+  const { waiting, done, activeItems, hiddenDoneItems } = useMemo(() => {
+    const nextWaiting: OrderItemRow[] = [];
+    const nextDone: OrderItemRow[] = [];
+    const nextActiveItems: OrderItemRow[] = [];
+    const nextHiddenDoneItems: OrderItemRow[] = [];
+
+    for (const item of itemsEffective) {
+      if (WAITING_SET.has(item.status)) nextWaiting.push(item);
+      if (item.good || DONE_SET.has(item.status)) nextDone.push(item);
+      if (item.status === "จบ") nextHiddenDoneItems.push(item);
+      else nextActiveItems.push(item);
+    }
+
+    return {
+      waiting: nextWaiting,
+      done: nextDone,
+      activeItems: nextActiveItems,
+      hiddenDoneItems: nextHiddenDoneItems,
+    };
+  }, [itemsEffective]);
   /** เลือกพนักงาน / หรือกรองสถานะเป็น「จบ」 — แสดงแถวจบในรายการหลัก ไม่ซ่อนหลังปุ่มซ่อนงานจบ */
   const showDoneRowsInMainList =
     toolbarItemStaffFilters.size > 0 || toolbarStatusFilters.has("จบ");
@@ -4602,6 +4631,7 @@ export function MobileOrderTrackingHome({
   dataWarnings = [],
   initialFocusedOrderId = null,
   shareBaseUrl = null,
+  initialSaleStatusFilters = [],
   initialUiLang = "th",
 }: MobileOrderTrackingHomeProps) {
   const router = useRouter();
@@ -4691,10 +4721,13 @@ export function MobileOrderTrackingHome({
       const live = liveOrderItemsById[order.id];
       return live ? { ...order, items: live } : order;
     });
-  }, [carsData, orderItemsByCar, orderUpdatesByCar, liveOrderItemsById]);
+  }, [carsData, orderItemsByCar, orderUpdatesByCar, liveOrderItemsById, disableDemoFallback]);
   const [saleFilters, setSaleFilters] = useState<Set<string>>(() => new Set());
-  const [saleStatusFilters, setSaleStatusFilters] = useState<Set<SaleStatusFilterValue>>(() => new Set());
+  const [saleStatusFilters, setSaleStatusFilters] = useState<Set<SaleStatusFilterValue>>(
+    () => new Set(initialSaleStatusFilters)
+  );
   const [vehicleSearch, setVehicleSearch] = useState("");
+  const vehicleSearchForFiltering = useDebouncedValue(vehicleSearch, 120);
   const [translateAllBusy, setTranslateAllBusy] = useState(false);
   const [translateAllMessage, setTranslateAllMessage] = useState("");
   /** ห้ามอ่าน localStorage ใน initializer — SSR จะได้ภาษาเดียวกับไคลเอนต์รอบแรก (กัน hydration mismatch) */
@@ -4804,7 +4837,7 @@ export function MobileOrderTrackingHome({
       saleStatusFilters.size === 0 &&
       staffFilters.size === 0 &&
       itemStatusFilters.size === 0 &&
-      vehicleSearch.trim() === "";
+      vehicleSearchForFiltering.trim() === "";
     if (useSummaryCacheBase && summarySnapshotAllCars) {
       const acc: Record<string, number> = {};
       for (const s of ALL_SALES) {
@@ -4813,12 +4846,16 @@ export function MobileOrderTrackingHome({
       }
       return acc;
     }
-    const acc: Record<string, number> = {};
+    const acc: Record<string, number> = { ALL: mappedOrders.length };
     for (const s of ALL_SALES) {
-      acc[s] = s === "ALL" ? mappedOrders.length : mappedOrders.filter((o) => String(o.sale).toUpperCase() === String(s).toUpperCase()).length;
+      if (s !== "ALL") acc[s] = 0;
+    }
+    for (const order of mappedOrders) {
+      const sale = String(order.sale).toUpperCase();
+      if (sale in acc) acc[sale] += 1;
     }
     return acc;
-  }, [mappedOrders, summarySnapshotAllCars, saleFilters, saleStatusFilters, staffFilters, itemStatusFilters, vehicleSearch]);
+  }, [mappedOrders, summarySnapshotAllCars, saleFilters, saleStatusFilters, staffFilters, itemStatusFilters, vehicleSearchForFiltering]);
   /** ชิปเซลล์: ALL อยู่แรกเสมอ ที่เหลือเรียงตามจำนวนจากมากไปน้อย */
   const salesChipsOrdered = useMemo(() => {
     const rest = ALL_SALES.filter((sale) => sale !== "ALL" && (saleCounts[sale] ?? 0) > 0);
@@ -4837,7 +4874,7 @@ export function MobileOrderTrackingHome({
       saleStatusFilters.size === 0 &&
       staffFilters.size === 0 &&
       itemStatusFilters.size === 0 &&
-      vehicleSearch.trim() === "";
+      vehicleSearchForFiltering.trim() === "";
     if (useSummaryCacheBase && summarySnapshotAllCars) {
       const from = summarySnapshotAllCars.staffItemCounts ?? {};
       const unassigned = Number(from["ไม่ระบุชื่อ"] ?? 0);
@@ -4855,7 +4892,7 @@ export function MobileOrderTrackingHome({
     const baseFiltered = mappedOrders.filter((order) => {
       const saleOk = orderMatchesSaleFilters(order, saleFilters);
       const saleStatusOk = orderMatchesSaleStatusFilters(order, saleStatusFilters);
-      const vehicleOk = matchesVehicleSearch(order, vehicleSearch);
+      const vehicleOk = matchesVehicleSearch(order, vehicleSearchForFiltering);
       return saleOk && saleStatusOk && vehicleOk;
     });
     const byAssignee: Record<string, number> = {};
@@ -4870,14 +4907,14 @@ export function MobileOrderTrackingHome({
       }
     }
     return { grandTotal, byAssignee, unassigned };
-  }, [mappedOrders, saleFilters, saleStatusFilters, vehicleSearch, staffFilters, itemStatusFilters, summarySnapshotAllCars]);
+  }, [mappedOrders, saleFilters, saleStatusFilters, vehicleSearchForFiltering, staffFilters, itemStatusFilters, summarySnapshotAllCars]);
 
   /** รอบส่ง (ค่า booked_shipping) ต่อกลุ่ม — สถานะขาย รอส่ง เท่านั้น */
   const bookedShippingRounds = useMemo(() => {
     const baseFiltered = mappedOrders.filter((order) => {
       const saleOk = orderMatchesSaleFilters(order, saleFilters);
       const saleStatusOk = orderMatchesSaleStatusFilters(order, saleStatusFilters);
-      const vehicleOk = matchesVehicleSearch(order, vehicleSearch);
+      const vehicleOk = matchesVehicleSearch(order, vehicleSearchForFiltering);
       return saleOk && saleStatusOk && vehicleOk;
     });
     const byKey = new Map<string, { label: string; count: number }>();
@@ -4896,14 +4933,14 @@ export function MobileOrderTrackingHome({
     });
     rounds.sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, "th", { sensitivity: "base" }));
     return rounds;
-  }, [mappedOrders, saleFilters, saleStatusFilters, vehicleSearch]);
+  }, [mappedOrders, saleFilters, saleStatusFilters, vehicleSearchForFiltering]);
 
   /** ชื่อลูกค้า (buyer) ต่อกลุ่ม — สถานะขาย จอง เท่านั้น */
   const bookedBuyerRounds = useMemo(() => {
     const baseFiltered = mappedOrders.filter((order) => {
       const saleOk = orderMatchesSaleFilters(order, saleFilters);
       const saleStatusOk = orderMatchesSaleStatusFilters(order, saleStatusFilters);
-      const vehicleOk = matchesVehicleSearch(order, vehicleSearch);
+      const vehicleOk = matchesVehicleSearch(order, vehicleSearchForFiltering);
       return saleOk && saleStatusOk && vehicleOk;
     });
     const byKey = new Map<string, { label: string; count: number }>();
@@ -4922,14 +4959,14 @@ export function MobileOrderTrackingHome({
     });
     rounds.sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, "th", { sensitivity: "base" }));
     return rounds;
-  }, [mappedOrders, saleFilters, saleStatusFilters, vehicleSearch]);
+  }, [mappedOrders, saleFilters, saleStatusFilters, vehicleSearchForFiltering]);
 
   /** ส่งแล้ว: นับตาม shipped (cars.shipped) และ model year — ไม่กรองตาม staff */
   const shippedSoldToolbarStats = useMemo(() => {
     const baseFiltered = mappedOrders.filter((order) => {
       const saleOk = orderMatchesSaleFilters(order, saleFilters);
       const saleStatusOk = orderMatchesSaleStatusFilters(order, saleStatusFilters);
-      const vehicleOk = matchesVehicleSearch(order, vehicleSearch);
+      const vehicleOk = matchesVehicleSearch(order, vehicleSearchForFiltering);
       return saleOk && saleStatusOk && vehicleOk;
     });
     let soldCount = 0;
@@ -4968,14 +5005,14 @@ export function MobileOrderTrackingHome({
     });
     modelYearRounds.sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, "th", { sensitivity: "base" }));
     return { soldCount, shippedEmpty, shippedRounds, modelYearEmpty, modelYearRounds };
-  }, [mappedOrders, saleFilters, saleStatusFilters, vehicleSearch]);
+  }, [mappedOrders, saleFilters, saleStatusFilters, vehicleSearchForFiltering]);
 
   /** สถานะขาย ว่าง: นับตาม model year */
   const vacantSaleToolbarStats = useMemo(() => {
     const baseFiltered = mappedOrders.filter((order) => {
       const saleOk = orderMatchesSaleFilters(order, saleFilters);
       const saleStatusOk = orderMatchesSaleStatusFilters(order, saleStatusFilters);
-      const vehicleOk = matchesVehicleSearch(order, vehicleSearch);
+      const vehicleOk = matchesVehicleSearch(order, vehicleSearchForFiltering);
       return saleOk && saleStatusOk && vehicleOk;
     });
     let vacantCount = 0;
@@ -4999,7 +5036,7 @@ export function MobileOrderTrackingHome({
     });
     modelYearRounds.sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, "th", { sensitivity: "base" }));
     return { vacantCount, modelYearEmpty, modelYearRounds };
-  }, [mappedOrders, saleFilters, saleStatusFilters, vehicleSearch]);
+  }, [mappedOrders, saleFilters, saleStatusFilters, vehicleSearchForFiltering]);
 
   const soldShippedDimActive = useMemo(() => {
     for (const f of Array.from(staffFilters)) if (isSoldShippedStaffFilter(f)) return true;
@@ -5611,7 +5648,7 @@ export function MobileOrderTrackingHome({
         .filter((order) => {
           const saleOk = orderMatchesSaleFilters(order, saleFilters);
           const saleStatusOk = orderMatchesSaleStatusFilters(order, saleStatusFilters);
-          const vehicleOk = matchesVehicleSearch(order, vehicleSearch);
+          const vehicleOk = matchesVehicleSearch(order, vehicleSearchForFiltering);
           if (!saleOk || !saleStatusOk || !vehicleOk) return false;
           return orderMatchesToolbarFilters(
             order,
@@ -5637,7 +5674,7 @@ export function MobileOrderTrackingHome({
         }),
     [
       saleStatusFilters,
-      vehicleSearch,
+      vehicleSearchForFiltering,
       staffFilters,
       itemStatusFilters,
       mappedOrders,
@@ -5670,7 +5707,7 @@ export function MobileOrderTrackingHome({
       saleStatusFilters.size === 0 &&
       staffFilters.size === 0 &&
       itemStatusFilters.size === 0 &&
-      vehicleSearch.trim() === "";
+      vehicleSearchForFiltering.trim() === "";
     if (useSummaryCacheBase && summarySnapshotAllCars) {
       const counts = new Map<ItemStatusValue, number>();
       for (const s of ITEM_STATUSES) {
@@ -5685,7 +5722,7 @@ export function MobileOrderTrackingHome({
     const baseFiltered = mappedOrders.filter((order) => {
       const saleOk = orderMatchesSaleFilters(order, saleFilters);
       const saleStatusOk = orderMatchesSaleStatusFilters(order, saleStatusFilters);
-      const vehicleOk = matchesVehicleSearch(order, vehicleSearch);
+      const vehicleOk = matchesVehicleSearch(order, vehicleSearchForFiltering);
       return saleOk && saleStatusOk && vehicleOk && orderMatchesToolbarFilters(order, staffFilters, new Set(), dtChip);
     });
     for (const order of baseFiltered) {
@@ -5698,7 +5735,7 @@ export function MobileOrderTrackingHome({
   }, [
     mappedOrders,
     saleStatusFilters,
-    vehicleSearch,
+    vehicleSearchForFiltering,
     staffFilters,
     saleFilters,
     itemStatusFilters,
@@ -5713,7 +5750,7 @@ export function MobileOrderTrackingHome({
     const baseFiltered = mappedOrders.filter((order) => {
       const saleOk = orderMatchesSaleFilters(order, saleFilters);
       const saleStatusOk = orderMatchesSaleStatusFilters(order, saleStatusFilters);
-      const vehicleOk = matchesVehicleSearch(order, vehicleSearch);
+      const vehicleOk = matchesVehicleSearch(order, vehicleSearchForFiltering);
       return saleOk && saleStatusOk && vehicleOk && orderMatchesToolbarFilters(order, staffFilters, new Set(), dtChip);
     });
     let count = 0;
@@ -5724,7 +5761,7 @@ export function MobileOrderTrackingHome({
       }
     }
     return count;
-  }, [mappedOrders, saleFilters, saleStatusFilters, vehicleSearch, staffFilters, itemStatusPoliciesNormalized]);
+  }, [mappedOrders, saleFilters, saleStatusFilters, vehicleSearchForFiltering, staffFilters, itemStatusPoliciesNormalized]);
 
   /** ชิปสถานะที่แสดง — ซ่อนเมื่อจำนวนรายการ = 0 (เฉพาะก่อนล็อกครั้งแรก; หลังล็อกใช้ itemStatusRosterForToolbar) */
   const itemStatusRosterVisible = useMemo(
@@ -5896,7 +5933,7 @@ export function MobileOrderTrackingHome({
 
   useEffect(() => {
     setVisibleLimit(ORDERS_PAGE_SIZE);
-  }, [saleStatusFilters, staffFilters, itemStatusFilters, saleFilters]);
+  }, [saleStatusFilters, staffFilters, itemStatusFilters, saleFilters, vehicleSearchForFiltering]);
 
   useEffect(() => {
     if (!hasMoreVisible) return;
@@ -5919,6 +5956,20 @@ export function MobileOrderTrackingHome({
     pendingScrollYRef.current = window.scrollY;
     action();
   };
+  const loadAllSaleStatusScope = (saleStatus?: SaleStatusValue) => {
+    const p = new URLSearchParams(searchParams?.toString() ?? "");
+    p.set("load", "full");
+    p.set("scope", "all");
+    if (saleStatus) p.set("saleStatus", saleStatus);
+    else p.delete("saleStatus");
+    const nextUrl = `${pathname}?${p.toString()}`;
+    router.replace(nextUrl, { scroll: false });
+    window.setTimeout(() => {
+      if (String(new URLSearchParams(window.location.search).get("scope") ?? "").trim().toLowerCase() !== "all") {
+        window.location.replace(nextUrl);
+      }
+    }, 1200);
+  };
   const toggleSaleChipStable = (sale: string) =>
     runWithStableScroll(() => {
       if (sale === "ALL") {
@@ -5936,6 +5987,12 @@ export function MobileOrderTrackingHome({
     });
   const toggleSaleStatusChipStable = (value: SaleStatusFilterValue) =>
     runWithStableScroll(() => {
+      const currentScope = String(searchParams?.get("scope") ?? "").trim().toLowerCase();
+      if (currentScope !== "all" && (value === "ทั้งหมด" || value === "ส่งแล้ว")) {
+        setSaleStatusFilters(value === "ส่งแล้ว" ? new Set(["ส่งแล้ว"]) : new Set());
+        loadAllSaleStatusScope(value === "ส่งแล้ว" ? "ส่งแล้ว" : undefined);
+        return;
+      }
       if (value === "ทั้งหมด") {
         setSaleStatusFilters(new Set());
         return;
@@ -6303,33 +6360,6 @@ export function MobileOrderTrackingHome({
           ) : null}
           <>
               <div className="mb-2 rounded-2xl bg-white p-2">
-                <div className="mb-2 rounded-2xl bg-slate-100/80 p-2">
-                  <div className="mb-1.5">
-                    <span className="text-xs font-semibold tracking-wide text-slate-600">{uiLang === "en" ? "Sale Code" : "เซลล์"}</span>
-                  </div>
-                  <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(72px, 1fr))" }}>
-                    {salesChipsOrdered.map((sale) => (
-                      <button
-                        key={sale}
-                        type="button"
-                        onClick={() => toggleSaleChipStable(sale)}
-                        className={cn(
-                          "min-h-[48px] rounded-2xl px-1.5 py-2 text-center transition-colors",
-                          sale === "ALL"
-                            ? saleFilters.size === 0
-                              ? "bg-slate-950 text-white"
-                              : "bg-slate-100 text-slate-700 hover:bg-slate-200/70"
-                            : saleFilters.has(sale)
-                              ? "bg-slate-950 text-white"
-                              : "bg-slate-100 text-slate-700 hover:bg-slate-200/70"
-                        )}
-                      >
-                        <div className="truncate text-xs font-medium leading-snug">{sale}</div>
-                        <div className="text-base font-semibold tabular-nums leading-none">{saleCounts[sale] ?? 0}</div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
                 <div className="mb-2 rounded-2xl bg-slate-100/80 p-2">
                   <div className="mb-1.5">
                     <span className="text-xs font-semibold tracking-wide text-slate-600">{uiLang === "en" ? "Sale Status" : "สถานะขาย"}</span>
@@ -6799,6 +6829,33 @@ export function MobileOrderTrackingHome({
                       </div>
                     </div>
                   ) : null}
+                </div>
+                <div className="mb-2 rounded-2xl bg-slate-100/80 p-2">
+                  <div className="mb-1.5">
+                    <span className="text-xs font-semibold tracking-wide text-slate-600">{uiLang === "en" ? "Sale Code" : "เซลล์"}</span>
+                  </div>
+                  <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(72px, 1fr))" }}>
+                    {salesChipsOrdered.map((sale) => (
+                      <button
+                        key={sale}
+                        type="button"
+                        onClick={() => toggleSaleChipStable(sale)}
+                        className={cn(
+                          "min-h-[48px] rounded-2xl px-1.5 py-2 text-center transition-colors",
+                          sale === "ALL"
+                            ? saleFilters.size === 0
+                              ? "bg-slate-950 text-white"
+                              : "bg-slate-100 text-slate-700 hover:bg-slate-200/70"
+                            : saleFilters.has(sale)
+                              ? "bg-slate-950 text-white"
+                              : "bg-slate-100 text-slate-700 hover:bg-slate-200/70"
+                        )}
+                      >
+                        <div className="truncate text-xs font-medium leading-snug">{sale}</div>
+                        <div className="text-base font-semibold tabular-nums leading-none">{saleCounts[sale] ?? 0}</div>
+                      </button>
+                    ))}
+                  </div>
                 </div>
                 <div className="rounded-2xl bg-slate-100/80 p-2">
                   <div className="mb-1.5 flex items-center justify-between gap-2">

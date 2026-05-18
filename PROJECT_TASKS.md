@@ -21,6 +21,7 @@
 - [ ] Add explicit module-level test checklist/documentation.
 
 ## Order Tracking Module
+- [x] Performance pass for `/m/orders`: debounced vehicle search, one-pass sale chip counts, memoized per-card item grouping, and visible-page reset on debounced filter scope. No UI/schema/business-logic changes.
 - [x] Added DB mapping document: `ORDER_TRACKING_DB_MAPPING.md` (Phase 1 read-only mapping from repo schema/types/code, no schema change).
 - [x] Primary mobile UI: **`/m/orders`** → `MobileOrderTrackingHome` (`src/components/orders/mobile-v2/mobile-order-tracking-home.tsx`).
 - [x] Server data for list: `fetchCarsForOrderTracking` + `fetchOrderItemsByCars` in `src/app/(app)/m/orders/page.tsx`.
