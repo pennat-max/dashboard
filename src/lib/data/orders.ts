@@ -19,17 +19,22 @@ export type OrderItemLite = {
   id?: string | null;
   order_task_id?: string | null;
   label: string;
+  label_en?: string | null;
   status: string;
   assignee_staff: string | null;
   /** วันที่ครบของรายการ (รวมจาก due_date หรือ outside_eta_date ตอนดึง) */
   due_date?: string | null;
   /** หมายเหตุรายการ (รวมจาก note หรือ outside_note ตอนดึง) */
   note?: string | null;
+  /** แปลอัตโนมัติของหมายเหตุ (column note_en) */
+  note_en?: string | null;
   outside_supplier: string | null;
   outside_eta_date: string | null;
   outside_price: number | null;
   /** วันเริ่มนับ 30 วัน (ฝากสโตร์): วันที่อัปเดตล่าสุดในระบบ ก่อน แล้วจึงวันที่สร้างแถว */
   clock_start_ymd?: string | null;
+  /** เวลาที่เปลี่ยนสถานะล่าสุด (timestamptz จาก DB) */
+  status_changed_at?: string | null;
 };
 
 function trimStr(v: unknown): string {
@@ -53,6 +58,11 @@ function coalesceText(primary: unknown, fallback: unknown): string | null {
   if (a) return a;
   const b = trimStr(fallback);
   return b || null;
+}
+
+/** `order_items.note` กับ `outside_note` — ใช้ให้ตรงกันทั้ง UI, แปลภาษา, และบันทึก */
+export function coalesceOrderItemNote(note: unknown, outsideNote: unknown): string | null {
+  return coalesceText(note, outsideNote);
 }
 
 /** แปลง timestamptz / date จาก DB → yyyy-mm-dd ตามปฏิทินไทย (ใช้นับ 30 วัน ฝากสโตร์) */
@@ -159,43 +169,181 @@ function orderTaskKeysForCars(
   return Array.from(new Set(keys));
 }
 
-const ORDER_TASK_SCAN_LIMIT = 25_000;
+/** PostgREST — จำกัดความยาว URL ของ .in() จึงแบ่งชุด */
+const ORDER_TASK_IN_CHUNK = 100;
+/** จำกัดคำขอพร้อมกันเพื่อไม่ยิง Supabase ระลอกใหญ่เกินไป */
+const ORDER_TASK_FETCH_CONCURRENCY = 8;
+
+type OrderTaskMatchRow = { id: string; car_id?: number | null; car_row_id?: string | null };
+
+function chunkIds<T>(arr: T[], size: number): T[][] {
+  if (arr.length === 0) return [];
+  const s = Math.max(1, size);
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += s) {
+    out.push(arr.slice(i, i + s));
+  }
+  return out;
+}
+
+const ORDER_ITEMS_SELECT_FULL =
+  "id,order_task_id,label,label_en,status,assignee_staff,due_date,note,note_en,outside_supplier,outside_eta_date,outside_price,outside_note,created_at,updated_at,status_changed_at";
+const ORDER_ITEMS_SELECT_FALLBACK_WITH_EN =
+  "id,order_task_id,label,label_en,status,assignee_staff,note,note_en,outside_supplier,outside_eta_date,outside_price,outside_note,created_at,updated_at";
+const ORDER_ITEMS_SELECT_FALLBACK_WITH_LABEL_EN =
+  "id,order_task_id,label,label_en,status,assignee_staff,outside_supplier,outside_eta_date,outside_price,outside_note,created_at,updated_at";
+const ORDER_ITEMS_SELECT_FALLBACK =
+  "id,order_task_id,label,status,assignee_staff,outside_supplier,outside_eta_date,outside_price,outside_note,created_at,updated_at";
+
+/** แบ่ง `.in(order_task_id)` เป็นก้อนย่อย — ไม่ยิงชุด task id หลายพันตัวในคำขอเดียว */
+async function fetchOrderItemsRowsChunked(
+  supabase: SupabaseClient,
+  taskIds: string[]
+): Promise<{ rows: Array<Record<string, unknown>>; error: { message: string } | null }> {
+  const chunks = chunkIds(taskIds, ORDER_TASK_IN_CHUNK);
+  const all: Array<Record<string, unknown>> = [];
+  for (let i = 0; i < chunks.length; i += ORDER_TASK_FETCH_CONCURRENCY) {
+    const slice = chunks.slice(i, i + ORDER_TASK_FETCH_CONCURRENCY);
+    const results = await Promise.all(
+      slice.map(async (chunk) => {
+        const primary = await supabase
+          .from(ORDER_ITEMS_TABLE)
+          .select(ORDER_ITEMS_SELECT_FULL)
+          .in("order_task_id", chunk)
+          .limit(10000);
+        if (primary.error) {
+          const fallbackWithEn = await supabase
+            .from(ORDER_ITEMS_TABLE)
+            .select(ORDER_ITEMS_SELECT_FALLBACK_WITH_EN)
+            .in("order_task_id", chunk)
+            .limit(10000);
+          if (!fallbackWithEn.error) {
+            return { err: null as null, rows: (fallbackWithEn.data ?? []) as Array<Record<string, unknown>> };
+          }
+          const fallbackWithLabelEn = await supabase
+            .from(ORDER_ITEMS_TABLE)
+            .select(ORDER_ITEMS_SELECT_FALLBACK_WITH_LABEL_EN)
+            .in("order_task_id", chunk)
+            .limit(10000);
+          if (!fallbackWithLabelEn.error) {
+            return { err: null as null, rows: (fallbackWithLabelEn.data ?? []) as Array<Record<string, unknown>> };
+          }
+          const fallback = await supabase
+            .from(ORDER_ITEMS_TABLE)
+            .select(ORDER_ITEMS_SELECT_FALLBACK)
+            .in("order_task_id", chunk)
+            .limit(10000);
+          if (fallback.error) return { err: fallback.error, rows: [] as Array<Record<string, unknown>> };
+          return { err: null as null, rows: (fallback.data ?? []) as Array<Record<string, unknown>> };
+        }
+        return { err: null as null, rows: (primary.data ?? []) as Array<Record<string, unknown>> };
+      })
+    );
+    for (const r of results) {
+      if (r.err) return { rows: [], error: r.err };
+      all.push(...r.rows);
+    }
+  }
+  return { rows: all, error: null };
+}
+
+async function fetchOrderUpdatesRowsChunked(
+  supabase: SupabaseClient,
+  taskIds: string[]
+): Promise<{ rows: Array<Record<string, unknown>>; error: { message: string } | null }> {
+  const chunks = chunkIds(taskIds, ORDER_TASK_IN_CHUNK);
+  const all: Array<Record<string, unknown>> = [];
+  for (let i = 0; i < chunks.length; i += ORDER_TASK_FETCH_CONCURRENCY) {
+    const slice = chunks.slice(i, i + ORDER_TASK_FETCH_CONCURRENCY);
+    const results = await Promise.all(
+      slice.map((chunk) =>
+        supabase
+          .from(ORDER_UPDATES_TABLE)
+          .select("id,order_task_id,role,message,created_at")
+          .in("order_task_id", chunk)
+          .order("created_at", { ascending: false, nullsFirst: false })
+          .limit(10000)
+      )
+    );
+    for (const { data, error } of results) {
+      if (error) return { rows: [], error };
+      all.push(...((data ?? []) as Array<Record<string, unknown>>));
+    }
+  }
+  all.sort((a, b) => {
+    const ta = Date.parse(String(a.created_at ?? "")) || 0;
+    const tb = Date.parse(String(b.created_at ?? "")) || 0;
+    return tb - ta;
+  });
+  return { rows: all.slice(0, 10000), error: null };
+}
 
 /**
- * โหลด order_tasks ล่าสุด แล้วกรองให้ตรงกับรถใน `cars` (ไม่พึ่ง .in กับ car_row_id/car_id อย่างเดียว)
+ * โหลด order_tasks เฉพาะที่ผูกกับรถใน `cars` — เร็วกว่าการสแกนทั้งตารางแล้วกรองใน memory
  */
 async function fetchMatchingOrderTasks(
   supabase: SupabaseClient,
   cars: Car[]
 ): Promise<{
-  tasks: Array<{ id: string; car_id?: number | null; car_row_id?: string | null }>;
+  tasks: OrderTaskMatchRow[];
   error: string | null;
   tableReady: boolean;
 }> {
   if (cars.length === 0) return { tasks: [], error: null, tableReady: true };
 
-  let allTasksRaw: Array<{ id: string; car_id?: number | null; car_row_id?: string | null }> = [];
-  const ordered = await supabase
-    .from(ORDER_TASKS_TABLE)
-    .select("id,car_id,car_row_id,updated_at")
-    .order("updated_at", { ascending: false, nullsFirst: false })
-    .limit(ORDER_TASK_SCAN_LIMIT);
-  if (ordered.error && /updated_at/.test(ordered.error.message)) {
-    const plain = await supabase.from(ORDER_TASKS_TABLE).select("id,car_id,car_row_id").limit(ORDER_TASK_SCAN_LIMIT);
-    if (plain.error) {
-      if (isMissingTableError(plain.error.message)) return { tasks: [], error: null, tableReady: false };
-      return { tasks: [], error: plain.error.message, tableReady: true };
-    }
-    allTasksRaw = (plain.data ?? []) as Array<{ id: string; car_id?: number | null; car_row_id?: string | null }>;
-  } else if (ordered.error) {
-    if (isMissingTableError(ordered.error.message)) return { tasks: [], error: null, tableReady: false };
-    return { tasks: [], error: ordered.error.message, tableReady: true };
-  } else {
-    allTasksRaw = (ordered.data ?? []) as Array<{ id: string; car_id?: number | null; car_row_id?: string | null }>;
-  }
+  const rowChunks = chunkIds(collectCarRowIds(cars), ORDER_TASK_IN_CHUNK);
+  const carChunks = chunkIds(collectCarIdsForInFilter(cars), ORDER_TASK_IN_CHUNK);
+  const selectCols = "id,car_id,car_row_id,updated_at";
+  const taskMap = new Map<string, OrderTaskMatchRow>();
 
-  const tasks = allTasksRaw.filter((t) => orderTaskKeysForCars(cars, t).length > 0);
+  const mergeRows = (rows: OrderTaskMatchRow[]) => {
+    for (const t of rows) {
+      const id = String(t.id ?? "").trim();
+      if (id) taskMap.set(id, t);
+    }
+  };
+
+  const runBatches = async (column: "car_row_id" | "car_id", chunks: (string | number)[][]) => {
+    for (let i = 0; i < chunks.length; i += ORDER_TASK_FETCH_CONCURRENCY) {
+      const slice = chunks.slice(i, i + ORDER_TASK_FETCH_CONCURRENCY);
+      const results = await Promise.all(
+        slice.map((chunk) => supabase.from(ORDER_TASKS_TABLE).select(selectCols).in(column, chunk))
+      );
+      for (const { data, error } of results) {
+        if (error) {
+          if (isMissingTableError(error.message)) return false;
+          return error.message;
+        }
+        mergeRows((data ?? []) as OrderTaskMatchRow[]);
+      }
+    }
+    return null;
+  };
+
+  const rowErr = await runBatches("car_row_id", rowChunks);
+  if (rowErr === false) return { tasks: [], error: null, tableReady: false };
+  if (typeof rowErr === "string") return { tasks: [], error: rowErr, tableReady: true };
+
+  const carErr = await runBatches("car_id", carChunks);
+  if (carErr === false) return { tasks: [], error: null, tableReady: false };
+  if (typeof carErr === "string") return { tasks: [], error: carErr, tableReady: true };
+
+  const tasks = Array.from(taskMap.values()).filter((t) => orderTaskKeysForCars(cars, t).length > 0);
   return { tasks, error: null, tableReady: true };
+}
+
+/** ใช้ร่วมกับ fetchOrderItemsByCars / fetchOrderUpdatesByCars / fetchOrderItemsAndUpdatesByCars */
+function buildTaskKeyByTaskId(
+  tasks: Array<{ id: string; car_id?: number | null; car_row_id?: string | null }>,
+  cars: Car[]
+): Map<string, string[]> {
+  const taskKeyByTaskId = new Map<string, string[]>();
+  for (const t of tasks) {
+    const taskId = String(t.id ?? "").trim();
+    if (!taskId) continue;
+    mergeTaskCarKeys(taskKeyByTaskId, taskId, orderTaskKeysForCars(cars, t));
+  }
+  return taskKeyByTaskId;
 }
 
 function asOrderTask(row: Record<string, unknown>): OrderTask {
@@ -360,6 +508,126 @@ export async function fetchMobileOrderDetail(
   }
 }
 
+/**
+ * โหลด order_tasks ครั้งเดียว แล้วดึง order_items + order_task_updates พร้อมกัน
+ * (หน้า /m/orders เดิมเรียกสองฟังก์ชันแยก = scan tasks ซ้ำสองรอบ)
+ */
+export async function fetchOrderItemsAndUpdatesByCars(cars: Car[]): Promise<{
+  orderItemsByCar: Record<string, OrderItemLite[]>;
+  orderUpdatesByCar: Record<string, OrderUpdateLite[]>;
+  itemsError: string | null;
+  updatesError: string | null;
+  tableReady: boolean;
+}> {
+  try {
+    const supabase = createAnonClient();
+    const { tasks, error: taskFetchError, tableReady: taskTableReady } = await fetchMatchingOrderTasks(supabase, cars);
+    if (taskFetchError) {
+      return {
+        orderItemsByCar: {},
+        orderUpdatesByCar: {},
+        itemsError: taskFetchError,
+        updatesError: taskFetchError,
+        tableReady: taskTableReady,
+      };
+    }
+    if (!taskTableReady) {
+      return { orderItemsByCar: {}, orderUpdatesByCar: {}, itemsError: null, updatesError: null, tableReady: false };
+    }
+    const taskIds = Array.from(new Set(tasks.map((t) => String(t.id ?? "").trim()).filter(Boolean)));
+    if (taskIds.length === 0) {
+      return { orderItemsByCar: {}, orderUpdatesByCar: {}, itemsError: null, updatesError: null, tableReady: true };
+    }
+
+    const taskKeyByTaskId = buildTaskKeyByTaskId(tasks, cars);
+
+    const [itemsPack, updatesPack] = await Promise.all([
+      fetchOrderItemsRowsChunked(supabase, taskIds),
+      fetchOrderUpdatesRowsChunked(supabase, taskIds),
+    ]);
+
+    let itemsError: string | null = null;
+    let itemsRows: Array<Record<string, unknown>> = [];
+    if (itemsPack.error) {
+      if (isMissingTableError(itemsPack.error.message)) {
+        return { orderItemsByCar: {}, orderUpdatesByCar: {}, itemsError: null, updatesError: null, tableReady: false };
+      }
+      itemsError = itemsPack.error.message;
+    } else {
+      itemsRows = itemsPack.rows;
+    }
+
+    let updatesError: string | null = null;
+    let updatesRows: Array<Record<string, unknown>> = [];
+    if (updatesPack.error) {
+      if (isMissingTableError(updatesPack.error.message)) {
+        return { orderItemsByCar: {}, orderUpdatesByCar: {}, itemsError: null, updatesError: null, tableReady: false };
+      }
+      updatesError = updatesPack.error.message;
+    } else {
+      updatesRows = updatesPack.rows;
+    }
+
+    const orderItemsByCar: Record<string, OrderItemLite[]> = {};
+    for (const row of itemsRows) {
+      const taskId = String(row.order_task_id ?? "").trim();
+      const keys = taskKeyByTaskId.get(taskId) ?? [];
+      const item: OrderItemLite = {
+        id: String(row.id ?? "").trim() || null,
+        order_task_id: String(row.order_task_id ?? "").trim() || null,
+        label: String(row.label ?? "Item"),
+        label_en: trimStr(row.label_en) || null,
+        status: String(row.status ?? "requested"),
+        assignee_staff: String(row.assignee_staff ?? "").trim() || null,
+        due_date: coalesceDateYmd(row.due_date, row.outside_eta_date),
+        note: coalesceText(row.note, row.outside_note),
+        note_en: trimStr(row.note_en) || null,
+        outside_supplier: String(row.outside_supplier ?? "").trim() || null,
+        outside_eta_date: (dateYmdOrNull(row.outside_eta_date) ?? trimStr(row.outside_eta_date)) || null,
+        outside_price: Number.isFinite(Number(row.outside_price)) ? Number(row.outside_price) : null,
+        clock_start_ymd: dateYmdBangkokFromDbTimestamp(row.updated_at) ?? dateYmdBangkokFromDbTimestamp(row.created_at) ?? null,
+        status_changed_at: trimStr(row.status_changed_at) || null,
+      };
+      for (const key of keys) {
+        if (!orderItemsByCar[key]) orderItemsByCar[key] = [];
+        orderItemsByCar[key].push(item);
+      }
+    }
+
+    const orderUpdatesByCar: Record<string, OrderUpdateLite[]> = {};
+    for (const row of updatesRows) {
+      const taskId = String(row.order_task_id ?? "").trim();
+      const keys = taskKeyByTaskId.get(taskId) ?? [];
+      const u: OrderUpdateLite = {
+        id: String(row.id ?? "").trim() || null,
+        order_task_id: String(row.order_task_id ?? "").trim() || null,
+        role: String(row.role ?? "").trim() || null,
+        message: String(row.message ?? "").trim() || null,
+        created_at: String(row.created_at ?? "").trim() || null,
+      };
+      for (const key of keys) {
+        if (!orderUpdatesByCar[key]) orderUpdatesByCar[key] = [];
+        orderUpdatesByCar[key].push(u);
+      }
+    }
+
+    const tableReady = itemsError === null && updatesError === null;
+    return { orderItemsByCar, orderUpdatesByCar, itemsError, updatesError, tableReady };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (isMissingTableError(msg)) {
+      return { orderItemsByCar: {}, orderUpdatesByCar: {}, itemsError: null, updatesError: null, tableReady: false };
+    }
+    return {
+      orderItemsByCar: {},
+      orderUpdatesByCar: {},
+      itemsError: msg,
+      updatesError: msg,
+      tableReady: false,
+    };
+  }
+}
+
 export async function fetchOrderItemsByCars(
   cars: Car[]
 ): Promise<{ byCarKey: Record<string, OrderItemLite[]>; error: string | null; tableReady: boolean }> {
@@ -371,40 +639,14 @@ export async function fetchOrderItemsByCars(
     const taskIds = Array.from(new Set(tasks.map((t) => String(t.id ?? "").trim()).filter(Boolean)));
     if (taskIds.length === 0) return { byCarKey: {}, error: null, tableReady: true };
 
-    let itemsData: Array<Record<string, unknown>> = [];
-    {
-      const primary = await supabase
-        .from(ORDER_ITEMS_TABLE)
-        .select(
-          "id,order_task_id,label,status,assignee_staff,due_date,note,outside_supplier,outside_eta_date,outside_price,outside_note,created_at,updated_at"
-        )
-        .in("order_task_id", taskIds)
-        .limit(10000);
-      if (primary.error) {
-        const fallback = await supabase
-          .from(ORDER_ITEMS_TABLE)
-          .select(
-            "id,order_task_id,label,status,assignee_staff,outside_supplier,outside_eta_date,outside_price,outside_note,created_at,updated_at"
-          )
-          .in("order_task_id", taskIds)
-          .limit(10000);
-        if (fallback.error) {
-          if (isMissingTableError(fallback.error.message)) return { byCarKey: {}, error: null, tableReady: false };
-          return { byCarKey: {}, error: fallback.error.message, tableReady: false };
-        }
-        itemsData = (fallback.data ?? []) as Array<Record<string, unknown>>;
-      } else {
-        itemsData = (primary.data ?? []) as Array<Record<string, unknown>>;
-      }
+    const itemsPack = await fetchOrderItemsRowsChunked(supabase, taskIds);
+    if (itemsPack.error) {
+      if (isMissingTableError(itemsPack.error.message)) return { byCarKey: {}, error: null, tableReady: false };
+      return { byCarKey: {}, error: itemsPack.error.message, tableReady: false };
     }
+    const itemsData = itemsPack.rows;
 
-    const taskKeyByTaskId = new Map<string, string[]>();
-    for (const t of tasks) {
-      const taskId = String(t.id ?? "").trim();
-      if (!taskId) continue;
-      const keys = orderTaskKeysForCars(cars, t);
-      mergeTaskCarKeys(taskKeyByTaskId, taskId, keys);
-    }
+    const taskKeyByTaskId = buildTaskKeyByTaskId(tasks, cars);
 
     const byCarKey: Record<string, OrderItemLite[]> = {};
     for (const row of itemsData) {
@@ -414,14 +656,17 @@ export async function fetchOrderItemsByCars(
         id: String(row.id ?? "").trim() || null,
         order_task_id: String(row.order_task_id ?? "").trim() || null,
         label: String(row.label ?? "Item"),
+        label_en: trimStr(row.label_en) || null,
         status: String(row.status ?? "requested"),
         assignee_staff: String(row.assignee_staff ?? "").trim() || null,
         due_date: coalesceDateYmd(row.due_date, row.outside_eta_date),
         note: coalesceText(row.note, row.outside_note),
+        note_en: trimStr(row.note_en) || null,
         outside_supplier: String(row.outside_supplier ?? "").trim() || null,
         outside_eta_date: (dateYmdOrNull(row.outside_eta_date) ?? trimStr(row.outside_eta_date)) || null,
         outside_price: Number.isFinite(Number(row.outside_price)) ? Number(row.outside_price) : null,
         clock_start_ymd: dateYmdBangkokFromDbTimestamp(row.updated_at) ?? dateYmdBangkokFromDbTimestamp(row.created_at) ?? null,
+        status_changed_at: trimStr(row.status_changed_at) || null,
       };
       for (const key of keys) {
         if (!byCarKey[key]) byCarKey[key] = [];
@@ -519,26 +764,17 @@ export async function fetchOrderUpdatesByCars(
 
     const taskIds = Array.from(new Set(tasks.map((t) => String(t.id ?? "").trim()).filter(Boolean)));
     if (taskIds.length === 0) return { byCarKey: {}, error: null, tableReady: true };
-    const updates = await supabase
-      .from(ORDER_UPDATES_TABLE)
-      .select("id,order_task_id,role,message,created_at")
-      .in("order_task_id", taskIds)
-      .order("created_at", { ascending: false, nullsFirst: false })
-      .limit(10000);
-    if (updates.error) {
-      if (isMissingTableError(updates.error.message)) return { byCarKey: {}, error: null, tableReady: false };
-      return { byCarKey: {}, error: updates.error.message, tableReady: false };
+
+    const updatesPack = await fetchOrderUpdatesRowsChunked(supabase, taskIds);
+    if (updatesPack.error) {
+      if (isMissingTableError(updatesPack.error.message)) return { byCarKey: {}, error: null, tableReady: false };
+      return { byCarKey: {}, error: updatesPack.error.message, tableReady: false };
     }
 
-    const keysByTaskId = new Map<string, string[]>();
-    for (const t of tasks) {
-      const taskId = String(t.id ?? "").trim();
-      if (!taskId) continue;
-      mergeTaskCarKeys(keysByTaskId, taskId, orderTaskKeysForCars(cars, t));
-    }
+    const keysByTaskId = buildTaskKeyByTaskId(tasks, cars);
 
     const byCarKey: Record<string, OrderUpdateLite[]> = {};
-    for (const row of (updates.data ?? []) as Array<Record<string, unknown>>) {
+    for (const row of updatesPack.rows) {
       const taskId = String(row.order_task_id ?? "").trim();
       const keys = keysByTaskId.get(taskId) ?? [];
       const item: OrderUpdateLite = {

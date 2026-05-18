@@ -51,7 +51,7 @@
 - LINE remains the conversation channel first.
 - Supabase becomes the central status source.
 - Start with a manual LINE copy-message bridge.
-- Do not implement LINE Bot/LIFF until the manual bridge works.
+- **LIFF:** `/liff/orders` wrapper is allowed (Phase 1). Do **not** add LINE Bot, Messaging API webhook, or group ingest unless the task explicitly says so.
 
 ## End Of Every Task
 - Run `npm run build`.

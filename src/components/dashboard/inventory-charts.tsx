@@ -407,7 +407,7 @@ export function EntityCountBarChart({
       : [...baseRows].sort((a, b) => {
           if (a.selected !== b.selected) return a.selected ? -1 : 1;
           if (b.count !== a.count) return b.count - a.count;
-          return a.name.localeCompare(b.name, "th");
+          return a.name.localeCompare(b.name, "en");
         });
   const barRowHeight = 36;
   const visibleBars = 8;

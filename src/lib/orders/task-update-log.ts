@@ -12,7 +12,7 @@ export type OrderTaskActionType =
   | "note_changed"
   | "intake_saved";
 
-type CreateOrderTaskUpdateInput = {
+export type CreateOrderTaskUpdateInput = {
   order_task_id: string;
   order_item_id?: string | null;
   action_type: OrderTaskActionType;
@@ -58,6 +58,26 @@ export async function createOrderTaskUpdate(
     role,
     message,
   });
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, error: null };
+}
+
+/** Bulk insert activity rows — avoids N round trips per save */
+export async function createOrderTaskUpdates(
+  supabase: SupabaseClient,
+  inputs: CreateOrderTaskUpdateInput[]
+): Promise<{ ok: boolean; error: string | null }> {
+  const list = inputs.filter((i) => String(i.order_task_id ?? "").trim());
+  if (list.length === 0) return { ok: true, error: null };
+  const rows = list.map((input) => {
+    const role = input.role ?? "store";
+    return {
+      order_task_id: String(input.order_task_id).trim(),
+      role,
+      message: makeMessage(input),
+    };
+  });
+  const { error } = await supabase.from(ORDER_UPDATES_TABLE).insert(rows);
   if (error) return { ok: false, error: error.message };
   return { ok: true, error: null };
 }

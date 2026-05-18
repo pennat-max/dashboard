@@ -23,7 +23,7 @@ function uniqueByField(
     const v = String(raw ?? "").trim();
     if (v) set.add(v);
   }
-  return Array.from(set).sort((a, b) => a.localeCompare(b, "th"));
+  return Array.from(set).sort((a, b) => a.localeCompare(b, "en"));
 }
 
 type Props = {

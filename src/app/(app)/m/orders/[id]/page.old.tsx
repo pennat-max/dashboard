@@ -12,7 +12,7 @@ export default async function MobileOrderDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  const dict = getDictionary("th");
+  const dict = getDictionary("en");
   const c = dict.common;
   const p = dict.ordersMobile;
   const { id } = await params;

@@ -141,7 +141,7 @@ export function ExportedMonthlyCharts({
   const buyerTotals = new Map<string, number>();
   for (const row of monthlyBuyerCounts) buyerTotals.set(row.buyer, (buyerTotals.get(row.buyer) ?? 0) + row.count);
   const topBuyers = Array.from(buyerTotals.entries())
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "th"))
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "en"))
     .slice(0, TOP_BUYERS_LIMIT)
     .map(([name]) => name);
   const topBuyerSet = new Set(topBuyers);
@@ -179,7 +179,7 @@ export function ExportedMonthlyCharts({
     }
     return Array.from(map.entries())
       .map(([buyer, count]) => ({ buyer, count }))
-      .sort((a, b) => b.count - a.count || a.buyer.localeCompare(b.buyer, "th"));
+      .sort((a, b) => b.count - a.count || a.buyer.localeCompare(b.buyer, "en"));
   }, [monthlyBuyerCounts, selectedKey]);
   const filteredTotal = filteredBuyerRows.reduce((sum, row) => sum + row.count, 0);
   const selectedLabel = selectedKey === "all" ? allLabel : monthLabelMap.get(Number(selectedKey)) ?? selectedKey;

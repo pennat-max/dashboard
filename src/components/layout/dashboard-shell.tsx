@@ -1,19 +1,18 @@
 import { DashboardShellChrome } from "@/components/layout/dashboard-shell-chrome";
-import type { Dictionary } from "@/i18n/dictionaries";
-import type { Locale } from "@/lib/locale-constants";
+import type { UserRole } from "@/lib/auth/user-role";
 import { cn } from "@/lib/utils";
 
 type Props = {
   children: React.ReactNode;
-  locale: Locale;
-  dict: Dictionary;
+  userEmail?: string | null;
+  userRole?: UserRole | null;
 };
 
-/** โครงหน้าเต็มจอ — สลับภาษาไทย/อังกฤษมุมขวาบน (ซ่อนบาร์ภาษาเฉพาะมือถือที่ `/m/*`) */
-export function DashboardShell({ children, locale, dict }: Props) {
+/** App shell (header actions + main). */
+export function DashboardShell({ children, userEmail = null, userRole = null }: Props) {
   return (
     <div className={cn("app-shell min-h-screen bg-muted/40")}>
-      <DashboardShellChrome locale={locale} dict={dict}>
+      <DashboardShellChrome userEmail={userEmail} userRole={userRole}>
         {children}
       </DashboardShellChrome>
     </div>

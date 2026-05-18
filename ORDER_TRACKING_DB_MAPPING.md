@@ -250,6 +250,46 @@ Recommended structure direction (planning only, no create now):
   - `supabase/order-task-updates-audit-draft.sql`
 - Current implementation stores audit details inside `message` text (including action type + old/new snapshots) until structured columns are available.
 
+## H) LINE Inbox + AI Analysis (API implemented; optional inbox tables still draft)
+
+Purpose: ingest LINE-side messages into an ops flow that suggests **order_items** before human confirmation. Full spec: **`LINE_INBOX_AI_ANALYSIS_PLAN.md`**.
+
+### API surface (repo)
+
+| Endpoint | Writes DB? |
+|----------|------------|
+| `POST /api/line-inbox/analyze` | **No** — returns JSON suggestions only |
+| `POST /api/line-inbox/confirm` | **Yes** — after explicit user confirm (`order_items` create/merge + `order_task_updates` audit; optional `line_inbox_message_id` logged only) |
+| `POST /api/line/webhook` | **Yes** — LINE Messaging API webhook → **`line_inbox_messages`** + snapshot **`analyze_payload`** (signature + allowlist; see `.env.example`) |
+| `GET /api/line-inbox/pending-queue` | **No** — mobile chip: pending rows + **new-only** lines from `analyze_payload` |
+| `POST /api/line-inbox/pending-save` | **Yes** — save selected indices → **`order_items`** + **`workflow_status=confirmed`** on inbox row |
+
+### Planned payload keys (analyze)
+
+- `line_inbox_message_id` — idempotent reference once `line_inbox_messages` exists  
+- `raw_text` — LINE body  
+- `car_row_id` — optional user-selected **`cars.row_id`** (preferred anchor)  
+- `attachments` — metadata only in analyze (no secret URLs to browser)
+
+### Car linking (unchanged from §A.3)
+
+- **Primary:** `car_row_id` ↔ `cars.row_id`  
+- **Fallback identity:** `chassis_number` when matching/detection  
+- **Display/search:** `plate_number` — not authoritative join key  
+
+### Tables
+
+- **`line_inbox_messages`** — migration `supabase/migrations/20260509240000_line_inbox_messages.sql` — inbound text + **`analyze_payload`** (`workflow_status`: pending / confirmed / skipped; **`analyze_status`**: pending / ok / error)  
+- Existing **`order_items`** / **`order_tasks`** — targets for merge/create on **confirm**  
+- **`order_attachments`** — file metadata after confirm (when available)  
+- **`order_task_updates`** — audit trail on confirm (same pattern as current message-encoded logs until structured columns exist)
+
+### Duplicate detection inputs
+
+Server loads existing **`order_items`** for the resolved car via **`order_tasks`**; compares suggested lines using rules in **`LINE_INBOX_AI_ANALYSIS_PLAN.md`** (exact / fuzzy / `จบ` exception).
+
+---
+
 ## QA Data Probe Notes (Latest)
 - Real-data probe confirms:
   - `cars` rows available
