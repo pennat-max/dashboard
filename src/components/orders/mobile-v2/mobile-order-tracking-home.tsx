@@ -643,6 +643,8 @@ type MobileOrderTrackingHomeProps = {
   disableDemoFallback?: boolean;
   /** โหลดสรุปก่อน แล้วค่อย hydrate รายการรถอัตโนมัติ */
   deferCarsHydration?: boolean;
+  /** สถานะขายที่เลือกไว้ตั้งแต่เปิดหน้า */
+  initialSaleStatusFilters?: SaleStatusFilterValue[];
 };
 
 const ORDERS: Order[] = [
@@ -4629,6 +4631,7 @@ export function MobileOrderTrackingHome({
   dataWarnings = [],
   initialFocusedOrderId = null,
   shareBaseUrl = null,
+  initialSaleStatusFilters = [],
   initialUiLang = "th",
 }: MobileOrderTrackingHomeProps) {
   const router = useRouter();
@@ -4720,7 +4723,9 @@ export function MobileOrderTrackingHome({
     });
   }, [carsData, orderItemsByCar, orderUpdatesByCar, liveOrderItemsById, disableDemoFallback]);
   const [saleFilters, setSaleFilters] = useState<Set<string>>(() => new Set());
-  const [saleStatusFilters, setSaleStatusFilters] = useState<Set<SaleStatusFilterValue>>(() => new Set());
+  const [saleStatusFilters, setSaleStatusFilters] = useState<Set<SaleStatusFilterValue>>(
+    () => new Set(initialSaleStatusFilters)
+  );
   const [vehicleSearch, setVehicleSearch] = useState("");
   const vehicleSearchForFiltering = useDebouncedValue(vehicleSearch, 120);
   const [translateAllBusy, setTranslateAllBusy] = useState(false);
@@ -5951,6 +5956,20 @@ export function MobileOrderTrackingHome({
     pendingScrollYRef.current = window.scrollY;
     action();
   };
+  const loadAllSaleStatusScope = (saleStatus?: SaleStatusValue) => {
+    const p = new URLSearchParams(searchParams?.toString() ?? "");
+    p.set("load", "full");
+    p.set("scope", "all");
+    if (saleStatus) p.set("saleStatus", saleStatus);
+    else p.delete("saleStatus");
+    const nextUrl = `${pathname}?${p.toString()}`;
+    router.replace(nextUrl, { scroll: false });
+    window.setTimeout(() => {
+      if (String(new URLSearchParams(window.location.search).get("scope") ?? "").trim().toLowerCase() !== "all") {
+        window.location.replace(nextUrl);
+      }
+    }, 1200);
+  };
   const toggleSaleChipStable = (sale: string) =>
     runWithStableScroll(() => {
       if (sale === "ALL") {
@@ -5968,6 +5987,12 @@ export function MobileOrderTrackingHome({
     });
   const toggleSaleStatusChipStable = (value: SaleStatusFilterValue) =>
     runWithStableScroll(() => {
+      const currentScope = String(searchParams?.get("scope") ?? "").trim().toLowerCase();
+      if (currentScope !== "all" && (value === "ทั้งหมด" || value === "ส่งแล้ว")) {
+        setSaleStatusFilters(value === "ส่งแล้ว" ? new Set(["ส่งแล้ว"]) : new Set());
+        loadAllSaleStatusScope(value === "ส่งแล้ว" ? "ส่งแล้ว" : undefined);
+        return;
+      }
       if (value === "ทั้งหมด") {
         setSaleStatusFilters(new Set());
         return;
@@ -6335,33 +6360,6 @@ export function MobileOrderTrackingHome({
           ) : null}
           <>
               <div className="mb-2 rounded-2xl bg-white p-2">
-                <div className="mb-2 rounded-2xl bg-slate-100/80 p-2">
-                  <div className="mb-1.5">
-                    <span className="text-xs font-semibold tracking-wide text-slate-600">{uiLang === "en" ? "Sale Code" : "เซลล์"}</span>
-                  </div>
-                  <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(72px, 1fr))" }}>
-                    {salesChipsOrdered.map((sale) => (
-                      <button
-                        key={sale}
-                        type="button"
-                        onClick={() => toggleSaleChipStable(sale)}
-                        className={cn(
-                          "min-h-[48px] rounded-2xl px-1.5 py-2 text-center transition-colors",
-                          sale === "ALL"
-                            ? saleFilters.size === 0
-                              ? "bg-slate-950 text-white"
-                              : "bg-slate-100 text-slate-700 hover:bg-slate-200/70"
-                            : saleFilters.has(sale)
-                              ? "bg-slate-950 text-white"
-                              : "bg-slate-100 text-slate-700 hover:bg-slate-200/70"
-                        )}
-                      >
-                        <div className="truncate text-xs font-medium leading-snug">{sale}</div>
-                        <div className="text-base font-semibold tabular-nums leading-none">{saleCounts[sale] ?? 0}</div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
                 <div className="mb-2 rounded-2xl bg-slate-100/80 p-2">
                   <div className="mb-1.5">
                     <span className="text-xs font-semibold tracking-wide text-slate-600">{uiLang === "en" ? "Sale Status" : "สถานะขาย"}</span>
@@ -6831,6 +6829,33 @@ export function MobileOrderTrackingHome({
                       </div>
                     </div>
                   ) : null}
+                </div>
+                <div className="mb-2 rounded-2xl bg-slate-100/80 p-2">
+                  <div className="mb-1.5">
+                    <span className="text-xs font-semibold tracking-wide text-slate-600">{uiLang === "en" ? "Sale Code" : "เซลล์"}</span>
+                  </div>
+                  <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(72px, 1fr))" }}>
+                    {salesChipsOrdered.map((sale) => (
+                      <button
+                        key={sale}
+                        type="button"
+                        onClick={() => toggleSaleChipStable(sale)}
+                        className={cn(
+                          "min-h-[48px] rounded-2xl px-1.5 py-2 text-center transition-colors",
+                          sale === "ALL"
+                            ? saleFilters.size === 0
+                              ? "bg-slate-950 text-white"
+                              : "bg-slate-100 text-slate-700 hover:bg-slate-200/70"
+                            : saleFilters.has(sale)
+                              ? "bg-slate-950 text-white"
+                              : "bg-slate-100 text-slate-700 hover:bg-slate-200/70"
+                        )}
+                      >
+                        <div className="truncate text-xs font-medium leading-snug">{sale}</div>
+                        <div className="text-base font-semibold tabular-nums leading-none">{saleCounts[sale] ?? 0}</div>
+                      </button>
+                    ))}
+                  </div>
                 </div>
                 <div className="rounded-2xl bg-slate-100/80 p-2">
                   <div className="mb-1.5 flex items-center justify-between gap-2">

@@ -29,6 +29,7 @@ export type OrderTrackingSearchParams = { order?: string | string[] };
 type LoadOrderTrackingPageOptions = {
   /** โหมดทดลองความเร็ว: โหลดเฉพาะสรุป ไม่โหลดรถ/รายการ */
   summaryOnly?: boolean;
+  includeShipped?: boolean;
 };
 
 /** Shared server payload for `/m/orders` and `/liff/orders`. */
@@ -50,7 +51,7 @@ export async function loadOrderTrackingPageData(
   let updatesError: string | null = null;
 
   if (!summaryOnly) {
-    const carsPack = await fetchCarsForOrderTracking();
+    const carsPack = await fetchCarsForOrderTracking({ includeShipped: options?.includeShipped !== false });
     cars = carsPack.cars;
     carsError = carsPack.error;
     const itemsPack = await fetchOrderItemsAndUpdatesByCars(cars);
