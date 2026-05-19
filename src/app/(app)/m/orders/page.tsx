@@ -18,8 +18,15 @@ function isOrderChipCacheExperimentEnabled(): boolean {
   return String(process.env.NEXT_PUBLIC_ORDER_CHIP_CACHE_ENABLED ?? "").trim().toLowerCase() === "true";
 }
 
+function getOrderChipCacheBadgeLabel(): string | null {
+  if (process.env.VERCEL_ENV === "production") return null;
+  if (process.env.VERCEL_ENV === "preview") return "Preview";
+  return "Dev";
+}
+
 export default async function MobileOrdersPage({ searchParams }: PageProps) {
   const orderChipCacheExperimentEnabled = isOrderChipCacheExperimentEnabled();
+  const orderChipCacheBadgeLabel = orderChipCacheExperimentEnabled ? getOrderChipCacheBadgeLabel() : null;
   const loadRaw = searchParams?.load;
   const loadMode = typeof loadRaw === "string" ? loadRaw : Array.isArray(loadRaw) ? String(loadRaw[0] ?? "") : "";
   const isFullLoad = loadMode.trim().toLowerCase() === "full";
@@ -45,6 +52,7 @@ export default async function MobileOrdersPage({ searchParams }: PageProps) {
       orderUpdatesByCar={props.orderUpdatesByCar}
       orderItemFilterIndexByCar={props.orderItemFilterIndexByCar}
       orderChipCacheExperimentEnabled={orderChipCacheExperimentEnabled}
+      orderChipCacheBadgeLabel={orderChipCacheBadgeLabel}
       experimentInitialHydratedCarKeys={props.experimentInitialHydratedCarKeys}
       saleStatusSummaryAllCars={props.saleStatusSummaryAllCars}
       summarySnapshotAllCars={props.summarySnapshotAllCars}
