@@ -642,6 +642,7 @@ type MobileOrderTrackingHomeProps = {
   >;
   orderItemFilterIndexByCar?: Record<string, OrderItemFilterIndexLite[]>;
   orderChipCacheExperimentEnabled?: boolean;
+  orderChipCacheBadgeLabel?: string | null;
   experimentInitialHydratedCarKeys?: string[];
   dataWarnings?: string[];
   /** จาก `/m/orders?order=...` — เลื่อนไปการ์ดและกรองทะเบียนให้โผล่ */
@@ -4679,6 +4680,7 @@ export function MobileOrderTrackingHome({
   orderUpdatesByCar = {},
   orderItemFilterIndexByCar = {},
   orderChipCacheExperimentEnabled = false,
+  orderChipCacheBadgeLabel = null,
   experimentInitialHydratedCarKeys = [],
   saleStatusSummaryAllCars = null,
   summarySnapshotAllCars = null,
@@ -6774,9 +6776,9 @@ export function MobileOrderTrackingHome({
                 ? (uiLang === "en" ? "Multi Select" : "เลือกหลายชิป")
                 : (uiLang === "en" ? "Single Select" : "เลือกทีละหนึ่ง")}
             </button>
-            {orderChipCacheExperimentEnabled ? (
+            {orderChipCacheExperimentEnabled && orderChipCacheBadgeLabel ? (
               <span className="shrink-0 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold leading-snug text-emerald-900 ring-1 ring-emerald-200/90">
-                {uiLang === "en" ? "Experiment: filtered loading" : "ทดลอง chip cache / filtered loading"}
+                {filterRenderPending ? (uiLang === "en" ? "Updating" : "Updating") : orderChipCacheBadgeLabel}
               </span>
             ) : null}
             {orderChipCacheExperimentEnabled && hasActiveFilters ? (
@@ -6812,18 +6814,6 @@ export function MobileOrderTrackingHome({
           {dataWarnings.length > 0 && !suppressDataWarningsDuringDeferredHydration ? (
             <div className="mb-2 rounded-2xl bg-rose-50 px-3 py-2.5 text-sm font-medium leading-snug text-rose-800">
               Data warning: {dataWarnings[0]}
-            </div>
-          ) : null}
-          {orderChipCacheExperimentEnabled ? (
-            <div className="mb-2 rounded-2xl bg-emerald-50 px-3 py-2 text-xs font-semibold leading-snug text-emerald-900 ring-1 ring-emerald-100">
-              {uiLang === "en"
-                ? "Sale chips follow the other active filters and hide zero-count sales. Card details show 20 first, then keep 20 cars prepared ahead while you scroll."
-                : "ตัวเลขเซลล์สัมพันธ์กับ filter อื่นและซ่อนเซลล์ที่เป็น 0 · การ์ดแสดง 20 คันแรก แล้วเตรียมข้อมูลล่วงหน้า 20 คันตามการเลื่อนหน้า"}
-              {filterRenderPending ? (
-                <span className="ml-1 inline-block text-emerald-700/80">
-                  {uiLang === "en" ? "Updating list..." : "กำลังปรับรายการ..."}
-                </span>
-              ) : null}
             </div>
           ) : null}
           {experimentDetailError && orderChipCacheExperimentEnabled ? (
