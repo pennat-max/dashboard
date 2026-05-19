@@ -6416,14 +6416,7 @@ export function MobileOrderTrackingHome({
         setSaleFilters(new Set());
         return;
       }
-      if (!filterChipMultiSelect) {
-        setSaleFilters((prev) => {
-          if (prev.size === 1 && prev.has(sale)) return new Set();
-          return new Set([sale]);
-        });
-        return;
-      }
-      setSaleFilters((prev) => toggleSetMember(prev, sale));
+      setSaleFilters(new Set([sale]));
     });
   const toggleSaleStatusChipStable = (value: SaleStatusFilterValue) =>
     runWithStableScroll(() => {
