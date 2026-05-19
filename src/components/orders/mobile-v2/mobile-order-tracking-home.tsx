@@ -4937,7 +4937,13 @@ export function MobileOrderTrackingHome({
   }, [router, translateAllBusy, uiLang]);
 
   const saleCounts = useMemo(() => {
-    if (summarySnapshotAllCars) {
+    const useSummaryCacheBase =
+      Boolean(summarySnapshotAllCars) &&
+      filteringSaleStatusFilters.size === 0 &&
+      filteringStaffFilters.size === 0 &&
+      filteringItemStatusFilters.size === 0 &&
+      filteringVehicleSearchForFiltering.trim() === "";
+    if (useSummaryCacheBase && summarySnapshotAllCars) {
       const acc: Record<string, number> = {};
       for (const s of ALL_SALES) {
         if (s === "ALL") acc[s] = Number(summarySnapshotAllCars.totalOrders ?? 0);
@@ -4945,7 +4951,19 @@ export function MobileOrderTrackingHome({
       }
       return acc;
     }
-    const baseOrders = mappedOrders;
+    const dtChip = itemStatusPoliciesNormalized.dueToday;
+    const baseOrders = mappedOrders.filter((order) => {
+      const saleStatusOk = orderMatchesSaleStatusFilters(order, filteringSaleStatusFilters);
+      const vehicleOk = matchesVehicleSearch(order, filteringVehicleSearchForFiltering);
+      const toolbarOk = orderMatchesToolbarFilters(
+        order,
+        filteringStaffFilters,
+        filteringItemStatusFilters,
+        dtChip,
+        orderChipCacheExperimentEnabled ? filterItemsForOrder(order) : order.items
+      );
+      return saleStatusOk && vehicleOk && toolbarOk;
+    });
     const acc: Record<string, number> = { ALL: baseOrders.length };
     for (const s of ALL_SALES) {
       if (s !== "ALL") acc[s] = 0;
@@ -4958,6 +4976,13 @@ export function MobileOrderTrackingHome({
   }, [
     mappedOrders,
     summarySnapshotAllCars,
+    filteringSaleStatusFilters,
+    filteringStaffFilters,
+    filteringItemStatusFilters,
+    filteringVehicleSearchForFiltering,
+    itemStatusPoliciesNormalized,
+    orderChipCacheExperimentEnabled,
+    filterItemsForOrder,
   ]);
   /** ชิปเซลล์: ALL อยู่แรกเสมอ ที่เหลือเรียงตามจำนวนจากมากไปน้อย */
   const salesChipsOrdered = useMemo(() => {
@@ -6714,8 +6739,8 @@ export function MobileOrderTrackingHome({
           {orderChipCacheExperimentEnabled ? (
             <div className="mb-2 rounded-2xl bg-emerald-50 px-3 py-2 text-xs font-semibold leading-snug text-emerald-900 ring-1 ring-emerald-100">
               {uiLang === "en"
-                ? "Sale chips use system summary totals. Status/staff/item counts use the loaded filter index; card details load in batches of 50."
-                : "ตัวเลขเซลล์เป็นยอดรวมจาก summary ทั้งระบบ · สถานะ/พนักงาน/สถานะรายการจากรายการที่โหลดแล้ว · การ์ดโหลดทีละ 50"}
+                ? "Sale chips follow the other active filters and hide zero-count sales. Status/staff/item counts use the loaded filter index; card details load in batches of 50."
+                : "ตัวเลขเซลล์สัมพันธ์กับ filter อื่นและซ่อนเซลล์ที่เป็น 0 · สถานะ/พนักงาน/สถานะรายการจากรายการที่โหลดแล้ว · การ์ดโหลดทีละ 50"}
               {filterRenderPending ? (
                 <span className="ml-1 inline-block text-emerald-700/80">
                   {uiLang === "en" ? "Updating list..." : "กำลังปรับรายการ..."}
