@@ -65,6 +65,8 @@ const ITEM_STATUSES = ORDER_TRACKING_ITEM_STATUSES;
 const WAITING = ["เช็ค", "ต้องสั่ง", "สั่ง"] as const;
 const DONE = ["มี", "มา", "รถนอก", "ช่างนอก", "จบ"] as const;
 const STATUS_ACTION_NOTE = "__NOTE__";
+const SALE_FILTER_UNASSIGNED = "__sale_unassigned__";
+const KNOWN_SALE_CODES = new Set<string>(ORDER_TRACKING_SALE_CODES.map((code) => code.toUpperCase()));
 /** ความกว้างปุ่มต่อช่องเมื่อปัดซ้ายเปิด (px) — สามช่อง = เพิ่มงาน · เพิ่มแถว · ลบ */
 const SWIPE_ROW_ACTION_PX = 80;
 /** ระยะเปิดเต็มเมื่อปัดซ้าย (สามปุ่มเท่ากัน) */
@@ -1094,6 +1096,7 @@ function orderMatchesSaleFilters(order: Order, saleFilters: Set<string>): boolea
   if (saleFilters.size === 0) return true;
   const up = String(order.sale).toUpperCase();
   for (const code of Array.from(saleFilters)) {
+    if (code === SALE_FILTER_UNASSIGNED && !KNOWN_SALE_CODES.has(up)) return true;
     if (up === String(code).toUpperCase()) return true;
   }
   return false;
@@ -4945,10 +4948,15 @@ export function MobileOrderTrackingHome({
       filteringVehicleSearchForFiltering.trim() === "";
     if (useSummaryCacheBase && summarySnapshotAllCars) {
       const acc: Record<string, number> = {};
+      let knownSaleTotal = 0;
       for (const s of ALL_SALES) {
         if (s === "ALL") acc[s] = Number(summarySnapshotAllCars.totalOrders ?? 0);
-        else acc[s] = Number(summarySnapshotAllCars.saleCodeCounts?.[s] ?? 0);
+        else {
+          acc[s] = Number(summarySnapshotAllCars.saleCodeCounts?.[s] ?? 0);
+          knownSaleTotal += acc[s] ?? 0;
+        }
       }
+      acc[SALE_FILTER_UNASSIGNED] = Math.max(0, Number(summarySnapshotAllCars.totalOrders ?? 0) - knownSaleTotal);
       return acc;
     }
     const dtChip = itemStatusPoliciesNormalized.dueToday;
@@ -4964,13 +4972,14 @@ export function MobileOrderTrackingHome({
       );
       return saleStatusOk && vehicleOk && toolbarOk;
     });
-    const acc: Record<string, number> = { ALL: baseOrders.length };
+    const acc: Record<string, number> = { ALL: baseOrders.length, [SALE_FILTER_UNASSIGNED]: 0 };
     for (const s of ALL_SALES) {
       if (s !== "ALL") acc[s] = 0;
     }
     for (const order of baseOrders) {
       const sale = String(order.sale).toUpperCase();
-      if (sale in acc) acc[sale] += 1;
+      if (sale !== "ALL" && KNOWN_SALE_CODES.has(sale) && sale in acc) acc[sale] += 1;
+      else acc[SALE_FILTER_UNASSIGNED] += 1;
     }
     return acc;
   }, [
@@ -4991,16 +5000,23 @@ export function MobileOrderTrackingHome({
       const diff = (saleCounts[b] ?? 0) - (saleCounts[a] ?? 0);
       return diff !== 0 ? diff : String(a).localeCompare(String(b), "en", { sensitivity: "base" });
     });
-    return ["ALL", ...rest] as const;
+    return (saleCounts[SALE_FILTER_UNASSIGNED] ?? 0) > 0
+      ? ["ALL", ...rest, SALE_FILTER_UNASSIGNED]
+      : ["ALL", ...rest];
   }, [saleCounts]);
+  const saleChipLabel = React.useCallback(
+    (sale: string) => (sale === SALE_FILTER_UNASSIGNED ? (uiLang === "en" ? "No sale" : "ไม่ระบุเซลล์") : sale),
+    [uiLang]
+  );
   const saleChipModels = useMemo(
     () =>
       salesChipsOrdered.map((sale) => ({
         sale,
+        label: saleChipLabel(sale),
         count: saleCounts[sale] ?? 0,
         active: sale === "ALL" ? saleFilters.size === 0 : saleFilters.has(sale),
       })),
-    [saleCounts, saleFilters, salesChipsOrdered]
+    [saleChipLabel, saleCounts, saleFilters, salesChipsOrdered]
   );
 
   /** จำนวนรายการต่อ assignee — ขอบเขตเหมือนชิปสถานะรายการ (ไม่กรองตามพนักงาน) */
@@ -7230,7 +7246,7 @@ export function MobileOrderTrackingHome({
                     <span className="text-xs font-semibold tracking-wide text-slate-600">{uiLang === "en" ? "Sale Code" : "เซลล์"}</span>
                   </div>
                   <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(72px, 1fr))" }}>
-                    {saleChipModels.map(({ sale, count, active }) => (
+                    {saleChipModels.map(({ sale, label, count, active }) => (
                       <button
                         key={sale}
                         type="button"
@@ -7240,7 +7256,7 @@ export function MobileOrderTrackingHome({
                           active ? "bg-slate-950 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200/70"
                         )}
                       >
-                        <div className="truncate text-xs font-medium leading-snug">{sale}</div>
+                        <div className="truncate text-xs font-medium leading-snug">{label}</div>
                         <div className="text-base font-semibold tabular-nums leading-none">{count}</div>
                       </button>
                     ))}
