@@ -21,10 +21,11 @@
 - [ ] Add explicit module-level test checklist/documentation.
 
 ## Order Tracking Module
+- [x] Progressive loading Phase 1 for `/m/orders`: lightweight car index loads first for search/filter/count; full details load for first 50 cars, then in 50-car batches as the visible list advances or search exposes unloaded cars. Client caches loaded detail by car key. No schema/route/UI/business-logic change.
 - [x] Performance pass for `/m/orders`: debounced vehicle search, one-pass sale chip counts, memoized per-card item grouping, and visible-page reset on debounced filter scope. No UI/schema/business-logic changes.
 - [x] Added DB mapping document: `ORDER_TRACKING_DB_MAPPING.md` (Phase 1 read-only mapping from repo schema/types/code, no schema change).
 - [x] Primary mobile UI: **`/m/orders`** → `MobileOrderTrackingHome` (`src/components/orders/mobile-v2/mobile-order-tracking-home.tsx`).
-- [x] Server data for list: `fetchCarsForOrderTracking` + `fetchOrderItemsByCars` in `src/app/(app)/m/orders/page.tsx`.
+- [x] Server data for list: `fetchCarsIndexForOrderTracking` for car index, first-detail batch via `fetchCarsForOrderTrackingDetailsByKeys`, and progressive `POST /api/m/order-tracking/cars-bundle` for later detail batches.
 - [x] Fallback mock orders in-component when `carsData` is empty (`ORDERS` constant).
 - [x] `/m/orders/[id]` redirects to list; `.old` page backups kept.
 - [x] **Read path** uses `order_tasks` + `order_items` (see `src/lib/data/orders.ts`) with missing-table graceful empty.

@@ -257,6 +257,8 @@ function writeSaleAssigneesToStorage(map: Record<string, string>) {
 /** เลือกเซลล์เพิ่มจากชีต — ALL + รหัสจาก sale-assignees-shared */
 const ALL_SALES = ["ALL", ...ORDER_TRACKING_SALE_CODES] as const;
 const ORDERS_PAGE_SIZE = 40;
+const ORDER_TRACKING_CARS_BUNDLE_API_PATH = "/api/m/order-tracking/cars-bundle";
+const PROGRESSIVE_DETAIL_BATCH_SIZE_FALLBACK = 50;
 /** ความยาวสูงสุดช่องค้นหา (พิมพ์ / วางจาก LINE / คลิปบอร์ด) */
 const VEHICLE_SEARCH_MAX = 48;
 const SALE_STATUS_PRIORITY: Record<SaleStatusValue, number> = {
@@ -597,8 +599,24 @@ function orderPhotoHttpUrl(photo: string | undefined): string | null {
   return t;
 }
 
+function progressiveCarKeyFromParts(rowId: unknown, id: unknown): string | null {
+  const row = String(rowId ?? "").trim();
+  if (row) return `row:${row}`;
+  const carId = String(id ?? "").trim();
+  return carId ? `id:${carId}` : null;
+}
+
+function progressiveCarKey(car: Pick<Car, "row_id" | "id">): string | null {
+  return progressiveCarKeyFromParts(car.row_id, car.id);
+}
+
+function progressiveOrderKey(order: Pick<Order, "carRowId" | "carId">): string | null {
+  return progressiveCarKeyFromParts(order.carRowId, order.carId);
+}
+
 type MobileOrderTrackingHomeProps = {
   carsData?: Car[];
+  initialDetailCarsData?: Car[];
   orderItemsByCar?: Record<
     string,
     Array<{
@@ -645,6 +663,15 @@ type MobileOrderTrackingHomeProps = {
   deferCarsHydration?: boolean;
   /** สถานะขายที่เลือกไว้ตั้งแต่เปิดหน้า */
   initialSaleStatusFilters?: SaleStatusFilterValue[];
+  progressiveDetailsEnabled?: boolean;
+  progressiveDetailBatchSize?: number;
+};
+
+type ProgressiveCarsBundleResponse = {
+  carsData?: Car[];
+  orderItemsByCar?: MobileOrderTrackingHomeProps["orderItemsByCar"];
+  orderUpdatesByCar?: MobileOrderTrackingHomeProps["orderUpdatesByCar"];
+  dataWarnings?: string[];
 };
 
 const ORDERS: Order[] = [
@@ -4620,8 +4647,36 @@ function OrderCard({
   );
 }
 
+function OrderCardDetailSkeleton({ order, uiLang }: { order: Order; uiLang: UiLang }) {
+  return (
+    <article className="overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-200/70">
+      <div className="p-4">
+        <p className="text-base font-semibold leading-snug text-slate-900">{order.car}</p>
+        <p className="mt-1 text-xs font-medium text-blue-700">{order.chassis || order.fullPlate}</p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <div className="h-8 w-20 animate-pulse rounded-full bg-slate-100" />
+          <div className="h-8 w-28 animate-pulse rounded-full bg-slate-100" />
+          <div className="h-8 w-24 animate-pulse rounded-full bg-slate-100" />
+        </div>
+      </div>
+      <div className="border-t border-slate-100 bg-slate-50/80 p-4">
+        <div className="h-10 w-full animate-pulse rounded-2xl bg-slate-100" />
+        <div className="mt-3 grid grid-cols-3 gap-2">
+          <div className="h-16 animate-pulse rounded-2xl bg-slate-100" />
+          <div className="h-16 animate-pulse rounded-2xl bg-slate-100" />
+          <div className="h-16 animate-pulse rounded-2xl bg-slate-100" />
+        </div>
+        <p className="mt-3 text-center text-xs font-medium text-slate-500">
+          {uiLang === "en" ? "Loading car details..." : "กำลังโหลดรายละเอียดรถ..."}
+        </p>
+      </div>
+    </article>
+  );
+}
+
 export function MobileOrderTrackingHome({
   carsData = [],
+  initialDetailCarsData = [],
   orderItemsByCar = {},
   orderUpdatesByCar = {},
   saleStatusSummaryAllCars = null,
@@ -4633,6 +4688,8 @@ export function MobileOrderTrackingHome({
   shareBaseUrl = null,
   initialSaleStatusFilters = [],
   initialUiLang = "th",
+  progressiveDetailsEnabled = false,
+  progressiveDetailBatchSize = PROGRESSIVE_DETAIL_BATCH_SIZE_FALLBACK,
 }: MobileOrderTrackingHomeProps) {
   const router = useRouter();
   const pathname = usePathname() || "/m/orders";
@@ -4711,17 +4768,60 @@ export function MobileOrderTrackingHome({
     setLiveOrderItemsById({});
   }, [carsData, orderItemsByCar]);
 
+  const initialDetailCarsByKey = useMemo(() => {
+    const next: Record<string, Car> = {};
+    for (const car of initialDetailCarsData) {
+      const key = progressiveCarKey(car);
+      if (key) next[key] = car;
+    }
+    return next;
+  }, [initialDetailCarsData]);
+  const [progressiveDetailCarsByKey, setProgressiveDetailCarsByKey] = useState<Record<string, Car>>(
+    () => initialDetailCarsByKey
+  );
+  const [progressiveOrderItemsByCar, setProgressiveOrderItemsByCar] =
+    useState<NonNullable<MobileOrderTrackingHomeProps["orderItemsByCar"]>>(orderItemsByCar);
+  const [progressiveOrderUpdatesByCar, setProgressiveOrderUpdatesByCar] =
+    useState<NonNullable<MobileOrderTrackingHomeProps["orderUpdatesByCar"]>>(orderUpdatesByCar);
+  const [progressiveLoadingKeys, setProgressiveLoadingKeys] = useState<Set<string>>(() => new Set());
+  const [progressiveDetailWarnings, setProgressiveDetailWarnings] = useState<string[]>([]);
+  const progressiveRequestedKeysRef = useRef<Set<string>>(new Set(Object.keys(initialDetailCarsByKey)));
+
+  useEffect(() => {
+    progressiveRequestedKeysRef.current = new Set(Object.keys(initialDetailCarsByKey));
+    setProgressiveDetailCarsByKey(initialDetailCarsByKey);
+    setProgressiveOrderItemsByCar(orderItemsByCar);
+    setProgressiveOrderUpdatesByCar(orderUpdatesByCar);
+    setProgressiveLoadingKeys(new Set());
+    setProgressiveDetailWarnings([]);
+  }, [initialDetailCarsByKey, orderItemsByCar, orderUpdatesByCar]);
+
+  const effectiveOrderItemsByCar = progressiveDetailsEnabled ? progressiveOrderItemsByCar : orderItemsByCar;
+  const effectiveOrderUpdatesByCar = progressiveDetailsEnabled ? progressiveOrderUpdatesByCar : orderUpdatesByCar;
+  const effectiveCarsData = useMemo(() => {
+    if (!progressiveDetailsEnabled) return carsData;
+    return carsData.map((car) => {
+      const key = progressiveCarKey(car);
+      const detail = key ? progressiveDetailCarsByKey[key] : undefined;
+      return detail ? ({ ...car, ...detail } as Car) : car;
+    });
+  }, [carsData, progressiveDetailsEnabled, progressiveDetailCarsByKey]);
+  const combinedDataWarnings = useMemo(
+    () => [...dataWarnings, ...progressiveDetailWarnings],
+    [dataWarnings, progressiveDetailWarnings]
+  );
+
   const usingDemoFallback = !disableDemoFallback && carsData.length === 0;
   const mappedOrders = useMemo(() => {
     const base =
-      !disableDemoFallback && carsData.length === 0
+      !disableDemoFallback && effectiveCarsData.length === 0
         ? ORDERS
-        : carsData.map((car, index) => toOrderFromCar(car, index, orderItemsByCar, orderUpdatesByCar));
+        : effectiveCarsData.map((car, index) => toOrderFromCar(car, index, effectiveOrderItemsByCar, effectiveOrderUpdatesByCar));
     return base.map((order) => {
       const live = liveOrderItemsById[order.id];
       return live ? { ...order, items: live } : order;
     });
-  }, [carsData, orderItemsByCar, orderUpdatesByCar, liveOrderItemsById, disableDemoFallback]);
+  }, [effectiveCarsData, effectiveOrderItemsByCar, effectiveOrderUpdatesByCar, liveOrderItemsById, disableDemoFallback]);
   const [saleFilters, setSaleFilters] = useState<Set<string>>(() => new Set());
   const [saleStatusFilters, setSaleStatusFilters] = useState<Set<SaleStatusFilterValue>>(
     () => new Set(initialSaleStatusFilters)
@@ -5891,6 +5991,104 @@ export function MobileOrderTrackingHome({
   );
   const visiblePaged = useMemo(() => visible.slice(0, visibleLimit), [visible, visibleLimit]);
   const hasMoreVisible = visible.length > visibleLimit;
+  const indexCarsByProgressiveKey = useMemo(() => {
+    const next: Record<string, Car> = {};
+    for (const car of carsData) {
+      const key = progressiveCarKey(car);
+      if (key) next[key] = car;
+    }
+    return next;
+  }, [carsData]);
+  const loadProgressiveDetailsForOrders = React.useCallback(
+    async (orders: Order[]) => {
+      if (!progressiveDetailsEnabled || usingDemoFallback) return;
+      const batchSize = Math.max(1, Math.min(100, progressiveDetailBatchSize || PROGRESSIVE_DETAIL_BATCH_SIZE_FALLBACK));
+      const targets: Array<{ key: string; rowId: string | null; id: string | number | null }> = [];
+      for (const order of orders) {
+        const key = progressiveOrderKey(order);
+        if (!key || progressiveDetailCarsByKey[key] || progressiveRequestedKeysRef.current.has(key)) continue;
+        targets.push({ key, rowId: order.carRowId ?? null, id: order.carId ?? null });
+        if (targets.length >= batchSize) break;
+      }
+      if (targets.length === 0) return;
+
+      const targetKeys = targets.map((t) => t.key);
+      for (const key of targetKeys) progressiveRequestedKeysRef.current.add(key);
+      setProgressiveLoadingKeys((prev) => new Set([...Array.from(prev), ...targetKeys]));
+
+      const applyIndexFallback = () => {
+        setProgressiveDetailCarsByKey((prev) => {
+          const next = { ...prev };
+          for (const key of targetKeys) {
+            if (!next[key] && indexCarsByProgressiveKey[key]) next[key] = indexCarsByProgressiveKey[key];
+          }
+          return next;
+        });
+      };
+
+      try {
+        const res = await fetch(ORDER_TRACKING_CARS_BUNDLE_API_PATH, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            cars: targets.map((t) => ({ rowId: t.rowId, id: t.id })),
+          }),
+          cache: "no-store",
+        });
+        const json = (await res.json().catch(() => ({}))) as ProgressiveCarsBundleResponse;
+        if (!res.ok) {
+          applyIndexFallback();
+          setProgressiveDetailWarnings((prev) => [
+            ...prev,
+            `Progressive detail load failed: HTTP ${res.status}`,
+          ]);
+          return;
+        }
+
+        const returnedKeys = new Set<string>();
+        setProgressiveDetailCarsByKey((prev) => {
+          const next = { ...prev };
+          for (const car of json.carsData ?? []) {
+            const key = progressiveCarKey(car);
+            if (!key) continue;
+            next[key] = car;
+            returnedKeys.add(key);
+          }
+          for (const key of targetKeys) {
+            if (!next[key] && indexCarsByProgressiveKey[key]) next[key] = indexCarsByProgressiveKey[key];
+          }
+          return next;
+        });
+        setProgressiveOrderItemsByCar((prev) => ({ ...prev, ...(json.orderItemsByCar ?? {}) }));
+        setProgressiveOrderUpdatesByCar((prev) => ({ ...prev, ...(json.orderUpdatesByCar ?? {}) }));
+        if (json.dataWarnings?.length) {
+          setProgressiveDetailWarnings((prev) => [...prev, ...json.dataWarnings!.slice(0, 2)]);
+        }
+        if (returnedKeys.size === 0 && (json.carsData ?? []).length === 0) applyIndexFallback();
+      } catch (e) {
+        applyIndexFallback();
+        const message = e instanceof Error ? e.message : String(e);
+        setProgressiveDetailWarnings((prev) => [...prev, `Progressive detail load failed: ${message}`]);
+      } finally {
+        setProgressiveLoadingKeys((prev) => {
+          const next = new Set(prev);
+          for (const key of targetKeys) next.delete(key);
+          return next;
+        });
+      }
+    },
+    [
+      indexCarsByProgressiveKey,
+      progressiveDetailBatchSize,
+      progressiveDetailCarsByKey,
+      progressiveDetailsEnabled,
+      usingDemoFallback,
+    ]
+  );
+
+  useEffect(() => {
+    void loadProgressiveDetailsForOrders(visiblePaged);
+  }, [loadProgressiveDetailsForOrders, visiblePaged]);
 
   const deepLinkSetupRef = useRef(false);
   const deepLinkScrollDoneRef = useRef(false);
@@ -5943,13 +6141,13 @@ export function MobileOrderTrackingHome({
       (entries) => {
         const entry = entries[0];
         if (!entry?.isIntersecting) return;
-        setVisibleLimit((prev) => prev + ORDERS_PAGE_SIZE);
+        setVisibleLimit((prev) => prev + (progressiveDetailsEnabled ? progressiveDetailBatchSize : ORDERS_PAGE_SIZE));
       },
       { rootMargin: "200px 0px 200px 0px", threshold: 0.01 }
     );
     observer.observe(target);
     return () => observer.disconnect();
-  }, [hasMoreVisible]);
+  }, [hasMoreVisible, progressiveDetailBatchSize, progressiveDetailsEnabled]);
 
   const deleteVehicleChar = () => setVehicleSearch((prev) => prev.slice(0, -1));
   const runWithStableScroll = (action: () => void) => {
@@ -6353,9 +6551,9 @@ export function MobileOrderTrackingHome({
                 : `กำลังโหลดรายการรถในพื้นหลัง... ${deferredHydrationPercent}%`}
             </div>
           ) : null}
-          {dataWarnings.length > 0 && !suppressDataWarningsDuringDeferredHydration ? (
+          {combinedDataWarnings.length > 0 && !suppressDataWarningsDuringDeferredHydration ? (
             <div className="mb-2 rounded-2xl bg-rose-50 px-3 py-2.5 text-sm font-medium leading-snug text-rose-800">
-              Data warning: {dataWarnings[0]}
+              Data warning: {combinedDataWarnings[0]}
             </div>
           ) : null}
           <>
@@ -7364,22 +7562,31 @@ export function MobileOrderTrackingHome({
         </header>
         <main className="px-0 pb-3 pt-0 sm:px-3">
             <div className="space-y-3 pb-4">
-              {visiblePaged.map((order) => (
-                <OrderCard
-                  key={order.id}
-                  order={order}
-                  uiLang={uiLang}
-                  staffRosterNames={staffRoster}
-                  saleAssigneesBySale={saleAssignees}
-                  shareBaseUrl={shareBaseUrl}
-                  itemStatusLabels={itemStatusLabels}
-                  itemPoliciesNorm={itemStatusPoliciesNormalized}
-                  itemStatusRosterForCard={itemStatusRoster}
-                  toolbarStaffFilters={staffFilters}
-                  toolbarStatusFilters={itemStatusFilters}
-                  onLiveItemsChange={handleOrderLiveItemsChange}
-                />
-              ))}
+              {visiblePaged.map((order) => {
+                const progressiveKey = progressiveOrderKey(order);
+                const isProgressiveLoading =
+                  progressiveDetailsEnabled &&
+                  Boolean(progressiveKey) &&
+                  (!progressiveDetailCarsByKey[progressiveKey!] || progressiveLoadingKeys.has(progressiveKey!));
+                return isProgressiveLoading ? (
+                  <OrderCardDetailSkeleton key={order.id} order={order} uiLang={uiLang} />
+                ) : (
+                  <OrderCard
+                    key={order.id}
+                    order={order}
+                    uiLang={uiLang}
+                    staffRosterNames={staffRoster}
+                    saleAssigneesBySale={saleAssignees}
+                    shareBaseUrl={shareBaseUrl}
+                    itemStatusLabels={itemStatusLabels}
+                    itemPoliciesNorm={itemStatusPoliciesNormalized}
+                    itemStatusRosterForCard={itemStatusRoster}
+                    toolbarStaffFilters={staffFilters}
+                    toolbarStatusFilters={itemStatusFilters}
+                    onLiveItemsChange={handleOrderLiveItemsChange}
+                  />
+                );
+              })}
               {hasMoreVisible ? (
                 <div ref={loadMoreRef} className="h-9 w-full rounded-2xl bg-slate-100 text-center text-sm font-medium leading-9 text-slate-600">
                   {uiLang === "en" ? "Loading more..." : "กำลังโหลดเพิ่ม..."} ({visiblePaged.length}/{visible.length})

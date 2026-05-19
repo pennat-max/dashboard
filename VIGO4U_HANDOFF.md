@@ -68,9 +68,9 @@
 - `/m/orders/[id]` → redirect to `/m/orders`
 
 ## Existing Functions / API Routes
-- **API routes:** `POST /api/m/order-intake/save` (`src/app/api/m/order-intake/save/route.ts`).
+- **API routes:** `POST /api/m/order-intake/save` (`src/app/api/m/order-intake/save/route.ts`), `POST /api/m/order-tracking/cars-bundle` (progressive detail read bundle).
 - **LINE Inbox:** `POST /api/line-inbox/analyze` (no DB writes), `POST /api/line-inbox/confirm` (writes after confirm) — see `LINE_INBOX_AI_ANALYSIS_PLAN.md`, `src/lib/line-inbox/*`.
-- **Read functions:** `fetchCarsForOrderTracking`, `fetchOrderItemsByCars`, `fetchMobileOrders`, `fetchMobileOrderDetail`, dashboard car helpers in `cars.ts`.
+- **Read functions:** `fetchCarsIndexForOrderTracking`, `fetchCarsForOrderTrackingDetailsByKeys`, `fetchCarsForOrderTracking`, `fetchOrderItemsByCars`, `fetchMobileOrders`, `fetchMobileOrderDetail`, dashboard car helpers in `cars.ts`.
 
 ## Current Problems / Caveats
 - **RLS:** Anonymous client cannot insert `order_tasks`; saving relies on **service role** on the API route. Missing `SUPABASE_SERVICE_ROLE_KEY` → save fails at runtime.
@@ -103,6 +103,7 @@
 - Either deprecate `/m/orders/receive-line` mock in favor of inline flow, or rewire it to the same API + real car lookup.
 
 ## Latest Update
+- **[OrderTracking progressive loading Phase 1 - May 2026]** `/m/orders` and `/liff/orders` now load a lightweight car index first (`id`, `row_id`, plate/chassis/spec, sale/status fields, model year, `updated_at`) for search/filter/list ordering. Full card detail is loaded for the first 50 cars only; scrolling near the end and search-visible results request more detail in 50-car batches through **`POST /api/m/order-tracking/cars-bundle`**. Detail responses are cached client-side by `row_id`/`id`, so already-loaded cars are not fetched again. No Supabase schema, route, UI redesign, Google Sheet Sync, LINE Bot, or business logic changes. **`npm run build`** OK; existing warnings remain (`gatherImageFilesFromClipboard` hook dependency and `MODULE_TYPELESS_PACKAGE_JSON` for `tailwind.config.ts`).
 - **[OrderTracking performance pass - May 2026]** `/m/orders` only: debounced vehicle search before heavy list/count calculations, changed sale chip counts to one-pass aggregation, combined per-card item grouping into a single memoized pass, and reset the visible page window when debounced search/filter scope changes. No schema, route, UI design, data display, dashboard, cars, Google Sheet, or LINE Bot changes. **`npm run build`** OK; existing warnings remain (`gatherImageFilesFromClipboard` hook dependency and `MODULE_TYPELESS_PACKAGE_JSON` for `tailwind.config.ts`).
 - **[LINEBridge — LINE Inbox — implementation May 2026]** Added **`POST /api/line-inbox/analyze`**, **`POST /api/line-inbox/confirm`**, LIFF **`/liff/line-inbox`**, helpers **`src/lib/line-inbox/`**. Analyze is read-only; confirm creates/merges **`order_items`** + **`order_task_updates`**. Docs updated: **`LINE_INBOX_AI_ANALYSIS_PLAN.md`**, **`ORDER_TRACKING_DB_MAPPING.md`** §H, **`ORDER_TRACKING_PLAN.md`**, **`PROJECT_TASKS.md`**. **`npm run build`** OK.
 - **[LINEBridge — LINE Inbox AI — planning May 2026]** Added **`LINE_INBOX_AI_ANALYSIS_PLAN.md`** (spec). Earlier doc-only pass updated mapping/plan/tasks without routes.

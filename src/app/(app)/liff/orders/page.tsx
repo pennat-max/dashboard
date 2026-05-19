@@ -17,8 +17,11 @@ export default async function LiffOrdersPage({ searchParams }: PageProps) {
     <LiffOrdersShell>
       <MobileOrderTrackingHome
         carsData={props.carsData}
+        initialDetailCarsData={props.initialDetailCarsData}
         orderItemsByCar={props.orderItemsByCar}
         orderUpdatesByCar={props.orderUpdatesByCar}
+        progressiveDetailsEnabled={props.progressiveDetailsEnabled}
+        progressiveDetailBatchSize={props.progressiveDetailBatchSize}
         saleStatusSummaryAllCars={props.saleStatusSummaryAllCars}
         summarySnapshotAllCars={props.summarySnapshotAllCars}
         disableDemoFallback

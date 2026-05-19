@@ -1,4 +1,6 @@
 import {
+  fetchCarsForOrderTrackingDetailsByKeys,
+  fetchCarsIndexForOrderTracking,
   fetchCarsForOrderTracking,
   fetchOrderTrackingSaleStatusSummary,
   fetchOrderTrackingSummarySnapshot,
@@ -32,6 +34,8 @@ type LoadOrderTrackingPageOptions = {
   includeShipped?: boolean;
 };
 
+export const ORDER_TRACKING_DETAIL_BATCH_SIZE = 50;
+
 /** Shared server payload for `/m/orders` and `/liff/orders`. */
 export async function loadOrderTrackingPageData(
   searchParams: OrderTrackingSearchParams,
@@ -44,17 +48,34 @@ export async function loadOrderTrackingPageData(
   ] = await Promise.all([fetchOrderTrackingSaleStatusSummary(), fetchOrderTrackingSummarySnapshot()]);
 
   let cars: Awaited<ReturnType<typeof fetchCarsForOrderTracking>>["cars"] = [];
+  let initialDetailCars: Awaited<ReturnType<typeof fetchCarsForOrderTracking>>["cars"] = [];
   let carsError: string | null = null;
+  let detailCarsError: string | null = null;
+  let limitedByMaxCars = false;
+  let maxCars: number | null = null;
+  let totalCount: number | null = null;
   let orderItemsByCar: Awaited<ReturnType<typeof fetchOrderItemsAndUpdatesByCars>>["orderItemsByCar"] = {};
   let orderUpdatesByCar: Awaited<ReturnType<typeof fetchOrderItemsAndUpdatesByCars>>["orderUpdatesByCar"] = {};
   let itemsError: string | null = null;
   let updatesError: string | null = null;
 
   if (!summaryOnly) {
-    const carsPack = await fetchCarsForOrderTracking({ includeShipped: options?.includeShipped !== false });
+    const carsPack = await fetchCarsIndexForOrderTracking({ includeShipped: options?.includeShipped !== false });
     cars = carsPack.cars;
     carsError = carsPack.error;
-    const itemsPack = await fetchOrderItemsAndUpdatesByCars(cars);
+    limitedByMaxCars = carsPack.limitedByMaxCars === true;
+    maxCars = carsPack.maxCars ?? null;
+    totalCount = carsPack.totalCount ?? null;
+
+    const initialKeys = cars.slice(0, ORDER_TRACKING_DETAIL_BATCH_SIZE).map((car) => ({
+      rowId: String(car.row_id ?? "").trim() || null,
+      id: car.id ?? null,
+    }));
+    const detailPack = await fetchCarsForOrderTrackingDetailsByKeys(initialKeys);
+    initialDetailCars = detailPack.cars.length > 0 ? detailPack.cars : cars.slice(0, ORDER_TRACKING_DETAIL_BATCH_SIZE);
+    detailCarsError = detailPack.error;
+
+    const itemsPack = await fetchOrderItemsAndUpdatesByCars(initialDetailCars);
     orderItemsByCar = itemsPack.orderItemsByCar;
     orderUpdatesByCar = itemsPack.orderUpdatesByCar;
     itemsError = itemsPack.itemsError;
@@ -63,7 +84,11 @@ export async function loadOrderTrackingPageData(
 
   const dataWarnings = [
     summaryOnly ? "Summary-only mode: ยังไม่โหลดรายการรถ (เน้นเปิดหน้าเร็วสุด)" : null,
+    limitedByMaxCars
+      ? `ตัวเลขสัมพันธ์จากรายการที่โหลดอยู่ (ORDER_TRACKING_MAX_CARS=${maxCars ?? "?"}${totalCount ? ` จากทั้งหมด ${totalCount}` : ""})`
+      : null,
     carsError,
+    detailCarsError,
     saleSummaryError,
     summarySnapshotError,
     itemsError,
@@ -77,8 +102,11 @@ export async function loadOrderTrackingPageData(
 
   return {
     carsData: cars,
+    initialDetailCarsData: initialDetailCars,
     orderItemsByCar,
     orderUpdatesByCar,
+    progressiveDetailsEnabled: !summaryOnly,
+    progressiveDetailBatchSize: ORDER_TRACKING_DETAIL_BATCH_SIZE,
     saleStatusSummaryAllCars,
     summarySnapshotAllCars,
     dataWarnings,
