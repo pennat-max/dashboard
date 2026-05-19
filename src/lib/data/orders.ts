@@ -37,6 +37,12 @@ export type OrderItemLite = {
   status_changed_at?: string | null;
 };
 
+export type OrderItemFilterIndexLite = {
+  status: string;
+  assignee_staff: string | null;
+  due_date?: string | null;
+};
+
 function trimStr(v: unknown): string {
   return String(v ?? "").trim();
 }
@@ -194,6 +200,8 @@ const ORDER_ITEMS_SELECT_FALLBACK_WITH_LABEL_EN =
   "id,order_task_id,label,label_en,status,assignee_staff,outside_supplier,outside_eta_date,outside_price,outside_note,created_at,updated_at";
 const ORDER_ITEMS_SELECT_FALLBACK =
   "id,order_task_id,label,status,assignee_staff,outside_supplier,outside_eta_date,outside_price,outside_note,created_at,updated_at";
+const ORDER_ITEMS_FILTER_INDEX_SELECT_FULL = "order_task_id,status,assignee_staff,due_date,outside_eta_date";
+const ORDER_ITEMS_FILTER_INDEX_SELECT_FALLBACK = "order_task_id,status,assignee_staff,outside_eta_date";
 
 /** แบ่ง `.in(order_task_id)` เป็นก้อนย่อย — ไม่ยิงชุด task id หลายพันตัวในคำขอเดียว */
 async function fetchOrderItemsRowsChunked(
@@ -237,6 +245,41 @@ async function fetchOrderItemsRowsChunked(
           return { err: null as null, rows: (fallback.data ?? []) as Array<Record<string, unknown>> };
         }
         return { err: null as null, rows: (primary.data ?? []) as Array<Record<string, unknown>> };
+      })
+    );
+    for (const r of results) {
+      if (r.err) return { rows: [], error: r.err };
+      all.push(...r.rows);
+    }
+  }
+  return { rows: all, error: null };
+}
+
+async function fetchOrderItemFilterIndexRowsChunked(
+  supabase: SupabaseClient,
+  taskIds: string[]
+): Promise<{ rows: Array<Record<string, unknown>>; error: { message: string } | null }> {
+  const chunks = chunkIds(taskIds, ORDER_TASK_IN_CHUNK);
+  const all: Array<Record<string, unknown>> = [];
+  for (let i = 0; i < chunks.length; i += ORDER_TASK_FETCH_CONCURRENCY) {
+    const slice = chunks.slice(i, i + ORDER_TASK_FETCH_CONCURRENCY);
+    const results = await Promise.all(
+      slice.map(async (chunk) => {
+        const primary = await supabase
+          .from(ORDER_ITEMS_TABLE)
+          .select(ORDER_ITEMS_FILTER_INDEX_SELECT_FULL)
+          .in("order_task_id", chunk)
+          .limit(10000);
+        if (!primary.error) {
+          return { err: null as null, rows: (primary.data ?? []) as Array<Record<string, unknown>> };
+        }
+        const fallback = await supabase
+          .from(ORDER_ITEMS_TABLE)
+          .select(ORDER_ITEMS_FILTER_INDEX_SELECT_FALLBACK)
+          .in("order_task_id", chunk)
+          .limit(10000);
+        if (fallback.error) return { err: fallback.error, rows: [] as Array<Record<string, unknown>> };
+        return { err: null as null, rows: (fallback.data ?? []) as Array<Record<string, unknown>> };
       })
     );
     for (const r of results) {
@@ -667,6 +710,46 @@ export async function fetchOrderItemsByCars(
         outside_price: Number.isFinite(Number(row.outside_price)) ? Number(row.outside_price) : null,
         clock_start_ymd: dateYmdBangkokFromDbTimestamp(row.updated_at) ?? dateYmdBangkokFromDbTimestamp(row.created_at) ?? null,
         status_changed_at: trimStr(row.status_changed_at) || null,
+      };
+      for (const key of keys) {
+        if (!byCarKey[key]) byCarKey[key] = [];
+        byCarKey[key].push(item);
+      }
+    }
+    return { byCarKey, error: null, tableReady: true };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (isMissingTableError(msg)) return { byCarKey: {}, error: null, tableReady: false };
+    return { byCarKey: {}, error: msg, tableReady: false };
+  }
+}
+
+export async function fetchOrderItemFilterIndexByCars(
+  cars: Car[]
+): Promise<{ byCarKey: Record<string, OrderItemFilterIndexLite[]>; error: string | null; tableReady: boolean }> {
+  try {
+    const supabase = createAnonClient();
+    const { tasks, error: taskFetchError, tableReady: taskTableReady } = await fetchMatchingOrderTasks(supabase, cars);
+    if (taskFetchError) return { byCarKey: {}, error: taskFetchError, tableReady: taskTableReady };
+    if (!taskTableReady) return { byCarKey: {}, error: null, tableReady: false };
+    const taskIds = Array.from(new Set(tasks.map((t) => String(t.id ?? "").trim()).filter(Boolean)));
+    if (taskIds.length === 0) return { byCarKey: {}, error: null, tableReady: true };
+
+    const itemsPack = await fetchOrderItemFilterIndexRowsChunked(supabase, taskIds);
+    if (itemsPack.error) {
+      if (isMissingTableError(itemsPack.error.message)) return { byCarKey: {}, error: null, tableReady: false };
+      return { byCarKey: {}, error: itemsPack.error.message, tableReady: false };
+    }
+
+    const taskKeyByTaskId = buildTaskKeyByTaskId(tasks, cars);
+    const byCarKey: Record<string, OrderItemFilterIndexLite[]> = {};
+    for (const row of itemsPack.rows) {
+      const taskId = String(row.order_task_id ?? "").trim();
+      const keys = taskKeyByTaskId.get(taskId) ?? [];
+      const item: OrderItemFilterIndexLite = {
+        status: String(row.status ?? "requested"),
+        assignee_staff: String(row.assignee_staff ?? "").trim() || null,
+        due_date: coalesceDateYmd(row.due_date, row.outside_eta_date),
       };
       for (const key of keys) {
         if (!byCarKey[key]) byCarKey[key] = [];

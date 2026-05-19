@@ -17,7 +17,11 @@ import Image from "next/image";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { Car } from "@/types/car";
 import type { OrderTrackingSaleStatusSummary, OrderTrackingSummarySnapshot } from "@/lib/data/cars";
-import { ORDER_ITEMS_TABLE_NAME, ORDER_TASK_UPDATES_TABLE_NAME } from "@/lib/data/orders";
+import {
+  ORDER_ITEMS_TABLE_NAME,
+  ORDER_TASK_UPDATES_TABLE_NAME,
+  type OrderItemFilterIndexLite,
+} from "@/lib/data/orders";
 import {
   ORDER_TRACKING_SALE_CODES,
   normalizeSaleAssigneesMap,
@@ -90,6 +94,8 @@ const ITEM_STATUS_ROSTER_STORAGE_KEY = "vigo4u.orderTracking.itemStatusRoster";
 const ITEM_STATUS_LABELS_STORAGE_KEY = "vigo4u.orderTracking.itemStatusLabels";
 const ITEM_STATUS_POLICIES_STORAGE_KEY = "vigo4u.orderTracking.itemStatusPolicies.v1";
 const STAFF_ROSTER_API_PATH = "/api/m/order-tracking/staff-roster";
+const ORDER_TRACKING_CARD_DETAILS_API_PATH = "/api/m/order-tracking/card-details";
+const ORDER_TRACKING_EXPERIMENT_PAGE_SIZE = 50;
 /** ชิปกรองรายการที่ยังไม่มีชื่อพนักงาน — ค่าภายใน ไม่ชนกับชื่อจริง */
 const STAFF_FILTER_UNASSIGNED = "__UNASSIGNED__";
 const STAFF_FILTER_UNASSIGNED_LABEL = "ไม่ระบุชื่อ";
@@ -628,6 +634,9 @@ type MobileOrderTrackingHomeProps = {
       created_at?: string | null;
     }>
   >;
+  orderItemFilterIndexByCar?: Record<string, OrderItemFilterIndexLite[]>;
+  orderChipCacheExperimentEnabled?: boolean;
+  experimentInitialHydratedCarKeys?: string[];
   dataWarnings?: string[];
   /** จาก `/m/orders?order=...` — เลื่อนไปการ์ดและกรองทะเบียนให้โผล่ */
   initialFocusedOrderId?: string | null;
@@ -1181,11 +1190,48 @@ function itemMatchesToolbarLineFiltersMulti(
   return itemMatchesStaffFilters(item.assignee, staffFilters) && itemMatchesToolbarStatusFilters(item, statusFilters, dueTodayChip);
 }
 
+function orderCarKeys(order: Pick<Order, "carRowId" | "carId">): string[] {
+  const keys: string[] = [];
+  const rowId = String(order.carRowId ?? "").trim();
+  if (rowId) keys.push(`row:${rowId}`);
+  if (order.carId != null) {
+    const id = String(order.carId).trim();
+    if (id) keys.push(`id:${id}`);
+  }
+  return keys;
+}
+
+function orderCarRequest(order: Pick<Order, "carRowId" | "carId">): { row_id: string | null; id: number | null } {
+  return {
+    row_id: String(order.carRowId ?? "").trim() || null,
+    id: order.carId ?? null,
+  };
+}
+
+function filterIndexItemsForOrder(
+  order: Pick<Order, "carRowId" | "carId">,
+  indexByCar: Record<string, OrderItemFilterIndexLite[]>
+): Pick<OrderItem, "status" | "good" | "dueDate" | "assignee">[] {
+  const keys = orderCarKeys(order);
+  const rows = keys.map((key) => indexByCar[key] ?? []).find((list) => list.length > 0) ?? [];
+  return rows.map((item) => {
+    const status = normalizeItemStatus(item.status);
+    const dueDate = String(item.due_date ?? "").trim().slice(0, 10);
+    return {
+      status,
+      good: DONE_SET.has(status),
+      dueDate: /^\d{4}-\d{2}-\d{2}$/.test(dueDate) ? dueDate : undefined,
+      assignee: normalizeAssignee(item.assignee_staff),
+    };
+  });
+}
+
 function orderMatchesToolbarFilters(
   order: Order,
   staffFilters: Set<string>,
   statusFilters: Set<ItemStatusFilterValue | typeof ITEM_STATUS_DUE_TODAY>,
-  dueTodayChip: ItemStatusPoliciesNormalized["dueToday"]
+  dueTodayChip: ItemStatusPoliciesNormalized["dueToday"],
+  filterItems: Pick<OrderItem, "status" | "good" | "dueDate" | "assignee">[] = order.items
 ): boolean {
   const {
     itemStaffFilters,
@@ -1221,8 +1267,8 @@ function orderMatchesToolbarFilters(
   }
   const useLineScope = itemStaffFilters.size > 0 || statusFilters.size > 0;
   if (!useLineScope) return true;
-  if (order.items.length === 0) return itemStaffFilters.size === 0;
-  return order.items.some((item) => itemMatchesToolbarLineFiltersMulti(item, itemStaffFilters, statusFilters, dueTodayChip));
+  if (filterItems.length === 0) return itemStaffFilters.size === 0;
+  return filterItems.some((item) => itemMatchesToolbarLineFiltersMulti(item, itemStaffFilters, statusFilters, dueTodayChip));
 }
 
 function firstNumber(raw: string): string {
@@ -4624,6 +4670,9 @@ export function MobileOrderTrackingHome({
   carsData = [],
   orderItemsByCar = {},
   orderUpdatesByCar = {},
+  orderItemFilterIndexByCar = {},
+  orderChipCacheExperimentEnabled = false,
+  experimentInitialHydratedCarKeys = [],
   saleStatusSummaryAllCars = null,
   summarySnapshotAllCars = null,
   disableDemoFallback = false,
@@ -4651,8 +4700,18 @@ export function MobileOrderTrackingHome({
   const liveItemsToolbarSigRef = useRef<Record<string, string>>({});
   const [liveOrderItemsById, setLiveOrderItemsById] = useState<Record<string, OrderItem[]>>({});
   const hydratedOnceRef = useRef(false);
+  const experimentInflightKeysRef = useRef<Set<string>>(new Set());
+  const [experimentOrderItemsByCar, setExperimentOrderItemsByCar] = useState(orderItemsByCar);
+  const [experimentOrderUpdatesByCar, setExperimentOrderUpdatesByCar] = useState(orderUpdatesByCar);
+  const [experimentHydratedCarKeys, setExperimentHydratedCarKeys] = useState<Set<string>>(
+    () => new Set(experimentInitialHydratedCarKeys)
+  );
+  const [experimentRequestedCount, setExperimentRequestedCount] = useState(ORDER_TRACKING_EXPERIMENT_PAGE_SIZE);
+  const [experimentLoadingDetails, setExperimentLoadingDetails] = useState(false);
+  const [experimentDetailError, setExperimentDetailError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (orderChipCacheExperimentEnabled) return;
     if (!deferCarsHydration) return;
     if (hydratedOnceRef.current) return;
     const mode = String(searchParams?.get("load") ?? "").trim().toLowerCase();
@@ -4673,7 +4732,17 @@ export function MobileOrderTrackingHome({
     return () => {
       window.clearTimeout(fallbackTimer);
     };
-  }, [deferCarsHydration, pathname, router, searchParams]);
+  }, [deferCarsHydration, orderChipCacheExperimentEnabled, pathname, router, searchParams]);
+
+  useEffect(() => {
+    if (!orderChipCacheExperimentEnabled) return;
+    setExperimentOrderItemsByCar(orderItemsByCar);
+    setExperimentOrderUpdatesByCar(orderUpdatesByCar);
+    setExperimentHydratedCarKeys(new Set(experimentInitialHydratedCarKeys));
+    experimentInflightKeysRef.current.clear();
+    setExperimentRequestedCount(ORDER_TRACKING_EXPERIMENT_PAGE_SIZE);
+    setExperimentDetailError(null);
+  }, [orderChipCacheExperimentEnabled, orderItemsByCar, orderUpdatesByCar, experimentInitialHydratedCarKeys]);
   const suppressDataWarningsDuringDeferredHydration =
     deferCarsHydration && String(searchParams?.get("load") ?? "").trim().toLowerCase() !== "full";
   const isDeferredHydrationLoading =
@@ -4706,22 +4775,38 @@ export function MobileOrderTrackingHome({
     setLiveOrderItemsById((prev) => ({ ...prev, [orderId]: next }));
   }, []);
 
+  const effectiveOrderItemsByCar = orderChipCacheExperimentEnabled ? experimentOrderItemsByCar : orderItemsByCar;
+  const effectiveOrderUpdatesByCar = orderChipCacheExperimentEnabled ? experimentOrderUpdatesByCar : orderUpdatesByCar;
+
   useEffect(() => {
     liveItemsToolbarSigRef.current = {};
     setLiveOrderItemsById({});
-  }, [carsData, orderItemsByCar]);
+  }, [carsData, effectiveOrderItemsByCar]);
 
   const usingDemoFallback = !disableDemoFallback && carsData.length === 0;
   const mappedOrders = useMemo(() => {
     const base =
       !disableDemoFallback && carsData.length === 0
         ? ORDERS
-        : carsData.map((car, index) => toOrderFromCar(car, index, orderItemsByCar, orderUpdatesByCar));
+        : carsData.map((car, index) => toOrderFromCar(car, index, effectiveOrderItemsByCar, effectiveOrderUpdatesByCar));
     return base.map((order) => {
       const live = liveOrderItemsById[order.id];
       return live ? { ...order, items: live } : order;
     });
-  }, [carsData, orderItemsByCar, orderUpdatesByCar, liveOrderItemsById, disableDemoFallback]);
+  }, [carsData, effectiveOrderItemsByCar, effectiveOrderUpdatesByCar, liveOrderItemsById, disableDemoFallback]);
+  const experimentFilterItemsByOrderId = useMemo(() => {
+    const map = new Map<string, Pick<OrderItem, "status" | "good" | "dueDate" | "assignee">[]>();
+    if (!orderChipCacheExperimentEnabled) return map;
+    for (const order of mappedOrders) {
+      map.set(order.id, filterIndexItemsForOrder(order, orderItemFilterIndexByCar));
+    }
+    return map;
+  }, [mappedOrders, orderChipCacheExperimentEnabled, orderItemFilterIndexByCar]);
+  const filterItemsForOrder = React.useCallback(
+    (order: Order): Pick<OrderItem, "status" | "good" | "dueDate" | "assignee">[] =>
+      orderChipCacheExperimentEnabled ? experimentFilterItemsByOrderId.get(order.id) ?? [] : order.items,
+    [experimentFilterItemsByOrderId, orderChipCacheExperimentEnabled]
+  );
   const [saleFilters, setSaleFilters] = useState<Set<string>>(() => new Set());
   const [saleStatusFilters, setSaleStatusFilters] = useState<Set<SaleStatusFilterValue>>(
     () => new Set(initialSaleStatusFilters)
@@ -4846,16 +4931,42 @@ export function MobileOrderTrackingHome({
       }
       return acc;
     }
-    const acc: Record<string, number> = { ALL: mappedOrders.length };
+    const baseOrders = orderChipCacheExperimentEnabled
+      ? mappedOrders.filter((order) => {
+          const saleOk = orderMatchesSaleFilters(order, saleFilters);
+          const saleStatusOk = orderMatchesSaleStatusFilters(order, saleStatusFilters);
+          const vehicleOk = matchesVehicleSearch(order, vehicleSearchForFiltering);
+          const toolbarOk = orderMatchesToolbarFilters(
+            order,
+            staffFilters,
+            itemStatusFilters,
+            itemStatusPoliciesNormalized.dueToday,
+            filterItemsForOrder(order)
+          );
+          return saleOk && saleStatusOk && vehicleOk && toolbarOk;
+        })
+      : mappedOrders;
+    const acc: Record<string, number> = { ALL: baseOrders.length };
     for (const s of ALL_SALES) {
       if (s !== "ALL") acc[s] = 0;
     }
-    for (const order of mappedOrders) {
+    for (const order of baseOrders) {
       const sale = String(order.sale).toUpperCase();
       if (sale in acc) acc[sale] += 1;
     }
     return acc;
-  }, [mappedOrders, summarySnapshotAllCars, saleFilters, saleStatusFilters, staffFilters, itemStatusFilters, vehicleSearchForFiltering]);
+  }, [
+    mappedOrders,
+    summarySnapshotAllCars,
+    saleFilters,
+    saleStatusFilters,
+    staffFilters,
+    itemStatusFilters,
+    vehicleSearchForFiltering,
+    orderChipCacheExperimentEnabled,
+    itemStatusPoliciesNormalized,
+    filterItemsForOrder,
+  ]);
   /** ชิปเซลล์: ALL อยู่แรกเสมอ ที่เหลือเรียงตามจำนวนจากมากไปน้อย */
   const salesChipsOrdered = useMemo(() => {
     const rest = ALL_SALES.filter((sale) => sale !== "ALL" && (saleCounts[sale] ?? 0) > 0);
@@ -4889,6 +5000,28 @@ export function MobileOrderTrackingHome({
         unassigned,
       };
     }
+    if (orderChipCacheExperimentEnabled) {
+      const byAssignee: Record<string, number> = {};
+      let grandTotal = 0;
+      let unassigned = 0;
+      const dtChip = itemStatusPoliciesNormalized.dueToday;
+      const baseFiltered = mappedOrders.filter((order) => {
+        const saleOk = orderMatchesSaleFilters(order, saleFilters);
+        const saleStatusOk = orderMatchesSaleStatusFilters(order, saleStatusFilters);
+        const vehicleOk = matchesVehicleSearch(order, vehicleSearchForFiltering);
+        return saleOk && saleStatusOk && vehicleOk;
+      });
+      for (const order of baseFiltered) {
+        for (const item of filterItemsForOrder(order)) {
+          if (!itemMatchesToolbarStatusFilters(item, itemStatusFilters, dtChip)) continue;
+          grandTotal += 1;
+          const a = String(item.assignee ?? "").trim();
+          if (a) byAssignee[a] = (byAssignee[a] ?? 0) + 1;
+          else unassigned += 1;
+        }
+      }
+      return { grandTotal, byAssignee, unassigned };
+    }
     const baseFiltered = mappedOrders.filter((order) => {
       const saleOk = orderMatchesSaleFilters(order, saleFilters);
       const saleStatusOk = orderMatchesSaleStatusFilters(order, saleStatusFilters);
@@ -4907,7 +5040,18 @@ export function MobileOrderTrackingHome({
       }
     }
     return { grandTotal, byAssignee, unassigned };
-  }, [mappedOrders, saleFilters, saleStatusFilters, vehicleSearchForFiltering, staffFilters, itemStatusFilters, summarySnapshotAllCars]);
+  }, [
+    mappedOrders,
+    saleFilters,
+    saleStatusFilters,
+    vehicleSearchForFiltering,
+    staffFilters,
+    itemStatusFilters,
+    summarySnapshotAllCars,
+    orderChipCacheExperimentEnabled,
+    itemStatusPoliciesNormalized,
+    filterItemsForOrder,
+  ]);
 
   /** รอบส่ง (ค่า booked_shipping) ต่อกลุ่ม — สถานะขาย รอส่ง เท่านั้น */
   const bookedShippingRounds = useMemo(() => {
@@ -5617,7 +5761,11 @@ export function MobileOrderTrackingHome({
   }, [itemStatusRosterEffective]);
 
   const saleStatusCounts = useMemo(() => {
-    const noExtraFilters = saleFilters.size === 0 && staffFilters.size === 0 && itemStatusFilters.size === 0;
+    const noExtraFilters =
+      saleFilters.size === 0 &&
+      staffFilters.size === 0 &&
+      itemStatusFilters.size === 0 &&
+      (!orderChipCacheExperimentEnabled || vehicleSearchForFiltering.trim() === "");
     if (noExtraFilters && saleStatusSummaryAllCars) {
       return {
         ทั้งหมด: Number(saleStatusSummaryAllCars["ทั้งหมด"] ?? 0),
@@ -5630,8 +5778,15 @@ export function MobileOrderTrackingHome({
     const dueTodayChip = itemStatusPoliciesNormalized.dueToday;
     const baseOrders = mappedOrders.filter((order) => {
       const saleOk = orderMatchesSaleFilters(order, saleFilters);
-      const staffOk = orderMatchesToolbarFilters(order, staffFilters, itemStatusFilters, dueTodayChip);
-      return saleOk && staffOk;
+      const vehicleOk = orderChipCacheExperimentEnabled ? matchesVehicleSearch(order, vehicleSearchForFiltering) : true;
+      const staffOk = orderMatchesToolbarFilters(
+        order,
+        staffFilters,
+        itemStatusFilters,
+        dueTodayChip,
+        orderChipCacheExperimentEnabled ? filterItemsForOrder(order) : order.items
+      );
+      return saleOk && vehicleOk && staffOk;
     });
     const acc: Partial<Record<SaleStatusFilterValue, number>> = {};
     for (const saleStatus of SALE_STATUSES) {
@@ -5641,7 +5796,17 @@ export function MobileOrderTrackingHome({
           : baseOrders.filter((order) => order.saleStatus === saleStatus).length;
     }
     return acc;
-  }, [mappedOrders, saleFilters, staffFilters, itemStatusFilters, saleStatusSummaryAllCars, itemStatusPoliciesNormalized]);
+  }, [
+    mappedOrders,
+    saleFilters,
+    staffFilters,
+    itemStatusFilters,
+    saleStatusSummaryAllCars,
+    itemStatusPoliciesNormalized,
+    orderChipCacheExperimentEnabled,
+    vehicleSearchForFiltering,
+    filterItemsForOrder,
+  ]);
   const visible = useMemo(
     () =>
       mappedOrders
@@ -5654,7 +5819,8 @@ export function MobileOrderTrackingHome({
             order,
             staffFilters,
             itemStatusFilters,
-            itemStatusPoliciesNormalized.dueToday
+            itemStatusPoliciesNormalized.dueToday,
+            orderChipCacheExperimentEnabled ? filterItemsForOrder(order) : order.items
           );
         })
         .sort((a, b) => {
@@ -5680,6 +5846,8 @@ export function MobileOrderTrackingHome({
       mappedOrders,
       saleFilters,
       itemStatusPoliciesNormalized,
+      orderChipCacheExperimentEnabled,
+      filterItemsForOrder,
     ]
   );
   /** AI · LINE car picker uses full loaded orders, not toolbar-filtered `visible`. */
@@ -5723,10 +5891,21 @@ export function MobileOrderTrackingHome({
       const saleOk = orderMatchesSaleFilters(order, saleFilters);
       const saleStatusOk = orderMatchesSaleStatusFilters(order, saleStatusFilters);
       const vehicleOk = matchesVehicleSearch(order, vehicleSearchForFiltering);
-      return saleOk && saleStatusOk && vehicleOk && orderMatchesToolbarFilters(order, staffFilters, new Set(), dtChip);
+      return (
+        saleOk &&
+        saleStatusOk &&
+        vehicleOk &&
+        orderMatchesToolbarFilters(
+          order,
+          staffFilters,
+          new Set(),
+          dtChip,
+          orderChipCacheExperimentEnabled ? filterItemsForOrder(order) : order.items
+        )
+      );
     });
     for (const order of baseFiltered) {
-      for (const item of order.items) {
+      for (const item of orderChipCacheExperimentEnabled ? filterItemsForOrder(order) : order.items) {
         if (!itemMatchesStaffFilters(item.assignee, itemStaffFilters)) continue;
         counts.set(item.status, (counts.get(item.status) ?? 0) + 1);
       }
@@ -5741,6 +5920,8 @@ export function MobileOrderTrackingHome({
     itemStatusFilters,
     summarySnapshotAllCars,
     itemStatusPoliciesNormalized,
+    orderChipCacheExperimentEnabled,
+    filterItemsForOrder,
   ]);
 
   /** จำนวนรายการตามการตั้งค่าชิป "มาวันนี้" (due date + เทียบ daysUntilBangkok ตั้งได้) */
@@ -5751,17 +5932,37 @@ export function MobileOrderTrackingHome({
       const saleOk = orderMatchesSaleFilters(order, saleFilters);
       const saleStatusOk = orderMatchesSaleStatusFilters(order, saleStatusFilters);
       const vehicleOk = matchesVehicleSearch(order, vehicleSearchForFiltering);
-      return saleOk && saleStatusOk && vehicleOk && orderMatchesToolbarFilters(order, staffFilters, new Set(), dtChip);
+      return (
+        saleOk &&
+        saleStatusOk &&
+        vehicleOk &&
+        orderMatchesToolbarFilters(
+          order,
+          staffFilters,
+          new Set(),
+          dtChip,
+          orderChipCacheExperimentEnabled ? filterItemsForOrder(order) : order.items
+        )
+      );
     });
     let count = 0;
     for (const order of baseFiltered) {
-      for (const item of order.items) {
+      for (const item of orderChipCacheExperimentEnabled ? filterItemsForOrder(order) : order.items) {
         if (!itemMatchesStaffFilters(item.assignee, itemStaffFilters)) continue;
         if (matchesDueTodayChip(item, dtChip)) count += 1;
       }
     }
     return count;
-  }, [mappedOrders, saleFilters, saleStatusFilters, vehicleSearchForFiltering, staffFilters, itemStatusPoliciesNormalized]);
+  }, [
+    mappedOrders,
+    saleFilters,
+    saleStatusFilters,
+    vehicleSearchForFiltering,
+    staffFilters,
+    itemStatusPoliciesNormalized,
+    orderChipCacheExperimentEnabled,
+    filterItemsForOrder,
+  ]);
 
   /** ชิปสถานะที่แสดง — ซ่อนเมื่อจำนวนรายการ = 0 (เฉพาะก่อนล็อกครั้งแรก; หลังล็อกใช้ itemStatusRosterForToolbar) */
   const itemStatusRosterVisible = useMemo(
@@ -5889,8 +6090,95 @@ export function MobileOrderTrackingHome({
     () => ITEM_STATUSES.reduce((sum, s) => sum + (itemStatusCounts.get(s) ?? 0), 0),
     [itemStatusCounts]
   );
-  const visiblePaged = useMemo(() => visible.slice(0, visibleLimit), [visible, visibleLimit]);
-  const hasMoreVisible = visible.length > visibleLimit;
+  const experimentWantedOrders = useMemo(
+    () =>
+      orderChipCacheExperimentEnabled
+        ? visible.slice(0, Math.min(visible.length, experimentRequestedCount))
+        : [],
+    [experimentRequestedCount, orderChipCacheExperimentEnabled, visible]
+  );
+  const experimentVisiblePaged = useMemo(
+    () =>
+      experimentWantedOrders.filter((order) =>
+        orderCarKeys(order).some((key) => experimentHydratedCarKeys.has(key))
+      ),
+    [experimentHydratedCarKeys, experimentWantedOrders]
+  );
+  const experimentMissingWantedCount = useMemo(
+    () =>
+      experimentWantedOrders.filter(
+        (order) => !orderCarKeys(order).some((key) => experimentHydratedCarKeys.has(key))
+      ).length,
+    [experimentHydratedCarKeys, experimentWantedOrders]
+  );
+  const visiblePaged = useMemo(
+    () => (orderChipCacheExperimentEnabled ? experimentVisiblePaged : visible.slice(0, visibleLimit)),
+    [experimentVisiblePaged, orderChipCacheExperimentEnabled, visible, visibleLimit]
+  );
+  const hasMoreVisible = orderChipCacheExperimentEnabled
+    ? visible.length > experimentVisiblePaged.length
+    : visible.length > visibleLimit;
+
+  const hydrateExperimentDetails = React.useCallback(
+    async (orders: Order[]) => {
+      if (!orderChipCacheExperimentEnabled) return;
+      const batch: Order[] = [];
+      const claimedKeys: string[] = [];
+      for (const order of orders) {
+        const keys = orderCarKeys(order);
+        if (keys.length === 0) continue;
+        const alreadyKnown = keys.some(
+          (key) => experimentHydratedCarKeys.has(key) || experimentInflightKeysRef.current.has(key)
+        );
+        if (alreadyKnown) continue;
+        batch.push(order);
+        claimedKeys.push(...keys);
+        for (const key of keys) experimentInflightKeysRef.current.add(key);
+        if (batch.length >= ORDER_TRACKING_EXPERIMENT_PAGE_SIZE) break;
+      }
+      if (batch.length === 0) return;
+      setExperimentLoadingDetails(true);
+      setExperimentDetailError(null);
+      try {
+        const res = await fetch(ORDER_TRACKING_CARD_DETAILS_API_PATH, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          cache: "no-store",
+          body: JSON.stringify({ cars: batch.map(orderCarRequest) }),
+        });
+        const payload = (await res.json()) as {
+          orderItemsByCar?: NonNullable<MobileOrderTrackingHomeProps["orderItemsByCar"]>;
+          orderUpdatesByCar?: NonNullable<MobileOrderTrackingHomeProps["orderUpdatesByCar"]>;
+          hydratedCarKeys?: string[];
+          itemsError?: string | null;
+          updatesError?: string | null;
+          error?: string;
+        };
+        if (!res.ok) throw new Error(payload.error ?? res.statusText);
+        setExperimentOrderItemsByCar((prev) => ({ ...prev, ...(payload.orderItemsByCar ?? {}) }));
+        setExperimentOrderUpdatesByCar((prev) => ({ ...prev, ...(payload.orderUpdatesByCar ?? {}) }));
+        setExperimentHydratedCarKeys((prev) => {
+          const next = new Set(prev);
+          for (const key of payload.hydratedCarKeys ?? []) next.add(key);
+          for (const key of claimedKeys) next.add(key);
+          return next;
+        });
+        const detailError = payload.itemsError || payload.updatesError || null;
+        setExperimentDetailError(detailError);
+      } catch (e) {
+        setExperimentDetailError(e instanceof Error ? e.message : String(e));
+      } finally {
+        for (const key of claimedKeys) experimentInflightKeysRef.current.delete(key);
+        setExperimentLoadingDetails(false);
+      }
+    },
+    [experimentHydratedCarKeys, orderChipCacheExperimentEnabled]
+  );
+
+  useEffect(() => {
+    if (!orderChipCacheExperimentEnabled) return;
+    void hydrateExperimentDetails(experimentWantedOrders);
+  }, [experimentWantedOrders, hydrateExperimentDetails, orderChipCacheExperimentEnabled]);
 
   const deepLinkSetupRef = useRef(false);
   const deepLinkScrollDoneRef = useRef(false);
@@ -5933,23 +6221,31 @@ export function MobileOrderTrackingHome({
 
   useEffect(() => {
     setVisibleLimit(ORDERS_PAGE_SIZE);
+    setExperimentRequestedCount(ORDER_TRACKING_EXPERIMENT_PAGE_SIZE);
   }, [saleStatusFilters, staffFilters, itemStatusFilters, saleFilters, vehicleSearchForFiltering]);
 
   useEffect(() => {
     if (!hasMoreVisible) return;
+    if (orderChipCacheExperimentEnabled && experimentLoadingDetails) return;
     const target = loadMoreRef.current;
     if (!target) return;
     const observer = new IntersectionObserver(
       (entries) => {
         const entry = entries[0];
         if (!entry?.isIntersecting) return;
+        if (orderChipCacheExperimentEnabled) {
+          setExperimentRequestedCount((prev) =>
+            Math.min(visible.length, prev + ORDER_TRACKING_EXPERIMENT_PAGE_SIZE)
+          );
+          return;
+        }
         setVisibleLimit((prev) => prev + ORDERS_PAGE_SIZE);
       },
       { rootMargin: "200px 0px 200px 0px", threshold: 0.01 }
     );
     observer.observe(target);
     return () => observer.disconnect();
-  }, [hasMoreVisible]);
+  }, [experimentLoadingDetails, hasMoreVisible, orderChipCacheExperimentEnabled, visible.length]);
 
   const deleteVehicleChar = () => setVehicleSearch((prev) => prev.slice(0, -1));
   const runWithStableScroll = (action: () => void) => {
@@ -6046,6 +6342,7 @@ export function MobileOrderTrackingHome({
     runWithStableScroll(() => {
       setVehicleSearch("");
       setVisibleLimit(ORDERS_PAGE_SIZE);
+      setExperimentRequestedCount(ORDER_TRACKING_EXPERIMENT_PAGE_SIZE);
     });
   const deleteVehicleStable = () => runWithStableScroll(() => deleteVehicleChar());
   const clearFiltersStable = () =>
@@ -6056,7 +6353,14 @@ export function MobileOrderTrackingHome({
       setStaffFilters(new Set());
       setItemStatusFilters(new Set());
       setVisibleLimit(ORDERS_PAGE_SIZE);
+      setExperimentRequestedCount(ORDER_TRACKING_EXPERIMENT_PAGE_SIZE);
     });
+  const hasActiveFilters =
+    saleFilters.size > 0 ||
+    saleStatusFilters.size > 0 ||
+    staffFilters.size > 0 ||
+    itemStatusFilters.size > 0 ||
+    vehicleSearch.trim().length > 0;
 
   useLayoutEffect(() => {
     if (pendingScrollYRef.current == null) return;
@@ -6068,7 +6372,7 @@ export function MobileOrderTrackingHome({
         window.scrollTo({ top: y, left: 0, behavior: "auto" });
       }, 0);
     });
-  }, [saleStatusFilters, vehicleSearch, itemStatusFilters, staffFilters, visibleLimit, saleFilters]);
+  }, [saleStatusFilters, vehicleSearch, itemStatusFilters, staffFilters, visibleLimit, saleFilters, experimentRequestedCount]);
 
   /** ซิงก์ข้ามเครื่อง: เมื่อมีคนแก้ order_items / order_task_updates ให้ดึงข้อมูลหน้าใหม่ (ต้องเปิด Realtime ในคอนโซล Supabase) */
   useEffect(() => {
@@ -6333,6 +6637,21 @@ export function MobileOrderTrackingHome({
                 ? (uiLang === "en" ? "Multi Select" : "เลือกหลายชิป")
                 : (uiLang === "en" ? "Single Select" : "เลือกทีละหนึ่ง")}
             </button>
+            {orderChipCacheExperimentEnabled ? (
+              <span className="shrink-0 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold leading-snug text-emerald-900 ring-1 ring-emerald-200/90">
+                {uiLang === "en" ? "Experiment: filtered loading" : "ทดลอง chip cache / filtered loading"}
+              </span>
+            ) : null}
+            {orderChipCacheExperimentEnabled && hasActiveFilters ? (
+              <button
+                type="button"
+                onPointerDown={(e) => e.preventDefault()}
+                onClick={clearFiltersStable}
+                className="shrink-0 rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold leading-snug text-slate-800 ring-1 ring-slate-200 touch-manipulation active:bg-slate-100"
+              >
+                {uiLang === "en" ? "Clear filters" : "ล้าง filter"}
+              </button>
+            ) : null}
           </div>
           {translateAllMessage ? (
             <div className="mb-2 rounded-2xl bg-sky-50 px-3 py-2 text-xs font-medium leading-snug text-sky-900">
@@ -6356,6 +6675,19 @@ export function MobileOrderTrackingHome({
           {dataWarnings.length > 0 && !suppressDataWarningsDuringDeferredHydration ? (
             <div className="mb-2 rounded-2xl bg-rose-50 px-3 py-2.5 text-sm font-medium leading-snug text-rose-800">
               Data warning: {dataWarnings[0]}
+            </div>
+          ) : null}
+          {orderChipCacheExperimentEnabled ? (
+            <div className="mb-2 rounded-2xl bg-emerald-50 px-3 py-2 text-xs font-semibold leading-snug text-emerald-900 ring-1 ring-emerald-100">
+              {uiLang === "en"
+                ? "Counts follow the active filters. Cards load in batches of 50; search uses the full car index."
+                : "ตัวเลขสัมพันธ์ตาม filter ปัจจุบัน · การ์ดโหลดทีละ 50 · ค้นหาจาก index รถทั้งหมด"}
+            </div>
+          ) : null}
+          {experimentDetailError && orderChipCacheExperimentEnabled ? (
+            <div className="mb-2 rounded-2xl bg-amber-50 px-3 py-2 text-xs font-semibold leading-snug text-amber-900 ring-1 ring-amber-100">
+              {uiLang === "en" ? "Detail loading warning: " : "โหลดรายละเอียดบางส่วนไม่สำเร็จ: "}
+              {experimentDetailError}
             </div>
           ) : null}
           <>
@@ -7380,9 +7712,27 @@ export function MobileOrderTrackingHome({
                   onLiveItemsChange={handleOrderLiveItemsChange}
                 />
               ))}
+              {orderChipCacheExperimentEnabled && experimentLoadingDetails && experimentMissingWantedCount > 0 ? (
+                Array.from({ length: Math.min(3, experimentMissingWantedCount) }).map((_, index) => (
+                  <div
+                    key={`experiment-skeleton-${index}`}
+                    className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200/70"
+                  >
+                    <div className="h-5 w-3/4 animate-pulse rounded-full bg-slate-200" />
+                    <div className="mt-3 h-3 w-1/2 animate-pulse rounded-full bg-slate-200" />
+                    <div className="mt-4 flex gap-2">
+                      <div className="h-8 w-20 animate-pulse rounded-full bg-slate-100" />
+                      <div className="h-8 w-24 animate-pulse rounded-full bg-slate-100" />
+                    </div>
+                    <div className="mt-4 h-12 animate-pulse rounded-2xl bg-slate-100" />
+                  </div>
+                ))
+              ) : null}
               {hasMoreVisible ? (
                 <div ref={loadMoreRef} className="h-9 w-full rounded-2xl bg-slate-100 text-center text-sm font-medium leading-9 text-slate-600">
-                  {uiLang === "en" ? "Loading more..." : "กำลังโหลดเพิ่ม..."} ({visiblePaged.length}/{visible.length})
+                  {orderChipCacheExperimentEnabled && experimentLoadingDetails
+                    ? (uiLang === "en" ? "Loading card details..." : "กำลังโหลดรายละเอียดการ์ด...")
+                    : (uiLang === "en" ? "Loading more..." : "กำลังโหลดเพิ่ม...")} ({visiblePaged.length}/{visible.length})
                 </div>
               ) : null}
               {!visible.length ? (
