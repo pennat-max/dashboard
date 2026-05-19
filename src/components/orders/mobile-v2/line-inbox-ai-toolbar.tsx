@@ -92,6 +92,8 @@ export function LineInboxAiToolbar({
   const [error, setError] = useState<string | null>(null);
   const [detected, setDetected] = useState<LineInboxAnalyzeResponse["detected_car"] | null>(null);
   const [needsReview, setNeedsReview] = useState(false);
+  const [ignoredSpecLines, setIgnoredSpecLines] = useState<string[]>([]);
+  const [candidateCars, setCandidateCars] = useState<NonNullable<LineInboxAnalyzeResponse["candidate_cars"]>>([]);
   const [rows, setRows] = useState<RowDraft[]>([]);
   const [saveHint, setSaveHint] = useState<string | null>(null);
 
@@ -255,6 +257,8 @@ export function LineInboxAiToolbar({
       if (!res.ok) throw new Error(data.error || res.statusText || "analyze failed");
       setDetected(data.detected_car);
       setNeedsReview(Boolean(data.needs_human_review));
+      setIgnoredSpecLines(data.ignored_vehicle_spec_lines ?? []);
+      setCandidateCars(data.candidate_cars ?? []);
       const next: RowDraft[] = (data.items ?? []).map((item) => ({
         ...item,
         action: defaultAction(item),
@@ -266,6 +270,8 @@ export function LineInboxAiToolbar({
       setError(e instanceof Error ? e.message : String(e));
       setRows([]);
       setDetected(null);
+      setIgnoredSpecLines([]);
+      setCandidateCars([]);
     } finally {
       setAnalyzeLoading(false);
     }
@@ -325,6 +331,8 @@ export function LineInboxAiToolbar({
       );
       setRows([]);
       setDetected(null);
+      setIgnoredSpecLines([]);
+      setCandidateCars([]);
       setRawText("");
       onSaved?.();
     } catch (e) {
@@ -549,6 +557,42 @@ export function LineInboxAiToolbar({
                     : "ระบบแนะนำให้ตรวจทาน — รถหรืองานซ้ำอาจต้องยืนยันเอง"}
                 </p>
               ) : null}
+              {!detected.car_row_id ? (
+                <p className="mt-1 text-[11px] font-semibold text-rose-700">
+                  {uiLang === "en"
+                    ? "Car not matched. Choose/search a car before saving."
+                    : "จับคู่รถไม่ได้ กรุณาเลือก/ค้นรถก่อนบันทึก"}
+                </p>
+              ) : null}
+              {candidateCars.length > 0 ? (
+                <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-950">
+                  <p className="font-semibold">
+                    {uiLang === "en" ? "Possible cars to review" : "รถที่อาจตรง ต้องตรวจเอง"}
+                  </p>
+                  <ul className="mt-1 space-y-0.5">
+                    {candidateCars.slice(0, 3).map((car) => (
+                      <li key={car.car_row_id} className="font-mono">
+                        {car.plate_text || "—"} · {Math.round(car.confidence * 100)}%
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          {ignoredSpecLines.length > 0 ? (
+            <div className="mb-3 rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2 text-[11px] text-slate-600">
+              <p className="mb-1 font-semibold text-slate-700">
+                {uiLang === "en" ? "Used for car matching, not jobs" : "ใช้สำหรับจับรถ ไม่ใช่งาน"}
+              </p>
+              <ul className="space-y-0.5">
+                {ignoredSpecLines.slice(0, 6).map((line, index) => (
+                  <li key={`${line}-${index}`} className="line-clamp-1">
+                    {line}
+                  </li>
+                ))}
+              </ul>
             </div>
           ) : null}
 

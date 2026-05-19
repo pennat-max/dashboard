@@ -44,6 +44,7 @@ Sales creates request -> Store checks stock -> Store orders/receives parts -> Ga
 - Real status should live in Supabase.
 - **LIFF Phase 1 (May 2026):** `/liff/orders` opens the same Order Tracking experience as `/m/orders` inside LINE (LIFF SDK + `NEXT_PUBLIC_LINE_LIFF_ID`). No Bot / webhook in this phase — see `LINE_LIFF_SETUP.md`.
 - **LINE Inbox + AI:** **`POST /api/line-inbox/analyze`** (read-only suggestions) + **`POST /api/line-inbox/confirm`** (writes after human confirm) + LIFF **`/liff/line-inbox`**. Spec: **`LINE_INBOX_AI_ANALYSIS_PLAN.md`**. **No** auto-save from analyze; **no** secrets in browser.
+- **LINE Inbox safety:** analyze separates vehicle identity/spec context from actual work items. Plate/chassis/row_id are used for matching; model/spec-only lines are shown as context and are not saved as `order_items`.
 
 ## Implementation status (as of last repo inspection)
 

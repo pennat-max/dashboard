@@ -23,6 +23,15 @@ export type LineInboxAnalyzeResponse = {
     car_row_id: string;
     confidence: number;
   };
+  detected_car_text?: string;
+  ignored_vehicle_spec_lines?: string[];
+  candidate_cars?: Array<{
+    car_row_id: string;
+    plate_text: string;
+    chassis: string;
+    confidence: number;
+    reason: string;
+  }>;
   items: LineInboxAnalyzeItem[];
   needs_human_review: boolean;
 };
