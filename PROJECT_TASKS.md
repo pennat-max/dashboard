@@ -67,6 +67,7 @@
 - [x] **LIFF Phase 1:** `/liff/orders` — same Order Tracking UI + data loader as `/m/orders`; `@line/liff` + `NEXT_PUBLIC_LINE_LIFF_ID`; see `LINE_LIFF_SETUP.md`. Middleware exempts `/liff/*` from forced Supabase login.
 - [x] **Planning doc:** `LINE_INBOX_AI_ANALYSIS_PLAN.md` — AI-assisted LINE Inbox analysis (human confirmation, duplicate rules vs `order_items`).
 - [x] **Implement:** `POST /api/line-inbox/analyze` + `POST /api/line-inbox/confirm` + LIFF `/liff/line-inbox` (`src/app/api/line-inbox/*`, `src/components/liff/line-inbox-client.tsx`).
+- [x] **Manual `/m/orders` inbox UX:** `LineInboxAiToolbar` now has clearer paste/analyze/review/save flow, car search/select fallback, editable selected suggestions, duplicate warning before save, pending queue selection, card refresh after save, and copy-ready LINE reply text. No webhook, no automatic reply, no schema change.
 - [ ] LINE Bot / Messaging API webhook / group message ingestion.
 
 ## Future Two-way Sync

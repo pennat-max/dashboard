@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Check, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { DuplicateStatus, LineInboxAnalyzeItem, LineInboxAnalyzeResponse } from "@/lib/line-inbox/types";
@@ -40,8 +41,56 @@ type RowDraft = LineInboxAnalyzeItem & {
   included: boolean;
 };
 
+const ITEM_STATUS_OPTIONS = ["เช็ค", "มี", "สั่ง", "มา", "รถนอก", "ช่างนอก", "ฝากสโตร์", "ฝากกับรถ", "จบ"];
+
+function normalizeSearchText(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, "");
+}
+
+function buildLineReplyText({
+  plate,
+  lines,
+  uiLang,
+}: {
+  plate: string;
+  lines: Array<{ name: string; status: string }>;
+  uiLang: UiLang;
+}): string {
+  const safePlate = plate.trim() || "-";
+  const itemLines =
+    lines.length > 0
+      ? lines.map((line, index) => `${index + 1}. ${line.name.trim() || "-"} — ${line.status.trim() || "-"}`).join("\n")
+      : "-";
+
+  if (uiLang === "en") {
+    return [
+      "Received the request.",
+      `Car: ${safePlate}`,
+      "Items:",
+      itemLines,
+      "You can follow the status in Order Tracking.",
+    ].join("\n");
+  }
+
+  return [
+    "รับงานแล้วครับ",
+    `รถ: ${safePlate}`,
+    "รายการ:",
+    itemLines,
+    "ติดตามสถานะในระบบ Order Tracking ได้ครับ",
+  ].join("\n");
+}
+
 function defaultAction(item: LineInboxAnalyzeItem): RowDraft["action"] {
-  if (item.duplicate_status === "duplicate" && String(item.matched_order_item_id ?? "").trim()) {
+  return item.duplicate_status === "new" ? "create" : "skip";
+}
+
+function defaultIncluded(item: LineInboxAnalyzeItem): boolean {
+  return item.duplicate_status === "new";
+}
+
+function actionWhenIncluded(item: Pick<RowDraft, "duplicate_status" | "matched_order_item_id">): RowDraft["action"] {
+  if (item.duplicate_status !== "new" && String(item.matched_order_item_id ?? "").trim()) {
     return "merge";
   }
   return "create";
@@ -86,6 +135,7 @@ export function LineInboxAiToolbar({
 }) {
   const [open, setOpen] = useState(false);
   const [selectedOrderId, setSelectedOrderId] = useState("");
+  const [carSearch, setCarSearch] = useState("");
   const [rawText, setRawText] = useState("");
   const [analyzeLoading, setAnalyzeLoading] = useState(false);
   const [confirmLoading, setConfirmLoading] = useState(false);
@@ -94,6 +144,8 @@ export function LineInboxAiToolbar({
   const [needsReview, setNeedsReview] = useState(false);
   const [rows, setRows] = useState<RowDraft[]>([]);
   const [saveHint, setSaveHint] = useState<string | null>(null);
+  const [replyText, setReplyText] = useState("");
+  const [replyCopied, setReplyCopied] = useState(false);
 
   const [queueMessages, setQueueMessages] = useState<PendingQueueMessage[]>([]);
   const [queueTotalNew, setQueueTotalNew] = useState(0);
@@ -157,7 +209,7 @@ export function LineInboxAiToolbar({
     }
     setSelectedOrderId((prev) => {
       if (prev && orders.some((o) => o.id === prev)) return prev;
-      return orders[0]?.id ?? "";
+      return "";
     });
   }, [orders, preferredOrderId]);
 
@@ -165,6 +217,19 @@ export function LineInboxAiToolbar({
     () => orders.find((o) => o.id === selectedOrderId) ?? null,
     [orders, selectedOrderId]
   );
+
+  const visibleOrders = useMemo(() => {
+    const q = normalizeSearchText(carSearch);
+    const filtered = q
+      ? orders.filter((o) =>
+          normalizeSearchText(`${o.fullPlate} ${o.car} ${o.carRowId ?? ""} ${o.carId ?? ""}`).includes(q)
+        )
+      : orders;
+    if (selected && !filtered.some((o) => o.id === selected.id)) {
+      return [selected, ...filtered];
+    }
+    return filtered;
+  }, [carSearch, orders, selected]);
 
   const effectiveCarRowId = useMemo(() => {
     const fromAnalyze = String(detected?.car_row_id ?? "").trim();
@@ -176,13 +241,48 @@ export function LineInboxAiToolbar({
     return id != null && Number.isFinite(Number(id)) ? Number(id) : null;
   }, [selected]);
 
+  const effectiveOrder = useMemo(() => {
+    const rowId = effectiveCarRowId;
+    if (rowId) {
+      const byRow = orders.find((o) => String(o.carRowId ?? "").trim() === rowId);
+      if (byRow) return byRow;
+    }
+    if (effectiveCarId != null) {
+      const byId = orders.find((o) => o.carId === effectiveCarId);
+      if (byId) return byId;
+    }
+    return selected;
+  }, [effectiveCarId, effectiveCarRowId, orders, selected]);
+
   const pendingSaveCount = useMemo(
-    () => rows.filter((r) => r.included && r.action !== "skip").length,
+    () =>
+      rows.filter(
+        (r) => r.included && r.action !== "skip" && String(r.suggested_item_name || r.raw_text).trim()
+      ).length,
     [rows]
   );
+  const reviewCounts = useMemo(() => {
+    let create = 0;
+    let merge = 0;
+    let skip = 0;
+    for (const row of rows) {
+      if (!row.included || row.action === "skip") {
+        skip += 1;
+      } else if (row.action === "merge") {
+        merge += 1;
+      } else {
+        create += 1;
+      }
+    }
+    return { create, merge, skip };
+  }, [rows]);
 
   const rawBadgeTotal = queueTotalNew + pendingSaveCount;
   const showBadgeDot = rawBadgeTotal > 0;
+  const selectedRiskCount = useMemo(
+    () => rows.filter((r) => r.included && r.action !== "skip" && r.duplicate_status !== "new").length,
+    [rows]
+  );
 
   const toggleQueueLine = useCallback((inboxId: string, itemIndex: number) => {
     setQueueDeselected((prev) => {
@@ -210,6 +310,8 @@ export function LineInboxAiToolbar({
       setSavingInboxId(m.inbox_id);
       setError(null);
       setSaveHint(null);
+      setReplyText("");
+      setReplyCopied(false);
       try {
         const res = await fetch("/api/line-inbox/pending-save", {
           method: "POST",
@@ -226,6 +328,19 @@ export function LineInboxAiToolbar({
             ? `Saved ${indices.length} new line(s) from LINE queue.`
             : `บันทึกจากคิว LINE แล้ว ${indices.length} งาน`
         );
+        const savedLines = m.new_lines
+          .filter((line) => indices.includes(line.item_index))
+          .map((line) => ({
+            name: line.suggested_item_name || line.raw_text,
+            status: line.suggested_status || "เช็ค",
+          }));
+        setReplyText(
+          buildLineReplyText({
+            plate: m.plate_display || "",
+            lines: savedLines,
+            uiLang,
+          })
+        );
         await fetchQueue();
         onSaved?.();
       } catch (e) {
@@ -240,6 +355,8 @@ export function LineInboxAiToolbar({
   const runAnalyze = useCallback(async () => {
     setError(null);
     setSaveHint(null);
+    setReplyText("");
+    setReplyCopied(false);
     setAnalyzeLoading(true);
     try {
       const res = await fetch("/api/line-inbox/analyze", {
@@ -259,7 +376,7 @@ export function LineInboxAiToolbar({
         ...item,
         action: defaultAction(item),
         note: "",
-        included: true,
+        included: defaultIncluded(item),
       }));
       setRows(next);
     } catch (e) {
@@ -275,9 +392,52 @@ export function LineInboxAiToolbar({
     setRows((prev) => prev.map((r, i) => (i === index ? { ...r, ...patch } : r)));
   }, []);
 
+  const toggleRowIncluded = useCallback((index: number, included: boolean) => {
+    setRows((prev) =>
+      prev.map((r, i) => {
+        if (i !== index) return r;
+        if (!included) return { ...r, included: false, action: "skip" };
+        const nextAction = r.action === "skip" ? actionWhenIncluded(r) : r.action;
+        return { ...r, included: true, action: nextAction };
+      })
+    );
+  }, []);
+
+  const setNewRowsOnly = useCallback(() => {
+    setRows((prev) =>
+      prev.map((r) =>
+        r.duplicate_status === "new"
+          ? { ...r, included: true, action: "create" }
+          : { ...r, included: false, action: "skip" }
+      )
+    );
+  }, []);
+
+  const includeAllRowsForReview = useCallback(() => {
+    setRows((prev) => prev.map((r) => ({ ...r, included: true, action: actionWhenIncluded(r) })));
+  }, []);
+
+  const skipAllRows = useCallback(() => {
+    setRows((prev) => prev.map((r) => ({ ...r, included: false, action: "skip" })));
+  }, []);
+
+  const copyReply = useCallback(async () => {
+    const text = replyText.trim();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setReplyCopied(true);
+      window.setTimeout(() => setReplyCopied(false), 1400);
+    } catch {
+      window.prompt(uiLang === "en" ? "Copy LINE reply" : "คัดลอกข้อความตอบ LINE", text);
+    }
+  }, [replyText, uiLang]);
+
   const runConfirm = useCallback(async () => {
     setError(null);
     setSaveHint(null);
+    setReplyText("");
+    setReplyCopied(false);
     setConfirmLoading(true);
     try {
       if (!effectiveCarRowId && effectiveCarId == null) {
@@ -286,6 +446,18 @@ export function LineInboxAiToolbar({
             ? "Pick a car from the list or run analyze so the car matches."
             : "เลือกรถจากรายการ หรือให้วิเคราะห์จับคู่รถได้ก่อนบันทึก"
         );
+      }
+      const selectedRows = rows.filter(
+        (r) => r.included && r.action !== "skip" && String(r.suggested_item_name || r.raw_text).trim()
+      );
+      const riskyRows = selectedRows.filter((r) => r.duplicate_status !== "new");
+      if (riskyRows.length > 0) {
+        const ok = window.confirm(
+          uiLang === "en"
+            ? `${riskyRows.length} selected line(s) may be duplicate. Continue saving?`
+            : `มี ${riskyRows.length} รายการที่อาจซ้ำหรือไม่ชัด ต้องการบันทึกต่อหรือไม่?`
+        );
+        if (!ok) return;
       }
       const confirmations = rows.map((r) => {
         if (!r.included) {
@@ -323,6 +495,16 @@ export function LineInboxAiToolbar({
       setSaveHint(
         uiLang === "en" ? `Saved ${count} line(s).` : `บันทึกแล้ว ${count} รายการ`
       );
+      setReplyText(
+        buildLineReplyText({
+          plate: effectiveOrder?.fullPlate || detected?.plate_text || "",
+          lines: selectedRows.map((r) => ({
+            name: r.suggested_item_name || r.raw_text,
+            status: r.suggested_status || "เช็ค",
+          })),
+          uiLang,
+        })
+      );
       setRows([]);
       setDetected(null);
       setRawText("");
@@ -332,7 +514,7 @@ export function LineInboxAiToolbar({
     } finally {
       setConfirmLoading(false);
     }
-  }, [effectiveCarRowId, effectiveCarId, rows, onSaved, uiLang]);
+  }, [detected, effectiveCarId, effectiveCarRowId, effectiveOrder, onSaved, rows, uiLang]);
 
   return (
     <>
@@ -366,6 +548,14 @@ export function LineInboxAiToolbar({
 
       {open ? (
         <div className="w-full basis-full rounded-2xl border border-violet-200 bg-white p-3 shadow-sm ring-1 ring-violet-100">
+          <div className="mb-3 rounded-xl bg-violet-50/90 px-3 py-2 ring-1 ring-violet-100">
+            <p className="text-sm font-bold text-violet-950">LINE Inbox</p>
+            <p className="mt-0.5 text-[11px] leading-snug text-violet-900/80">
+              {uiLang === "en"
+                ? "Paste LINE text, review AI suggestions, then save selected lines only."
+                : "วางข้อความจาก LINE ให้ AI แยกงาน แล้วตรวจเลือกก่อนบันทึก"}
+            </p>
+          </div>
           <div className="mb-3 border-b border-violet-100 pb-3">
             <p className="mb-1 text-[11px] font-bold uppercase tracking-wide text-violet-800">
               {uiLang === "en" ? "From LINE group (queue)" : "จากกลุ่ม LINE (คิว)"}
@@ -469,7 +659,14 @@ export function LineInboxAiToolbar({
           </p>
 
           <label className="mb-2 block text-[11px] font-medium text-slate-600">
-            {uiLang === "en" ? "Car (all loaded; ignores filters)" : "รถ (ทั้งหมดที่โหลด — ไม่ตามการกรองหน้า)"}
+            {uiLang === "en" ? "Search/select car" : "ค้นหา/เลือกรถ"}
+            <input
+              value={carSearch}
+              onChange={(e) => setCarSearch(e.target.value)}
+              placeholder={uiLang === "en" ? "Plate / chassis / keyword" : "ทะเบียน / เลขถัง / คำค้นรถ"}
+              className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-2 py-2 text-sm font-medium text-slate-900 outline-none ring-violet-400 focus:ring-2"
+              autoComplete="off"
+            />
             <select
               value={selectedOrderId}
               onChange={(e) => setSelectedOrderId(e.target.value)}
@@ -479,17 +676,28 @@ export function LineInboxAiToolbar({
               {orders.length === 0 ? (
                 <option value="">{uiLang === "en" ? "No cars in list" : "ไม่มีรถในรายการ"}</option>
               ) : (
-                orders.map((o) => (
-                  <option key={o.id} value={o.id}>
-                    {(o.fullPlate || "-").trim()} · {(o.car || "").slice(0, 42)}
+                <>
+                  <option value="">
+                    {uiLang === "en" ? "Pick a car before saving" : "เลือกรถก่อนบันทึก"}
                   </option>
-                ))
+                  {visibleOrders.length === 0 ? (
+                    <option value="" disabled>
+                      {uiLang === "en" ? "No car matches this search" : "ไม่พบรถตามคำค้น"}
+                    </option>
+                  ) : (
+                    visibleOrders.map((o) => (
+                      <option key={o.id} value={o.id}>
+                        {(o.fullPlate || "-").trim()} · {(o.car || "").slice(0, 42)}
+                      </option>
+                    ))
+                  )}
+                </>
               )}
             </select>
           </label>
 
           <label className="mb-2 block text-[11px] font-medium text-slate-600">
-            {uiLang === "en" ? "LINE message" : "ข้อความ LINE"}
+            {uiLang === "en" ? "Paste LINE message" : "วางข้อความจาก LINE"}
             <textarea
               value={rawText}
               onChange={(e) => setRawText(e.target.value)}
@@ -528,6 +736,34 @@ export function LineInboxAiToolbar({
             </div>
           ) : null}
 
+          {replyText ? (
+            <div className="mb-3 rounded-xl border border-sky-200 bg-sky-50 px-2.5 py-2 text-xs text-sky-950">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <p className="font-bold">
+                  {uiLang === "en" ? "Copy-ready LINE reply" : "ข้อความตอบ LINE พร้อมคัดลอก"}
+                </p>
+                <button
+                  type="button"
+                  onPointerDown={(e) => e.preventDefault()}
+                  onClick={() => void copyReply()}
+                  className="inline-flex min-h-8 items-center gap-1 rounded-full bg-slate-950 px-3 py-1 text-[11px] font-bold text-white touch-manipulation"
+                >
+                  {replyCopied ? <Check className="h-3.5 w-3.5" aria-hidden /> : <Copy className="h-3.5 w-3.5" aria-hidden />}
+                  {replyCopied
+                    ? uiLang === "en"
+                      ? "Copied"
+                      : "คัดลอกแล้ว"
+                    : uiLang === "en"
+                      ? "Copy"
+                      : "คัดลอกข้อความตอบ LINE"}
+                </button>
+              </div>
+              <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-lg bg-white/85 p-2 text-[11px] leading-relaxed text-slate-800 ring-1 ring-sky-100">
+                {replyText}
+              </pre>
+            </div>
+          ) : null}
+
           {detected ? (
             <div className="mb-3 rounded-xl bg-slate-50 px-3 py-2 text-[12px] ring-1 ring-slate-200/80">
               <div className="font-semibold text-slate-800">
@@ -537,10 +773,33 @@ export function LineInboxAiToolbar({
                   {detected.plate_text?.trim() || "—"}
                 </span>
               </div>
+              {detected.chassis ? (
+                <div className="mt-1 font-mono text-[10px] text-slate-500">
+                  chassis · {detected.chassis}
+                </div>
+              ) : null}
               {detected.car_row_id ? (
                 <div className="mt-1 font-mono text-[10px] text-slate-500">
                   car_row_id · {detected.car_row_id}
                 </div>
+              ) : null}
+              {effectiveOrder ? (
+                <p className="mt-1 text-[11px] font-medium text-slate-700">
+                  {uiLang === "en" ? "Saving to" : "จะบันทึกเข้ารถ"}:{" "}
+                  <span className="font-bold tabular-nums text-slate-950">{effectiveOrder.fullPlate || "—"}</span>{" "}
+                  <span className="text-slate-500">{effectiveOrder.car ? `· ${effectiveOrder.car.slice(0, 48)}` : ""}</span>
+                </p>
+              ) : null}
+              {!detected.car_row_id ? (
+                <p className="mt-1 rounded-lg bg-rose-50 px-2 py-1.5 text-[11px] font-medium text-rose-800 ring-1 ring-rose-100">
+                  {uiLang === "en"
+                    ? selected
+                      ? "AI could not match this text to a car. The selected car will be used, so verify it before saving."
+                      : "AI could not match this text to a car. Search and pick the car above before saving."
+                    : selected
+                      ? "AI ยังจับคู่รถไม่ได้ ระบบจะใช้รถที่เลือกอยู่ กรุณาตรวจให้แน่ใจก่อนบันทึก"
+                      : "AI ยังจับคู่รถไม่ได้ ให้ค้นหาและเลือกรถด้านบนก่อนบันทึก"}
+                </p>
               ) : null}
               {needsReview ? (
                 <p className="mt-1 text-[11px] text-amber-800">
@@ -554,40 +813,150 @@ export function LineInboxAiToolbar({
 
           {rows.length > 0 ? (
             <div className="space-y-2">
-              <p className="text-[11px] font-semibold text-slate-700">
-                {uiLang === "en" ? "Suggested lines" : "รายการที่เสนอ"} ({rows.length})
-              </p>
+              <div className="space-y-1.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-[11px] font-semibold text-slate-700">
+                    {uiLang === "en" ? "Suggested lines" : "รายการที่เสนอ"} ({rows.length})
+                  </p>
+                  <p className="text-[10px] font-medium text-slate-500">
+                    {uiLang === "en"
+                      ? `Create ${reviewCounts.create} · merge ${reviewCounts.merge} · skip ${reviewCounts.skip}`
+                      : `สร้าง ${reviewCounts.create} · รวม ${reviewCounts.merge} · ข้าม ${reviewCounts.skip}`}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    onPointerDown={(e) => e.preventDefault()}
+                    onClick={setNewRowsOnly}
+                    className="rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-bold text-emerald-900 ring-1 ring-emerald-200 touch-manipulation"
+                  >
+                    {uiLang === "en" ? "New only" : "เลือกงานใหม่"}
+                  </button>
+                  <button
+                    type="button"
+                    onPointerDown={(e) => e.preventDefault()}
+                    onClick={includeAllRowsForReview}
+                    className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-bold text-slate-700 ring-1 ring-slate-200 touch-manipulation"
+                  >
+                    {uiLang === "en" ? "Select all" : "เลือกทั้งหมด"}
+                  </button>
+                  <button
+                    type="button"
+                    onPointerDown={(e) => e.preventDefault()}
+                    onClick={skipAllRows}
+                    className="rounded-full bg-white px-2.5 py-1 text-[10px] font-bold text-slate-600 ring-1 ring-slate-200 touch-manipulation"
+                  >
+                    {uiLang === "en" ? "Skip all" : "ข้ามทั้งหมด"}
+                  </button>
+                </div>
+              </div>
               <ul className="max-h-[min(35vh,240px)] space-y-2 overflow-y-auto overscroll-contain pr-1">
                 {rows.map((row, i) => (
                   <li
                     key={`${row.raw_text}-${i}`}
                     className="rounded-xl border border-slate-200 bg-slate-50/90 p-2.5"
                   >
-                    <label className="flex cursor-pointer gap-2">
+                    <div className="flex items-start gap-2">
                       <input
                         type="checkbox"
-                        checked={row.included}
-                        onChange={(e) => updateRow(i, { included: e.target.checked })}
+                        checked={row.included && row.action !== "skip"}
+                        onChange={(e) => toggleRowIncluded(i, e.target.checked)}
                         className="mt-0.5 h-5 w-5 shrink-0 rounded border-slate-400"
+                        aria-label={uiLang === "en" ? "Include this line" : "เลือกบันทึกรายการนี้"}
                       />
-                      <span className="min-w-0 flex-1">
-                        <span
-                          className={cn(
-                            "mb-1 inline-block rounded-full border px-2 py-0.5 text-[10px] font-semibold",
-                            duplicateBadgeClass(row.duplicate_status)
-                          )}
-                        >
-                          {duplicateLabelTh(row.duplicate_status)}
-                        </span>
-                        <span className="block text-[13px] font-medium leading-snug text-slate-900">
-                          {row.suggested_item_name || row.raw_text}
-                        </span>
-                        <span className="text-[11px] text-slate-500">{row.reason}</span>
-                      </span>
-                    </label>
+                      <div className="min-w-0 flex-1 space-y-2">
+                        <div className="flex flex-wrap items-start justify-between gap-1.5">
+                          <span
+                            className={cn(
+                              "inline-block rounded-full border px-2 py-0.5 text-[10px] font-semibold",
+                              duplicateBadgeClass(row.duplicate_status)
+                            )}
+                          >
+                            {duplicateLabelTh(row.duplicate_status)}
+                          </span>
+                          <span className="text-[10px] font-medium text-slate-500">
+                            {uiLang === "en" ? "Confidence" : "มั่นใจ"} {Math.round(row.confidence * 100)}%
+                          </span>
+                        </div>
+                        <p className="text-[11px] leading-snug text-slate-500">{row.reason}</p>
+                        {row.raw_text && row.raw_text !== row.suggested_item_name ? (
+                          <p className="rounded-lg bg-white/70 px-2 py-1 text-[10px] leading-snug text-slate-500 ring-1 ring-slate-200/70">
+                            {row.raw_text}
+                          </p>
+                        ) : null}
+                        <label className="block text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                          {uiLang === "en" ? "Item name" : "ชื่องาน"}
+                          <input
+                            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[12px] font-medium text-slate-900 outline-none focus-visible:ring-2 focus-visible:ring-violet-300"
+                            value={row.suggested_item_name}
+                            onChange={(e) => updateRow(i, { suggested_item_name: e.target.value })}
+                          />
+                        </label>
+                        <div className="grid grid-cols-2 gap-2">
+                          <label className="block text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                            {uiLang === "en" ? "Status" : "สถานะ"}
+                            <select
+                              className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[12px] font-medium text-slate-900"
+                              value={row.suggested_status}
+                              onChange={(e) => updateRow(i, { suggested_status: e.target.value })}
+                            >
+                              {row.suggested_status && !ITEM_STATUS_OPTIONS.includes(row.suggested_status) ? (
+                                <option value={row.suggested_status}>{row.suggested_status}</option>
+                              ) : null}
+                              {ITEM_STATUS_OPTIONS.map((status) => (
+                                <option key={status} value={status}>
+                                  {status}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className="block text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                            {uiLang === "en" ? "Action" : "การทำงาน"}
+                            <select
+                              className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[12px] font-medium text-slate-900"
+                              value={row.action}
+                              onChange={(e) => {
+                                const action = e.target.value as RowDraft["action"];
+                                updateRow(i, { action, included: action !== "skip" });
+                              }}
+                            >
+                              <option value="skip">{uiLang === "en" ? "Skip" : "ข้าม"}</option>
+                              <option value="create">{uiLang === "en" ? "Create new" : "สร้างงานใหม่"}</option>
+                              <option value="merge" disabled={!String(row.matched_order_item_id ?? "").trim()}>
+                                {uiLang === "en" ? "Merge with match" : "รวมกับงานเดิม"}
+                              </option>
+                            </select>
+                          </label>
+                        </div>
+                        {row.matched_order_item_id ? (
+                          <p className="text-[10px] leading-snug text-slate-500">
+                            {uiLang === "en" ? "Matched item" : "งานเดิมที่จับคู่"}:{" "}
+                            <span className="font-medium text-slate-700">{row.matched_item_name || row.matched_order_item_id}</span>
+                          </p>
+                        ) : null}
+                        <label className="block text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                          {uiLang === "en" ? "Note" : "หมายเหตุ"}
+                          <input
+                            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[12px] font-medium text-slate-900 outline-none focus-visible:ring-2 focus-visible:ring-violet-300"
+                            value={row.note}
+                            onChange={(e) => updateRow(i, { note: e.target.value })}
+                            placeholder={uiLang === "en" ? "Optional" : "ไม่บังคับ"}
+                          />
+                        </label>
+                      </div>
+                    </div>
                   </li>
                 ))}
               </ul>
+
+              {selectedRiskCount > 0 ? (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] font-medium text-amber-900">
+                  {uiLang === "en"
+                    ? `${selectedRiskCount} selected line(s) may be duplicate or unclear. You will be asked again before saving.`
+                    : `มี ${selectedRiskCount} รายการที่อาจซ้ำหรือไม่ชัด ระบบจะถามยืนยันอีกครั้งก่อนบันทึก`}
+                </div>
+              ) : null}
 
               <Button
                 type="button"
