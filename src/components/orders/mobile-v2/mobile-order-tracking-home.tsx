@@ -98,7 +98,9 @@ const ITEM_STATUS_LABELS_STORAGE_KEY = "vigo4u.orderTracking.itemStatusLabels";
 const ITEM_STATUS_POLICIES_STORAGE_KEY = "vigo4u.orderTracking.itemStatusPolicies.v1";
 const STAFF_ROSTER_API_PATH = "/api/m/order-tracking/staff-roster";
 const ORDER_TRACKING_CARD_DETAILS_API_PATH = "/api/m/order-tracking/card-details";
-const ORDER_TRACKING_EXPERIMENT_PAGE_SIZE = 50;
+const ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT = 20;
+const ORDER_TRACKING_EXPERIMENT_INCREMENT = 10;
+const ORDER_TRACKING_EXPERIMENT_AHEAD_BUFFER = 20;
 /** ชิปกรองรายการที่ยังไม่มีชื่อพนักงาน — ค่าภายใน ไม่ชนกับชื่อจริง */
 const STAFF_FILTER_UNASSIGNED = "__UNASSIGNED__";
 const STAFF_FILTER_UNASSIGNED_LABEL = "ไม่ระบุชื่อ";
@@ -265,7 +267,8 @@ function writeSaleAssigneesToStorage(map: Record<string, string>) {
 }
 /** เลือกเซลล์เพิ่มจากชีต — ALL + รหัสจาก sale-assignees-shared */
 const ALL_SALES = ["ALL", ...ORDER_TRACKING_SALE_CODES] as const;
-const ORDERS_PAGE_SIZE = 40;
+const ORDERS_INITIAL_PAGE_SIZE = 20;
+const ORDERS_PAGE_INCREMENT = 10;
 /** ความยาวสูงสุดช่องค้นหา (พิมพ์ / วางจาก LINE / คลิปบอร์ด) */
 const VEHICLE_SEARCH_MAX = 48;
 const SALE_STATUS_PRIORITY: Record<SaleStatusValue, number> = {
@@ -4706,12 +4709,13 @@ export function MobileOrderTrackingHome({
   const hydratedOnceRef = useRef(false);
   const experimentInflightKeysRef = useRef<Set<string>>(new Set());
   const lastStableVisiblePagedRef = useRef<Order[]>([]);
+  const experimentScrollBufferRafRef = useRef<number | null>(null);
   const [experimentOrderItemsByCar, setExperimentOrderItemsByCar] = useState(orderItemsByCar);
   const [experimentOrderUpdatesByCar, setExperimentOrderUpdatesByCar] = useState(orderUpdatesByCar);
   const [experimentHydratedCarKeys, setExperimentHydratedCarKeys] = useState<Set<string>>(
     () => new Set(experimentInitialHydratedCarKeys)
   );
-  const [experimentRequestedCount, setExperimentRequestedCount] = useState(ORDER_TRACKING_EXPERIMENT_PAGE_SIZE);
+  const [experimentRequestedCount, setExperimentRequestedCount] = useState(ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT);
   const [experimentLoadingDetails, setExperimentLoadingDetails] = useState(false);
   const [experimentDetailError, setExperimentDetailError] = useState<string | null>(null);
 
@@ -4745,7 +4749,7 @@ export function MobileOrderTrackingHome({
     setExperimentOrderUpdatesByCar(orderUpdatesByCar);
     setExperimentHydratedCarKeys(new Set(experimentInitialHydratedCarKeys));
     experimentInflightKeysRef.current.clear();
-    setExperimentRequestedCount(ORDER_TRACKING_EXPERIMENT_PAGE_SIZE);
+    setExperimentRequestedCount(ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT);
     setExperimentDetailError(null);
   }, [orderChipCacheExperimentEnabled, orderItemsByCar, orderUpdatesByCar, experimentInitialHydratedCarKeys]);
   const suppressDataWarningsDuringDeferredHydration =
@@ -4853,7 +4857,7 @@ export function MobileOrderTrackingHome({
   const [itemStatusPoliciesNormalized, setItemStatusPoliciesNormalized] = useState<ItemStatusPoliciesNormalized>(() =>
     defaultItemStatusPoliciesNormalized()
   );
-  const [visibleLimit, setVisibleLimit] = useState(ORDERS_PAGE_SIZE);
+  const [visibleLimit, setVisibleLimit] = useState(ORDERS_INITIAL_PAGE_SIZE);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const pendingScrollYRef = useRef<number | null>(null);
   /** ซ่อนชิปที่นับเป็น 0 เฉพาะตอนโหลดครั้งแรก — หลังล็อกแล้วชิปไม่หายเวลาเปลี่ยนสถานะในการ์ด */
@@ -6142,6 +6146,13 @@ export function MobileOrderTrackingHome({
     () => ITEM_STATUSES.reduce((sum, s) => sum + (itemStatusCounts.get(s) ?? 0), 0),
     [itemStatusCounts]
   );
+  const visibleIndexByOrderId = useMemo(() => {
+    const map = new Map<string, number>();
+    visible.forEach((order, index) => {
+      map.set(order.id, index);
+    });
+    return map;
+  }, [visible]);
   const experimentWantedOrders = useMemo(
     () =>
       orderChipCacheExperimentEnabled
@@ -6191,6 +6202,10 @@ export function MobileOrderTrackingHome({
       if (!orderChipCacheExperimentEnabled) return;
       const batch: Order[] = [];
       const claimedKeys: string[] = [];
+      const detailBatchLimit =
+        orders.length <= ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT
+          ? ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT
+          : ORDER_TRACKING_EXPERIMENT_INCREMENT;
       for (const order of orders) {
         const keys = orderCarKeys(order);
         if (keys.length === 0) continue;
@@ -6201,7 +6216,7 @@ export function MobileOrderTrackingHome({
         batch.push(order);
         claimedKeys.push(...keys);
         for (const key of keys) experimentInflightKeysRef.current.add(key);
-        if (batch.length >= ORDER_TRACKING_EXPERIMENT_PAGE_SIZE) break;
+        if (batch.length >= detailBatchLimit) break;
       }
       if (batch.length === 0) return;
       setExperimentLoadingDetails(true);
@@ -6288,8 +6303,8 @@ export function MobileOrderTrackingHome({
 
   useEffect(() => {
     startTransition(() => {
-      setVisibleLimit(ORDERS_PAGE_SIZE);
-      setExperimentRequestedCount(ORDER_TRACKING_EXPERIMENT_PAGE_SIZE);
+      setVisibleLimit(ORDERS_INITIAL_PAGE_SIZE);
+      setExperimentRequestedCount(ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT);
     });
   }, [
     filteringSaleStatusFilters,
@@ -6297,6 +6312,60 @@ export function MobileOrderTrackingHome({
     filteringItemStatusFilters,
     filteringSaleFilters,
     filteringVehicleSearchForFiltering,
+  ]);
+
+  useEffect(() => {
+    if (!orderChipCacheExperimentEnabled) return;
+    if (typeof window === "undefined") return;
+    if (visible.length <= ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT) return;
+
+    const requestAheadFromViewport = () => {
+      experimentScrollBufferRafRef.current = null;
+      let furthestVisibleIndex = -1;
+      const viewportTop = 0;
+      const viewportBottom = window.innerHeight || document.documentElement.clientHeight || 0;
+
+      for (const order of visiblePagedForRender) {
+        const el = document.getElementById(`order-card-${order.id}`);
+        if (!el) continue;
+        const rect = el.getBoundingClientRect();
+        if (rect.bottom <= viewportTop || rect.top >= viewportBottom) continue;
+        const idx = visibleIndexByOrderId.get(order.id);
+        if (idx == null) continue;
+        furthestVisibleIndex = Math.max(furthestVisibleIndex, idx);
+      }
+
+      if (furthestVisibleIndex < 0) return;
+      const nextRequested = Math.min(
+        visible.length,
+        Math.max(
+          ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT,
+          furthestVisibleIndex + 1 + ORDER_TRACKING_EXPERIMENT_AHEAD_BUFFER
+        )
+      );
+      setExperimentRequestedCount((prev) => (nextRequested > prev ? nextRequested : prev));
+    };
+
+    const scheduleAheadBuffer = () => {
+      if (experimentScrollBufferRafRef.current != null) return;
+      experimentScrollBufferRafRef.current = window.requestAnimationFrame(requestAheadFromViewport);
+    };
+
+    window.addEventListener("scroll", scheduleAheadBuffer, { passive: true });
+    window.addEventListener("resize", scheduleAheadBuffer);
+    return () => {
+      window.removeEventListener("scroll", scheduleAheadBuffer);
+      window.removeEventListener("resize", scheduleAheadBuffer);
+      if (experimentScrollBufferRafRef.current != null) {
+        window.cancelAnimationFrame(experimentScrollBufferRafRef.current);
+        experimentScrollBufferRafRef.current = null;
+      }
+    };
+  }, [
+    orderChipCacheExperimentEnabled,
+    visible.length,
+    visibleIndexByOrderId,
+    visiblePagedForRender,
   ]);
 
   useEffect(() => {
@@ -6310,11 +6379,11 @@ export function MobileOrderTrackingHome({
         if (!entry?.isIntersecting) return;
         if (orderChipCacheExperimentEnabled) {
           setExperimentRequestedCount((prev) =>
-            Math.min(visible.length, prev + ORDER_TRACKING_EXPERIMENT_PAGE_SIZE)
+            Math.min(visible.length, prev + ORDER_TRACKING_EXPERIMENT_INCREMENT)
           );
           return;
         }
-        setVisibleLimit((prev) => prev + ORDERS_PAGE_SIZE);
+        setVisibleLimit((prev) => prev + ORDERS_PAGE_INCREMENT);
       },
       { rootMargin: "200px 0px 200px 0px", threshold: 0.01 }
     );
@@ -6416,8 +6485,8 @@ export function MobileOrderTrackingHome({
   const clearVehicleStable = () =>
     runWithStableScroll(() => {
       setVehicleSearch("");
-      setVisibleLimit(ORDERS_PAGE_SIZE);
-      setExperimentRequestedCount(ORDER_TRACKING_EXPERIMENT_PAGE_SIZE);
+      setVisibleLimit(ORDERS_INITIAL_PAGE_SIZE);
+      setExperimentRequestedCount(ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT);
     });
   const deleteVehicleStable = () => runWithStableScroll(() => deleteVehicleChar());
   const clearFiltersStable = () =>
@@ -6427,8 +6496,8 @@ export function MobileOrderTrackingHome({
       setVehicleSearch("");
       setStaffFilters(new Set());
       setItemStatusFilters(new Set());
-      setVisibleLimit(ORDERS_PAGE_SIZE);
-      setExperimentRequestedCount(ORDER_TRACKING_EXPERIMENT_PAGE_SIZE);
+      setVisibleLimit(ORDERS_INITIAL_PAGE_SIZE);
+      setExperimentRequestedCount(ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT);
     });
   const hasActiveFilters =
     saleFilters.size > 0 ||
@@ -6755,8 +6824,8 @@ export function MobileOrderTrackingHome({
           {orderChipCacheExperimentEnabled ? (
             <div className="mb-2 rounded-2xl bg-emerald-50 px-3 py-2 text-xs font-semibold leading-snug text-emerald-900 ring-1 ring-emerald-100">
               {uiLang === "en"
-                ? "Sale chips follow the other active filters and hide zero-count sales. Status/staff/item counts use the loaded filter index; card details load in batches of 50."
-                : "ตัวเลขเซลล์สัมพันธ์กับ filter อื่นและซ่อนเซลล์ที่เป็น 0 · สถานะ/พนักงาน/สถานะรายการจากรายการที่โหลดแล้ว · การ์ดโหลดทีละ 50"}
+                ? "Sale chips follow the other active filters and hide zero-count sales. Card details show 20 first, then keep 20 cars prepared ahead while you scroll."
+                : "ตัวเลขเซลล์สัมพันธ์กับ filter อื่นและซ่อนเซลล์ที่เป็น 0 · การ์ดแสดง 20 คันแรก แล้วเตรียมข้อมูลล่วงหน้า 20 คันตามการเลื่อนหน้า"}
               {filterRenderPending ? (
                 <span className="ml-1 inline-block text-emerald-700/80">
                   {uiLang === "en" ? "Updating list..." : "กำลังปรับรายการ..."}

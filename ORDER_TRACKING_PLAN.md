@@ -92,7 +92,7 @@ Sales creates request -> Store checks stock -> Store orders/receives parts -> Ga
 - **Phase 5+:** Evidence, Sheet sync, controlled edits, two-way sync — **not done**.
 
 ## Notes
-- Issue #9 experiment: `NEXT_PUBLIC_ORDER_CHIP_CACHE_ENABLED=false` is the safe default. When set to `true` on Vercel Preview, `/m/orders` tests chip/count relationship behavior plus filtered card loading without changing schema: full car index for search/filter/counts, lightweight item filter index for staff/item relationships, first 50 matching full card details hydrated initially, and next 50 loaded through `POST /api/m/order-tracking/card-details`. Rollback is to keep/restore the flag to `false` or close the PR.
+- Issue #9 experiment: `NEXT_PUBLIC_ORDER_CHIP_CACHE_ENABLED=false` is the safe default. When set to `true` on Vercel Preview/Production, `/m/orders` tests chip/count relationship behavior plus filtered card loading without changing schema: full car index for search/filter/counts, lightweight item filter index for staff/item relationships, first 20 matching full card details hydrated initially, and roughly 20 cars kept prepared ahead of the viewport while scrolling through `POST /api/m/order-tracking/card-details`. Rollback is to keep/restore the flag to `false` or close/revert the PR.
 - May 2026 performance pass: `/m/orders` keeps the same UI/data/business logic while debouncing vehicle search, reusing memoized filter/count inputs, aggregating sale chip counts in one pass, and grouping card items in one memoized pass.
 - RLS: anon reads may be allowed per your policies; **writes** for intake use **service role** on the API route, not the browser anon client.
 - Next planning choices:

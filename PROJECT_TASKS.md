@@ -21,7 +21,7 @@
 - [ ] Add explicit module-level test checklist/documentation.
 
 ## Order Tracking Module
-- [x] Added chip/count relationship + filtered card loading experiment behind `NEXT_PUBLIC_ORDER_CHIP_CACHE_ENABLED=false` (default off). Flag off keeps existing `/m/orders` behavior. Flag on loads the full car index for search/filter/counts, uses a lightweight item filter index for staff/item relationships, hydrates first 50 matching card details, caches hydrated details, and loads more 50 at a time via `POST /api/m/order-tracking/card-details`. No schema change.
+- [x] Added chip/count relationship + filtered card loading experiment behind `NEXT_PUBLIC_ORDER_CHIP_CACHE_ENABLED=false` (default off). Flag off keeps existing `/m/orders` behavior. Flag on loads the full car index for search/filter/counts, uses a lightweight item filter index for staff/item relationships, hydrates the first 20 matching card details, caches hydrated details, and keeps about 20 cars prepared ahead of the viewport while scrolling via `POST /api/m/order-tracking/card-details`. No schema change.
 - [x] Performance pass for `/m/orders`: debounced vehicle search, one-pass sale chip counts, memoized per-card item grouping, and visible-page reset on debounced filter scope. No UI/schema/business-logic changes.
 - [x] Added DB mapping document: `ORDER_TRACKING_DB_MAPPING.md` (Phase 1 read-only mapping from repo schema/types/code, no schema change).
 - [x] Primary mobile UI: **`/m/orders`** → `MobileOrderTrackingHome` (`src/components/orders/mobile-v2/mobile-order-tracking-home.tsx`).
