@@ -416,6 +416,9 @@ export async function POST(request: Request) {
     const labelChanged = !beforeData || !isSameText(beforeData.label, itemName);
     const beforeEffectiveNote = beforeData ? coalesceOrderItemNote(beforeData.note, beforeData.outside_note) : null;
     const noteChanged = !beforeData || !isSameText(beforeEffectiveNote, desiredNote);
+    const assigneeChanged = !beforeData || !isSameText(beforeData.assignee_staff, desiredAssignee);
+    const statusChanged = !beforeData || !isSameText(beforeData.status, desiredStatus);
+    const dueDateChanged = !beforeData || !isSameText(beforeData.due_date, desiredDueDate);
     /** ไทยเหมือนเดิมแต่ยังไม่มีคำแปล (backfill / แปลล้มครั้งก่อน / คอลัมน์มาทีหลัง) — ต้องแปลอีกครั้ง */
     const labelNeedsEnglish =
       hasThaiScript(itemName) &&
@@ -425,6 +428,25 @@ export async function POST(request: Request) {
       (noteChanged || !String(beforeData?.note_en ?? "").trim());
 
     const translateRequested = orderItemsTranslateOnSaveFromEnv() && body.translate !== false;
+    const shouldTranslateMissingEnglish = translateRequested && (labelNeedsEnglish || noteNeedsEnglish);
+    const existingOrderItemId = orderItemId || existingIdFromLabel || String(beforeData?.id ?? "").trim() || null;
+    if (
+      beforeData &&
+      existingOrderItemId &&
+      !labelChanged &&
+      !assigneeChanged &&
+      !statusChanged &&
+      !dueDateChanged &&
+      !noteChanged &&
+      !shouldTranslateMissingEnglish
+    ) {
+      return NextResponse.json({
+        ok: true,
+        order_item_id: existingOrderItemId,
+        order_task_id: taskId,
+        mode: "noop",
+      });
+    }
 
     /** ภาษาไทย (translate=false / env ปิด) = ข้าม AI — ประหยัดเวลา; EN UI หรือ translate=true = เรียก API แปลเมื่อขาดข้อความ EN */
     let translatedLabelEn: string | null;

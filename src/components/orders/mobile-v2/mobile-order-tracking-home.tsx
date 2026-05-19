@@ -2952,11 +2952,24 @@ const OrderCard = React.memo(function OrderCard({
   };
 
   const patchItem = (target: OrderItemRow, patch: Partial<OrderItem>) => {
-    closeSwipeRows();
     const uid = target.uid;
     const patchKeys = Object.keys(patch);
     const isNoteOnlySave = patchKeys.length === 1 && patchKeys[0] === "note";
     const isNameOnlySave = patchKeys.length === 1 && patchKeys[0] === "name";
+    const baseBeforePatch = itemsRef.current.find((r) => r.uid === uid) ?? target;
+    const nextStatusBeforePatch = (patch.status ?? baseBeforePatch.status) as ItemStatusValue;
+    const nextHypoBeforePatch: OrderItemRow = {
+      ...baseBeforePatch,
+      ...patch,
+      status: nextStatusBeforePatch,
+      good: DONE_SET.has(nextStatusBeforePatch),
+      ...(patch.status != null && patch.status !== baseBeforePatch.status ? { statusChangedAtYmd: todayBangkokYmd() } : {}),
+    };
+    if (orderItemPersistSignature(baseBeforePatch) === orderItemPersistSignature(nextHypoBeforePatch)) {
+      return;
+    }
+
+    closeSwipeRows();
 
     if (isNoteOnlySave) {
       clearNoteDebounce(uid);
@@ -3044,9 +3057,18 @@ const OrderCard = React.memo(function OrderCard({
       setNoteOpenUid(uid);
       return;
     }
-    const current = items.find((item) => item.uid === uid);
+    const current = itemsRef.current.find((item) => item.uid === uid);
     if (!current) return;
+    if (current.status === status) return;
     patchItem(current, { status: status as ItemStatusValue });
+  };
+
+  const updateAssignee = (uid: string, assignee: string) => {
+    const current = itemsRef.current.find((item) => item.uid === uid);
+    if (!current) return;
+    const nextAssignee = String(assignee ?? "").trim();
+    if (String(current.assignee ?? "").trim() === nextAssignee) return;
+    patchItem(current, { assignee: nextAssignee });
   };
 
   const handleDueDatePicked = (uid: string, isoValue: string) => {
@@ -4164,7 +4186,7 @@ const OrderCard = React.memo(function OrderCard({
                   <div className="flex shrink-0 flex-nowrap items-center gap-1.5">
                     <select
                       value={item.assignee || ""}
-                      onChange={(e) => patchItem(item, { assignee: e.target.value })}
+                      onChange={(e) => updateAssignee(item.uid, e.target.value)}
                       title={uiLang === "en" ? "Owner" : "พนักงาน"}
                       className={cn(
                         "h-10 min-h-[40px] w-[76px] min-w-[4.5rem] shrink-0 touch-manipulation rounded-full border-0 px-2 py-1.5 text-xs font-semibold shadow-sm outline-none ring-1 focus-visible:ring-2 sm:w-[88px]",
