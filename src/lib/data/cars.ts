@@ -155,6 +155,23 @@ export const CARS_SELECT_ORDER_TRACKING = [
   "doc_fee",
 ].join(",");
 
+/** Minimal index for /m/orders search/filter/count. Keep this smaller than full card detail. */
+export const CARS_SELECT_ORDER_TRACKING_INDEX = [
+  "id",
+  "row_id",
+  "spec",
+  "sale_support",
+  "buyer",
+  "model_year",
+  "c_year",
+  "chassis_number",
+  "plate_number",
+  "booked_shipping",
+  "shipped",
+  "status",
+  "updated_at",
+].join(",");
+
 /** เลือกเฉพาะคอลัมน์ที่ใช้คำนวณชิปสถานะขาย (ครบทุกคัน แต่ payload เล็กมาก) */
 const CARS_SELECT_ORDER_TRACKING_SUMMARY = [
   "id",
@@ -226,7 +243,13 @@ export function parseSort(
   return { field, order: ord };
 }
 
-export type CarsQueryResult = { cars: Car[]; error: string | null };
+export type CarsQueryResult = {
+  cars: Car[];
+  error: string | null;
+  limitedByMaxCars?: boolean;
+  maxCars?: number;
+  totalCount?: number;
+};
 
 export async function fetchCarsForDashboard(): Promise<CarsQueryResult> {
   try {
@@ -278,14 +301,15 @@ function parseOrderTrackingMaxCars(): number {
 async function fetchCarsOrderTrackingCapped(
   supabase: ReturnType<typeof createAnonClient>,
   maxRows: number,
-  includeShipped: boolean
+  includeShipped: boolean,
+  selectColumns: string = CARS_SELECT_ORDER_TRACKING
 ): Promise<CarsQueryResult> {
   const all: Car[] = [];
   for (let from = 0; from < maxRows; from += PAGE_SIZE) {
     const to = Math.min(from + PAGE_SIZE - 1, maxRows - 1);
     let query = supabase
       .from(TABLE)
-      .select(CARS_SELECT_ORDER_TRACKING)
+      .select(selectColumns)
       .order("updated_at", { ascending: false });
     if (!includeShipped) query = query.or("shipped.is.null,shipped.eq.");
     const { data, error } = await query.range(from, to);
@@ -301,7 +325,8 @@ type FetchCarsForOrderTrackingOptions = {
   includeShipped?: boolean;
 };
 
-export async function fetchCarsForOrderTracking(
+async function fetchCarsForOrderTrackingBySelect(
+  selectColumns: string,
   options: FetchCarsForOrderTrackingOptions = {}
 ): Promise<CarsQueryResult> {
   const includeShipped = options.includeShipped !== false;
@@ -315,11 +340,14 @@ export async function fetchCarsForOrderTracking(
     const { count, error: countError } = await countQuery;
 
     if (countError) {
-      if (maxCars > 0) return fetchCarsOrderTrackingCapped(supabase, maxCars, includeShipped);
+      if (maxCars > 0) {
+        const capped = await fetchCarsOrderTrackingCapped(supabase, maxCars, includeShipped, selectColumns);
+        return { ...capped, limitedByMaxCars: capped.cars.length >= maxCars, maxCars };
+      }
       return fetchAllRowsSequential(async (from, to) => {
         let query = supabase
           .from(TABLE)
-          .select(CARS_SELECT_ORDER_TRACKING)
+          .select(selectColumns)
           .order("updated_at", { ascending: false });
         if (!includeShipped) query = query.or("shipped.is.null,shipped.eq.");
         return query.range(from, to);
@@ -328,16 +356,96 @@ export async function fetchCarsForOrderTracking(
 
     const total = count ?? 0;
     if (maxCars > 0 && total > maxCars) {
-      return fetchCarsOrderTrackingCapped(supabase, maxCars, includeShipped);
+      const capped = await fetchCarsOrderTrackingCapped(supabase, maxCars, includeShipped, selectColumns);
+      return { ...capped, limitedByMaxCars: true, maxCars, totalCount: total };
     }
-    return fetchAllRowsInParallel(total, async (from, to) => {
+    const allRows = await fetchAllRowsInParallel(total, async (from, to) => {
       let query = supabase
         .from(TABLE)
-        .select(CARS_SELECT_ORDER_TRACKING)
+        .select(selectColumns)
         .order("updated_at", { ascending: false });
       if (!includeShipped) query = query.or("shipped.is.null,shipped.eq.");
       return query.range(from, to);
     });
+    return { ...allRows, totalCount: total };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { cars: [], error: msg };
+  }
+}
+
+export async function fetchCarsForOrderTracking(
+  options: FetchCarsForOrderTrackingOptions = {}
+): Promise<CarsQueryResult> {
+  return fetchCarsForOrderTrackingBySelect(CARS_SELECT_ORDER_TRACKING, options);
+}
+
+export async function fetchCarsIndexForOrderTracking(
+  options: FetchCarsForOrderTrackingOptions = {}
+): Promise<CarsQueryResult> {
+  return fetchCarsForOrderTrackingBySelect(CARS_SELECT_ORDER_TRACKING_INDEX, options);
+}
+
+export async function fetchCarsForOrderTrackingDetailsByKeys(
+  keys: Array<{ rowId?: string | null; id?: string | number | null }>
+): Promise<CarsQueryResult> {
+  try {
+    const wantedKeys: string[] = [];
+    const rowIds: string[] = [];
+    const ids: (string | number)[] = [];
+    for (const key of keys) {
+      const rowId = String(key.rowId ?? "").trim();
+      const idText = key.id == null ? "" : String(key.id).trim();
+      if (rowId) {
+        wantedKeys.push(`row:${rowId}`);
+        rowIds.push(rowId);
+      } else if (idText) {
+        wantedKeys.push(`id:${idText}`);
+        ids.push(/^\d+$/.test(idText) ? Number(idText) : idText);
+      }
+    }
+    const uniqueRowIds = Array.from(new Set(rowIds));
+    const uniqueIds = Array.from(new Set(ids));
+    if (uniqueRowIds.length === 0 && uniqueIds.length === 0) return { cars: [], error: null };
+
+    const supabase = createAnonClient();
+    const byKey = new Map<string, Car>();
+    const fetchRows = async (column: "row_id" | "id", values: (string | number)[]) => {
+      for (let i = 0; i < values.length; i += PAGE_SIZE) {
+        const chunk = values.slice(i, i + PAGE_SIZE);
+        const { data, error } = await supabase
+          .from(TABLE)
+          .select(CARS_SELECT_ORDER_TRACKING)
+          .in(column, chunk);
+        if (error) return error.message;
+        for (const row of rowsAsCars(data)) {
+          const rowKey = String(row.row_id ?? "").trim();
+          if (rowKey) byKey.set(`row:${rowKey}`, row);
+          const idKey = String(row.id ?? "").trim();
+          if (idKey) byKey.set(`id:${idKey}`, row);
+        }
+      }
+      return null;
+    };
+
+    const rowError = await fetchRows("row_id", uniqueRowIds);
+    if (rowError) return { cars: [], error: rowError };
+    const idError = await fetchRows("id", uniqueIds);
+    if (idError) return { cars: [], error: idError };
+
+    const cars: Car[] = [];
+    const seen = new Set<string>();
+    for (const key of wantedKeys) {
+      const car = byKey.get(key);
+      if (!car) continue;
+      const dedupeKey = String(car.row_id ?? "").trim()
+        ? `row:${String(car.row_id ?? "").trim()}`
+        : `id:${String(car.id ?? "").trim()}`;
+      if (!dedupeKey || seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      cars.push(car);
+    }
+    return { cars, error: null };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return { cars: [], error: msg };

@@ -55,7 +55,8 @@ Sales creates request -> Store checks stock -> Store orders/receives parts -> Ga
 - **Shared server loader:** `src/lib/order-tracking/load-order-tracking-page.ts` (same props for both routes).
 - **Component:** `src/components/orders/mobile-v2/mobile-order-tracking-home.tsx`.
 - **LIFF:** `src/components/liff/liff-orders-shell.tsx` wraps only the `/liff/orders` route (status strip + SDK init).
-- **Reads:** `fetchCarsForOrderTracking()` + `fetchOrderItemsByCars()` merge `order_items` onto each car card (keys `row:{row_id}` and `id:{id}`).
+- **Progressive loading Phase 1:** shared loader fetches a lightweight car index for all loaded-scope cars, then full detail for the first 50 cars. Client-side scroll/search loads additional detail in 50-car batches via **`POST /api/m/order-tracking/cars-bundle`** and caches detail by `row_id`/`id`; search still runs against the full car index.
+- **Reads:** `fetchCarsIndexForOrderTracking()` supplies search/filter index; `fetchCarsForOrderTrackingDetailsByKeys()` + `fetchOrderItemsAndUpdatesByCars()` merge full car fields, `order_items`, and updates onto loaded cards (keys `row:{row_id}` and `id:{id}`).
 - **Fallback:** if no cars returned, UI uses in-file `ORDERS` mock array for demo.
 - **Filters:** sale **status** (ทั้งหมด / จอง / รอส่ง / ส่งแล้ว / ว่าง), staff (from data + defaults), item status + counts (**computed from `order.items`**, including demo `ORDERS` when fallback), storage-only toggle, plate keypad + search across plate / full plate / chassis / spec string. **Per-sale name chips (ALL/AOR/…) are not on this screen anymore.**
 - **Cards:** cost toggle from `cars` (`total_cost`, repair/doc/expense fields); item status `<select>` persists via **`POST /api/m/order-items/update`**; date picker for **สั่ง** → `order_items.due_date`; **หมายเหตุ** → `order_items.note`; **ฝาก** → storage API; storage block + LINE share when `storage` non-empty from **`fetchOrderStorageByCars`** (requires migrated `order_storage_items`).
@@ -79,6 +80,7 @@ Sales creates request -> Store checks stock -> Store orders/receives parts -> Ga
 - **Audit log:** item/storage/intake write APIs now append `order_task_updates` record for each action; currently encoded in `message` text because structured columns are not present yet.
 
 ### API / server helpers
+- `src/app/api/m/order-tracking/cars-bundle/route.ts`
 - `src/app/api/m/order-intake/save/route.ts`
 - `src/app/api/m/order-items/update/route.ts`
 - `src/app/api/m/order-storage/upsert/route.ts`

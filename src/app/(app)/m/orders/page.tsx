@@ -33,8 +33,11 @@ export default async function MobileOrdersPage({ searchParams }: PageProps) {
   return (
     <MobileOrderTrackingHome
       carsData={props.carsData}
+      initialDetailCarsData={props.initialDetailCarsData}
       orderItemsByCar={props.orderItemsByCar}
       orderUpdatesByCar={props.orderUpdatesByCar}
+      progressiveDetailsEnabled={props.progressiveDetailsEnabled}
+      progressiveDetailBatchSize={props.progressiveDetailBatchSize}
       saleStatusSummaryAllCars={props.saleStatusSummaryAllCars}
       summarySnapshotAllCars={props.summarySnapshotAllCars}
       disableDemoFallback
