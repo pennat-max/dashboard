@@ -8,10 +8,21 @@ import type { DuplicateStatus, LineInboxAnalyzeItem, LineInboxAnalyzeResponse } 
 type RowDraft = LineInboxAnalyzeItem & {
   action: "skip" | "create" | "merge";
   note: string;
+  included: boolean;
 };
 
+const ITEM_STATUS_OPTIONS = ["เช็ค", "มี", "สั่ง", "มา", "รถนอก", "ช่างนอก", "ฝากสโตร์", "ฝากกับรถ", "จบ"];
+
 function defaultAction(item: LineInboxAnalyzeItem): RowDraft["action"] {
-  if (item.duplicate_status === "duplicate" && String(item.matched_order_item_id ?? "").trim()) {
+  return item.duplicate_status === "new" ? "create" : "skip";
+}
+
+function defaultIncluded(item: LineInboxAnalyzeItem): boolean {
+  return item.duplicate_status === "new";
+}
+
+function actionWhenIncluded(item: Pick<RowDraft, "duplicate_status" | "matched_order_item_id">): RowDraft["action"] {
+  if (item.duplicate_status !== "new" && String(item.matched_order_item_id ?? "").trim()) {
     return "merge";
   }
   return "create";
@@ -65,6 +76,18 @@ export function LineInboxClient({ initialCarRowId = "", initialCarId = null }: P
   const [rows, setRows] = useState<RowDraft[]>([]);
   const [lastSaved, setLastSaved] = useState<{ taskId: string | null; count: number } | null>(null);
 
+  const reviewCounts = useMemo(() => {
+    let create = 0;
+    let merge = 0;
+    let skip = 0;
+    for (const row of rows) {
+      if (!row.included || row.action === "skip") skip += 1;
+      else if (row.action === "merge") merge += 1;
+      else create += 1;
+    }
+    return { create, merge, skip, actionable: create + merge };
+  }, [rows]);
+
   const effectiveCarRowId = useMemo(() => {
     const fromAnalyze = String(detected?.car_row_id ?? "").trim();
     return fromAnalyze || String(carRowIdHint ?? "").trim();
@@ -101,6 +124,7 @@ export function LineInboxClient({ initialCarRowId = "", initialCarId = null }: P
         ...item,
         action: defaultAction(item),
         note: "",
+        included: defaultIncluded(item),
       }));
       setRows(next);
     } catch (e) {
@@ -118,6 +142,35 @@ export function LineInboxClient({ initialCarRowId = "", initialCarId = null }: P
     );
   }, []);
 
+  const toggleRowIncluded = useCallback((index: number, included: boolean) => {
+    setRows((prev) =>
+      prev.map((r, i) => {
+        if (i !== index) return r;
+        if (!included) return { ...r, included: false, action: "skip" };
+        const nextAction = r.action === "skip" ? actionWhenIncluded(r) : r.action;
+        return { ...r, included: true, action: nextAction };
+      })
+    );
+  }, []);
+
+  const setNewRowsOnly = useCallback(() => {
+    setRows((prev) =>
+      prev.map((r) =>
+        r.duplicate_status === "new"
+          ? { ...r, included: true, action: "create" }
+          : { ...r, included: false, action: "skip" }
+      )
+    );
+  }, []);
+
+  const includeAllRowsForReview = useCallback(() => {
+    setRows((prev) => prev.map((r) => ({ ...r, included: true, action: actionWhenIncluded(r) })));
+  }, []);
+
+  const skipAllRows = useCallback(() => {
+    setRows((prev) => prev.map((r) => ({ ...r, included: false, action: "skip" })));
+  }, []);
+
   const runConfirm = useCallback(async () => {
     setError(null);
     setConfirmLoading(true);
@@ -125,13 +178,21 @@ export function LineInboxClient({ initialCarRowId = "", initialCarId = null }: P
       if (!effectiveCarRowId && effectiveCarId == null) {
         throw new Error("ต้องระบุรถ (car_row_id / car_id) หรือให้วิเคราะห์จับคู่รถได้ก่อนยืนยัน");
       }
-      const confirmations = rows.map((r) => ({
-        action: r.action,
-        order_item_id: r.action === "merge" ? r.matched_order_item_id : undefined,
-        item_name: r.suggested_item_name || r.raw_text,
-        item_status: r.suggested_status || undefined,
-        note: r.note.trim() || undefined,
-      }));
+      const confirmations = rows.map((r) => {
+        if (!r.included) {
+          return {
+            action: "skip" as const,
+            item_name: r.suggested_item_name || r.raw_text,
+          };
+        }
+        return {
+          action: r.action,
+          order_item_id: r.action === "merge" ? r.matched_order_item_id : undefined,
+          item_name: r.suggested_item_name || r.raw_text,
+          item_status: r.suggested_status || undefined,
+          note: r.note.trim() || undefined,
+        };
+      });
 
       const res = await fetch("/api/line-inbox/confirm", {
         method: "POST",
@@ -255,7 +316,40 @@ export function LineInboxClient({ initialCarRowId = "", initialCarId = null }: P
 
       {rows.length > 0 ? (
         <section className="space-y-3">
-          <h2 className="text-[13px] font-semibold text-slate-800">รายการงาน ({rows.length})</h2>
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-[13px] font-semibold text-slate-800">รายการงาน ({rows.length})</h2>
+              <p className="text-[11px] font-medium text-slate-500">
+                สร้าง {reviewCounts.create} · รวม {reviewCounts.merge} · ข้าม {reviewCounts.skip}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onPointerDown={(e) => e.preventDefault()}
+                onClick={setNewRowsOnly}
+                className="rounded-full bg-emerald-50 px-3 py-1.5 text-[11px] font-bold text-emerald-900 ring-1 ring-emerald-200 touch-manipulation"
+              >
+                เลือกงานใหม่
+              </button>
+              <button
+                type="button"
+                onPointerDown={(e) => e.preventDefault()}
+                onClick={includeAllRowsForReview}
+                className="rounded-full bg-slate-100 px-3 py-1.5 text-[11px] font-bold text-slate-700 ring-1 ring-slate-200 touch-manipulation"
+              >
+                เลือกทั้งหมด
+              </button>
+              <button
+                type="button"
+                onPointerDown={(e) => e.preventDefault()}
+                onClick={skipAllRows}
+                className="rounded-full bg-white px-3 py-1.5 text-[11px] font-bold text-slate-600 ring-1 ring-slate-200 touch-manipulation"
+              >
+                ข้ามทั้งหมด
+              </button>
+            </div>
+          </div>
           <ul className="space-y-3">
             {rows.map((row, i) => (
               <li
@@ -263,14 +357,23 @@ export function LineInboxClient({ initialCarRowId = "", initialCarId = null }: P
                 className="space-y-2 rounded-lg border border-slate-200 bg-white p-3 shadow-sm"
               >
                 <div className="flex flex-wrap items-start justify-between gap-2">
-                  <span
-                    className={cn(
-                      "inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium",
-                      duplicateBadgeClass(row.duplicate_status)
-                    )}
-                  >
-                    {duplicateLabelTh(row.duplicate_status)}
-                  </span>
+                  <label className="inline-flex cursor-pointer items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={row.included && row.action !== "skip"}
+                      onChange={(e) => toggleRowIncluded(i, e.target.checked)}
+                      className="h-5 w-5 rounded border-slate-400"
+                      aria-label="เลือกบันทึกรายการนี้"
+                    />
+                    <span
+                      className={cn(
+                        "inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium",
+                        duplicateBadgeClass(row.duplicate_status)
+                      )}
+                    >
+                      {duplicateLabelTh(row.duplicate_status)}
+                    </span>
+                  </label>
                   <span className="text-[11px] text-slate-500">
                     ความมั่นใจ {Math.round(row.confidence * 100)}%
                   </span>
@@ -283,11 +386,20 @@ export function LineInboxClient({ initialCarRowId = "", initialCarId = null }: P
                   onChange={(e) => updateRow(i, { suggested_item_name: e.target.value })}
                 />
                 <label className="block text-[11px] font-medium text-slate-600">สถานะที่เสนอ</label>
-                <input
-                  className="w-full rounded border border-slate-200 px-2 py-1.5 text-[13px]"
+                <select
+                  className="w-full rounded border border-slate-200 bg-white px-2 py-2 text-[13px]"
                   value={row.suggested_status}
                   onChange={(e) => updateRow(i, { suggested_status: e.target.value })}
-                />
+                >
+                  {row.suggested_status && !ITEM_STATUS_OPTIONS.includes(row.suggested_status) ? (
+                    <option value={row.suggested_status}>{row.suggested_status}</option>
+                  ) : null}
+                  {ITEM_STATUS_OPTIONS.map((status) => (
+                    <option key={status} value={status}>
+                      {status}
+                    </option>
+                  ))}
+                </select>
                 <label className="block text-[11px] font-medium text-slate-600">หมายเหตุ (ไม่บังคับ)</label>
                 <input
                   className="w-full rounded border border-slate-200 px-2 py-1.5 text-[13px]"
@@ -313,7 +425,10 @@ export function LineInboxClient({ initialCarRowId = "", initialCarId = null }: P
                     className="rounded border border-slate-200 px-2 py-2 text-[13px]"
                     value={row.action}
                     onChange={(e) =>
-                      updateRow(i, { action: e.target.value as RowDraft["action"] })
+                      updateRow(i, {
+                        action: e.target.value as RowDraft["action"],
+                        included: e.target.value !== "skip",
+                      })
                     }
                   >
                     <option value="skip">ข้าม</option>
@@ -335,6 +450,7 @@ export function LineInboxClient({ initialCarRowId = "", initialCarId = null }: P
             className="w-full"
             disabled={
               confirmLoading ||
+              reviewCounts.actionable === 0 ||
               (!effectiveCarRowId && effectiveCarId == null)
             }
             onClick={() => void runConfirm()}

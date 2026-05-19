@@ -67,6 +67,7 @@
 - [x] **LIFF Phase 1:** `/liff/orders` — same Order Tracking UI + data loader as `/m/orders`; `@line/liff` + `NEXT_PUBLIC_LINE_LIFF_ID`; see `LINE_LIFF_SETUP.md`. Middleware exempts `/liff/*` from forced Supabase login.
 - [x] **Planning doc:** `LINE_INBOX_AI_ANALYSIS_PLAN.md` — AI-assisted LINE Inbox analysis (human confirmation, duplicate rules vs `order_items`).
 - [x] **Implement:** `POST /api/line-inbox/analyze` + `POST /api/line-inbox/confirm` + LIFF `/liff/line-inbox` (`src/app/api/line-inbox/*`, `src/components/liff/line-inbox-client.tsx`).
+- [x] **Manual confirmation UX:** `/m/orders` LINE Inbox toolbar and `/liff/line-inbox` now default to saving only `new` analyze rows; duplicate / possible duplicate / unclear rows start as skipped until staff explicitly choose create/merge. Staff can bulk-select new/all/none, edit item name/status/note, and choose skip/create/merge before saving.
 - [ ] LINE Bot / Messaging API webhook / group message ingestion.
 
 ## Future Two-way Sync

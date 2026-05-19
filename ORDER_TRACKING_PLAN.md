@@ -43,7 +43,7 @@ Sales creates request -> Store checks stock -> Store orders/receives parts -> Ga
 - Staff can continue chatting in LINE.
 - Real status should live in Supabase.
 - **LIFF Phase 1 (May 2026):** `/liff/orders` opens the same Order Tracking experience as `/m/orders` inside LINE (LIFF SDK + `NEXT_PUBLIC_LINE_LIFF_ID`). No Bot / webhook in this phase — see `LINE_LIFF_SETUP.md`.
-- **LINE Inbox + AI:** **`POST /api/line-inbox/analyze`** (read-only suggestions) + **`POST /api/line-inbox/confirm`** (writes after human confirm) + LIFF **`/liff/line-inbox`**. Spec: **`LINE_INBOX_AI_ANALYSIS_PLAN.md`**. **No** auto-save from analyze; **no** secrets in browser.
+- **LINE Inbox + AI:** **`POST /api/line-inbox/analyze`** (read-only suggestions) + **`POST /api/line-inbox/confirm`** (writes after human confirm) + LIFF **`/liff/line-inbox`**. Spec: **`LINE_INBOX_AI_ANALYSIS_PLAN.md`**. **No** auto-save from analyze; **no** secrets in browser. Manual confirmation defaults to saving only `new` rows; duplicate / possible duplicate / unclear rows are skipped until staff explicitly choose create/merge.
 
 ## Implementation status (as of last repo inspection)
 

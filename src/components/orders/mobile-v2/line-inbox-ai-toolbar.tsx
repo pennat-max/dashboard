@@ -40,8 +40,18 @@ type RowDraft = LineInboxAnalyzeItem & {
   included: boolean;
 };
 
+const ITEM_STATUS_OPTIONS = ["เช็ค", "มี", "สั่ง", "มา", "รถนอก", "ช่างนอก", "ฝากสโตร์", "ฝากกับรถ", "จบ"];
+
 function defaultAction(item: LineInboxAnalyzeItem): RowDraft["action"] {
-  if (item.duplicate_status === "duplicate" && String(item.matched_order_item_id ?? "").trim()) {
+  return item.duplicate_status === "new" ? "create" : "skip";
+}
+
+function defaultIncluded(item: LineInboxAnalyzeItem): boolean {
+  return item.duplicate_status === "new";
+}
+
+function actionWhenIncluded(item: Pick<RowDraft, "duplicate_status" | "matched_order_item_id">): RowDraft["action"] {
+  if (item.duplicate_status !== "new" && String(item.matched_order_item_id ?? "").trim()) {
     return "merge";
   }
   return "create";
@@ -177,9 +187,27 @@ export function LineInboxAiToolbar({
   }, [selected]);
 
   const pendingSaveCount = useMemo(
-    () => rows.filter((r) => r.included && r.action !== "skip").length,
+    () =>
+      rows.filter(
+        (r) => r.included && r.action !== "skip" && String(r.suggested_item_name || r.raw_text).trim()
+      ).length,
     [rows]
   );
+  const reviewCounts = useMemo(() => {
+    let create = 0;
+    let merge = 0;
+    let skip = 0;
+    for (const row of rows) {
+      if (!row.included || row.action === "skip") {
+        skip += 1;
+      } else if (row.action === "merge") {
+        merge += 1;
+      } else {
+        create += 1;
+      }
+    }
+    return { create, merge, skip };
+  }, [rows]);
 
   const rawBadgeTotal = queueTotalNew + pendingSaveCount;
   const showBadgeDot = rawBadgeTotal > 0;
@@ -259,7 +287,7 @@ export function LineInboxAiToolbar({
         ...item,
         action: defaultAction(item),
         note: "",
-        included: true,
+        included: defaultIncluded(item),
       }));
       setRows(next);
     } catch (e) {
@@ -273,6 +301,35 @@ export function LineInboxAiToolbar({
 
   const updateRow = useCallback((index: number, patch: Partial<RowDraft>) => {
     setRows((prev) => prev.map((r, i) => (i === index ? { ...r, ...patch } : r)));
+  }, []);
+
+  const toggleRowIncluded = useCallback((index: number, included: boolean) => {
+    setRows((prev) =>
+      prev.map((r, i) => {
+        if (i !== index) return r;
+        if (!included) return { ...r, included: false, action: "skip" };
+        const nextAction = r.action === "skip" ? actionWhenIncluded(r) : r.action;
+        return { ...r, included: true, action: nextAction };
+      })
+    );
+  }, []);
+
+  const setNewRowsOnly = useCallback(() => {
+    setRows((prev) =>
+      prev.map((r) =>
+        r.duplicate_status === "new"
+          ? { ...r, included: true, action: "create" }
+          : { ...r, included: false, action: "skip" }
+      )
+    );
+  }, []);
+
+  const includeAllRowsForReview = useCallback(() => {
+    setRows((prev) => prev.map((r) => ({ ...r, included: true, action: actionWhenIncluded(r) })));
+  }, []);
+
+  const skipAllRows = useCallback(() => {
+    setRows((prev) => prev.map((r) => ({ ...r, included: false, action: "skip" })));
   }, []);
 
   const runConfirm = useCallback(async () => {
@@ -554,37 +611,139 @@ export function LineInboxAiToolbar({
 
           {rows.length > 0 ? (
             <div className="space-y-2">
-              <p className="text-[11px] font-semibold text-slate-700">
-                {uiLang === "en" ? "Suggested lines" : "รายการที่เสนอ"} ({rows.length})
-              </p>
+              <div className="space-y-1.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-[11px] font-semibold text-slate-700">
+                    {uiLang === "en" ? "Suggested lines" : "รายการที่เสนอ"} ({rows.length})
+                  </p>
+                  <p className="text-[10px] font-medium text-slate-500">
+                    {uiLang === "en"
+                      ? `Create ${reviewCounts.create} · merge ${reviewCounts.merge} · skip ${reviewCounts.skip}`
+                      : `สร้าง ${reviewCounts.create} · รวม ${reviewCounts.merge} · ข้าม ${reviewCounts.skip}`}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    onPointerDown={(e) => e.preventDefault()}
+                    onClick={setNewRowsOnly}
+                    className="rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-bold text-emerald-900 ring-1 ring-emerald-200 touch-manipulation"
+                  >
+                    {uiLang === "en" ? "New only" : "เลือกงานใหม่"}
+                  </button>
+                  <button
+                    type="button"
+                    onPointerDown={(e) => e.preventDefault()}
+                    onClick={includeAllRowsForReview}
+                    className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-bold text-slate-700 ring-1 ring-slate-200 touch-manipulation"
+                  >
+                    {uiLang === "en" ? "Select all" : "เลือกทั้งหมด"}
+                  </button>
+                  <button
+                    type="button"
+                    onPointerDown={(e) => e.preventDefault()}
+                    onClick={skipAllRows}
+                    className="rounded-full bg-white px-2.5 py-1 text-[10px] font-bold text-slate-600 ring-1 ring-slate-200 touch-manipulation"
+                  >
+                    {uiLang === "en" ? "Skip all" : "ข้ามทั้งหมด"}
+                  </button>
+                </div>
+              </div>
               <ul className="max-h-[min(35vh,240px)] space-y-2 overflow-y-auto overscroll-contain pr-1">
                 {rows.map((row, i) => (
                   <li
                     key={`${row.raw_text}-${i}`}
                     className="rounded-xl border border-slate-200 bg-slate-50/90 p-2.5"
                   >
-                    <label className="flex cursor-pointer gap-2">
+                    <div className="flex items-start gap-2">
                       <input
                         type="checkbox"
-                        checked={row.included}
-                        onChange={(e) => updateRow(i, { included: e.target.checked })}
+                        checked={row.included && row.action !== "skip"}
+                        onChange={(e) => toggleRowIncluded(i, e.target.checked)}
                         className="mt-0.5 h-5 w-5 shrink-0 rounded border-slate-400"
+                        aria-label={uiLang === "en" ? "Include this line" : "เลือกบันทึกรายการนี้"}
                       />
-                      <span className="min-w-0 flex-1">
-                        <span
-                          className={cn(
-                            "mb-1 inline-block rounded-full border px-2 py-0.5 text-[10px] font-semibold",
-                            duplicateBadgeClass(row.duplicate_status)
-                          )}
-                        >
-                          {duplicateLabelTh(row.duplicate_status)}
-                        </span>
-                        <span className="block text-[13px] font-medium leading-snug text-slate-900">
-                          {row.suggested_item_name || row.raw_text}
-                        </span>
-                        <span className="text-[11px] text-slate-500">{row.reason}</span>
-                      </span>
-                    </label>
+                      <div className="min-w-0 flex-1 space-y-2">
+                        <div className="flex flex-wrap items-start justify-between gap-1.5">
+                          <span
+                            className={cn(
+                              "inline-block rounded-full border px-2 py-0.5 text-[10px] font-semibold",
+                              duplicateBadgeClass(row.duplicate_status)
+                            )}
+                          >
+                            {duplicateLabelTh(row.duplicate_status)}
+                          </span>
+                          <span className="text-[10px] font-medium text-slate-500">
+                            {uiLang === "en" ? "Confidence" : "มั่นใจ"} {Math.round(row.confidence * 100)}%
+                          </span>
+                        </div>
+                        <p className="text-[11px] leading-snug text-slate-500">{row.reason}</p>
+                        {row.raw_text && row.raw_text !== row.suggested_item_name ? (
+                          <p className="rounded-lg bg-white/70 px-2 py-1 text-[10px] leading-snug text-slate-500 ring-1 ring-slate-200/70">
+                            {row.raw_text}
+                          </p>
+                        ) : null}
+                        <label className="block text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                          {uiLang === "en" ? "Item name" : "ชื่องาน"}
+                          <input
+                            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[12px] font-medium text-slate-900 outline-none focus-visible:ring-2 focus-visible:ring-violet-300"
+                            value={row.suggested_item_name}
+                            onChange={(e) => updateRow(i, { suggested_item_name: e.target.value })}
+                          />
+                        </label>
+                        <div className="grid grid-cols-2 gap-2">
+                          <label className="block text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                            {uiLang === "en" ? "Status" : "สถานะ"}
+                            <select
+                              className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[12px] font-medium text-slate-900"
+                              value={row.suggested_status}
+                              onChange={(e) => updateRow(i, { suggested_status: e.target.value })}
+                            >
+                              {row.suggested_status && !ITEM_STATUS_OPTIONS.includes(row.suggested_status) ? (
+                                <option value={row.suggested_status}>{row.suggested_status}</option>
+                              ) : null}
+                              {ITEM_STATUS_OPTIONS.map((status) => (
+                                <option key={status} value={status}>
+                                  {status}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className="block text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                            {uiLang === "en" ? "Action" : "การทำงาน"}
+                            <select
+                              className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[12px] font-medium text-slate-900"
+                              value={row.action}
+                              onChange={(e) => {
+                                const action = e.target.value as RowDraft["action"];
+                                updateRow(i, { action, included: action !== "skip" });
+                              }}
+                            >
+                              <option value="skip">{uiLang === "en" ? "Skip" : "ข้าม"}</option>
+                              <option value="create">{uiLang === "en" ? "Create new" : "สร้างงานใหม่"}</option>
+                              <option value="merge" disabled={!String(row.matched_order_item_id ?? "").trim()}>
+                                {uiLang === "en" ? "Merge with match" : "รวมกับงานเดิม"}
+                              </option>
+                            </select>
+                          </label>
+                        </div>
+                        {row.matched_order_item_id ? (
+                          <p className="text-[10px] leading-snug text-slate-500">
+                            {uiLang === "en" ? "Matched item" : "งานเดิมที่จับคู่"}:{" "}
+                            <span className="font-medium text-slate-700">{row.matched_item_name || row.matched_order_item_id}</span>
+                          </p>
+                        ) : null}
+                        <label className="block text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                          {uiLang === "en" ? "Note" : "หมายเหตุ"}
+                          <input
+                            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[12px] font-medium text-slate-900 outline-none focus-visible:ring-2 focus-visible:ring-violet-300"
+                            value={row.note}
+                            onChange={(e) => updateRow(i, { note: e.target.value })}
+                            placeholder={uiLang === "en" ? "Optional" : "ไม่บังคับ"}
+                          />
+                        </label>
+                      </div>
+                    </div>
                   </li>
                 ))}
               </ul>
