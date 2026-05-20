@@ -3,7 +3,13 @@ import type { LineInboxAnalyzeItem, LineInboxAnalyzeResponse } from "@/lib/line-
 type AiAnalyzeItem = Partial<
   Pick<
     LineInboxAnalyzeItem,
-    "raw_text" | "suggested_item_name" | "suggested_category" | "suggested_status" | "confidence" | "reason"
+    | "raw_text"
+    | "suggested_item_name"
+    | "suggested_note"
+    | "suggested_category"
+    | "suggested_status"
+    | "confidence"
+    | "reason"
   >
 >;
 
@@ -74,6 +80,7 @@ function asAiItems(value: unknown): Array<string | AiAnalyzeItem> {
       return {
         raw_text: safeString(obj.raw_text) || safeString(obj.text) || name,
         suggested_item_name: name,
+        suggested_note: safeString(obj.suggested_note) || safeString(obj.note),
         suggested_category: safeString(obj.suggested_category),
         suggested_status: safeString(obj.suggested_status),
         confidence: typeof obj.confidence === "number" ? Number(obj.confidence) : undefined,
@@ -193,6 +200,8 @@ function buildPrompt(rawText: string): string {
     "- Examples of vehicle spec: RANGER, REVO, HILUX, VIGO, NAVARA, NISSAN, 4WD, 2WD, 2.0, 2.3, 2.4, 2.8, AT, MT, Double Cab, D-cab, PRO4X, WHITE, GRAY/GREY, BLACK, red plate, year.",
     "- If a line has mentions plus real work, use mentions as people_context/assignee clue only. Example: '@PREW เช็คกันสาด' -> actual_work_items item_name='เช็คกันสาด'.",
     "- If a line has plate/chassis plus real work, remove plate/chassis from the item name.",
+    "- Group detail/spec lines under the previous main work item instead of making separate items. Example: lines 'ติดฟิล์ม รอบคัน', 'ประตู 80%', 'กระจกบานหน้า 60%' -> one actual_work_items object with suggested_item_name='ติดฟิล์มรอบคัน' and suggested_note='ประตู 80% / กระจกบานหน้า 60%'.",
+    "- Detail lines such as percentages, door/window/side/front/back specs, sizes, positions, color/paint details, or installation details should go in suggested_note of the main action item.",
     "- Work items must include action intent such as เปลี่ยน, สั่ง, เช็ค, ซ่อม, ติด, ติดตั้ง, ส่งอู่, เพิ่ม, รับแล้ว, ของมาแล้ว, order, check, repair, install.",
     "- Do not create order items from people_context, car_context, notes, or ignored_noise.",
     "- Set needs_human_review=true if car match is unclear, items are ambiguous, confidence is low, or you are unsure.",
@@ -207,6 +216,7 @@ function buildPrompt(rawText: string): string {
         {
           raw_text: "",
           suggested_item_name: "",
+          suggested_note: "",
           suggested_category: "",
           suggested_status: "",
           confidence: 0,

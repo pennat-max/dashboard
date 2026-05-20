@@ -5,6 +5,7 @@
 
 export type SplitLineTextResult = {
   items: string[];
+  grouped_items: Array<{ text: string; note: string }>;
   ignored_vehicle_spec_lines: string[];
   ignored_mention_lines: string[];
   ignored_noise_lines: string[];
@@ -35,6 +36,10 @@ const ROLE_OR_PERSON_NOISE_RE =
 const LINE_PERSON_CONTEXT_RE =
   /(?:\bLoSo\b|\bAekkarach\b|\bTH\b|\bChecker\b|\bManbappe\b|\bAof\b|\bFrank\b|\bKik\b|\bNutkun\b|\bJoy\b|\bMint\b|\bPrew\b|\bGwang\b|\bAor\b|\bWan\b|\bMai\b|\bNat\b|\bNoey\b|\bSine\b|\bPloo\b|\bYing\b|\bFairy\b|\bFah\b|\bBam\b|\bKoi\b|\bTarn\b|กวาง|ออฟ|นัท|แฟรงค์|จอย|มิ้นท์|พริว|เอ๋|เช็คเกอร์)/i;
 const EMOJI_OR_SYMBOL_RE = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}%^*:*]/u;
+const DETAIL_LINE_RE =
+  /(%|เปอร์เซ็น|เปอร์|ประตู|กระจก|บานหน้า|บานหลัง|ด้านหน้า|ด้านหลัง|ซ้าย|ขวา|หน้า|หลัง|ฝั่ง|แถว|ชิ้น|จุด|\b\d+(?:\.\d+)?\s*(?:cm|mm|inch|in|นิ้ว)\b)/i;
+const DETAIL_PARENT_RE =
+  /(ฟิล์ม|สี|paint|ติด|ติดตั้ง|ใส่|เปลี่ยน|ซ่อม|repair|install|แปลง|แต่ง|ยกสูง|โรบาร์|กันชน|บันได|แร็ค|แรค|ฝาครอบ|สติ๊กเกอร์|ขัด|เคลือบ|เก็บงาน)/i;
 
 function sanitizeLine(raw: string): string {
   return raw.replace(/^[\s\-•*]+/, "").replace(/\s+/g, " ").trim();
@@ -162,13 +167,54 @@ function cleanWorkLine(raw: string): string {
   return removeCarIdentityFragments(removeMentions(raw));
 }
 
+function normalizeWorkItemText(raw: string): string {
+  return sanitizeLine(raw)
+    .replace(/ติด\s*ฟิล์ม\s*รอบคัน/gi, "ติดฟิล์มรอบคัน")
+    .replace(/ฟิล์ม\s*รอบคัน/gi, "ฟิล์มรอบคัน");
+}
+
+function lineKey(raw: string): string {
+  return String(raw ?? "").replace(/\s+/g, "").toLowerCase();
+}
+
+function canAcceptDetail(raw: string): boolean {
+  return DETAIL_PARENT_RE.test(raw);
+}
+
+function looksLikeDetailLine(raw: string): boolean {
+  if (!raw) return false;
+  if (STRONG_WORK_INTENT_RE.test(raw)) return false;
+  if (looksLikeVehicleContext(raw) || looksLikeLinePersonContext(raw) || looksLikeCarReferenceMeta(raw)) return false;
+  if (DETAIL_LINE_RE.test(raw)) return true;
+  return /[0-9]/.test(raw) && /[ก-ฮ]/.test(raw) && semanticTokens(raw).length <= 6;
+}
+
+function addWorkItem(target: Array<{ text: string; note: string }>, value: string) {
+  const clean = normalizeWorkItemText(value);
+  if (!clean) return;
+  const key = lineKey(clean);
+  if (target.some((item) => lineKey(item.text) === key)) return;
+  target.push({ text: clean, note: "" });
+}
+
+function addDetailToLast(target: Array<{ text: string; note: string }>, value: string): boolean {
+  const clean = sanitizeLine(value);
+  if (!clean || target.length === 0) return false;
+  const last = target[target.length - 1];
+  if (!last || !canAcceptDetail(last.text)) return false;
+  const parts = last.note ? last.note.split(/\s*\/\s*/) : [];
+  if (!parts.some((part) => lineKey(part) === lineKey(clean))) parts.push(clean);
+  last.note = parts.join(" / ");
+  return true;
+}
+
 export function splitLineTextForInbox(text: string): SplitLineTextResult {
   const lines = text
     .split(/\r?\n/)
     .map((l) => sanitizeLine(l))
     .filter(Boolean);
 
-  const items: string[] = [];
+  const groupedItems: Array<{ text: string; note: string }> = [];
   const ignoredVehicle: string[] = [];
   const ignoredMentions: string[] = [];
   const ignoredNoise: string[] = [];
@@ -200,16 +246,24 @@ export function splitLineTextForInbox(text: string): SplitLineTextResult {
       continue;
     }
 
+    if (looksLikeDetailLine(line)) {
+      if (addDetailToLast(groupedItems, line)) continue;
+      addUnique(ignoredNoise, rawLine);
+      continue;
+    }
+
     if (looksLikeNoiseOnly(line)) {
       addUnique((rawLine.match(MENTION_RE) ?? []).length > 0 ? ignoredMentions : ignoredNoise, rawLine);
       continue;
     }
 
-    addUnique(items, line);
+    addWorkItem(groupedItems, line);
   }
 
+  const grouped = groupedItems.slice(0, 60);
   return {
-    items: items.slice(0, 60),
+    items: grouped.map((item) => item.text),
+    grouped_items: grouped,
     ignored_vehicle_spec_lines: ignoredVehicle.slice(0, 30),
     ignored_mention_lines: ignoredMentions.slice(0, 30),
     ignored_noise_lines: ignoredNoise.slice(0, 30),

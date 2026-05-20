@@ -7,6 +7,7 @@ export type DuplicateStatus = "new" | "duplicate" | "possible_duplicate" | "uncl
 export type LineInboxAnalyzeItem = {
   raw_text: string;
   suggested_item_name: string;
+  suggested_note?: string;
   suggested_category: string;
   suggested_status: string;
   duplicate_status: DuplicateStatus;

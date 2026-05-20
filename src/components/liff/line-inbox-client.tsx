@@ -100,7 +100,7 @@ export function LineInboxClient({ initialCarRowId = "", initialCarId = null }: P
       const next: RowDraft[] = (data.items ?? []).map((item) => ({
         ...item,
         action: defaultAction(item),
-        note: "",
+        note: item.suggested_note ?? "",
       }));
       setRows(next);
     } catch (e) {

@@ -72,6 +72,7 @@
 - [x] **Issue #26 stock/spec + person-context matching:** LINE Inbox now treats stock/spec/model/color/red-plate lines as car context only, searches cars from stock-like numbers plus spec/brand/model/color/model-year tokens, filters person/chat-context lines such as `LoSo 🚙🚗 Aekkarach TH ... กวาง` into ignored context, returns full detected car data when matched, and requires manual car selection when unresolved instead of defaulting to the first loaded car.
 - [x] **AI whole-message analyze contract:** LINE Inbox AI now classifies the full pasted message into `car_context`, `people_context`, `actual_work_items`, `notes`, and `ignored_noise`; only guarded `actual_work_items` become saveable rows.
 - [x] **Issue #29 existing-vs-new review:** `/m/orders` manual LINE Inbox analyze now shows existing `order_items` for the detected car separately from AI-suggested new rows. Staff can edit item name, assignee, status, note, due date, and choose create/merge/skip before confirm. New rows default assignee from the existing sale-code owner mapping when the detected car sale is mapped; duplicate suggestions show the matched existing item. No webhook/schema/public.cars change.
+- [x] **Issue #29 detail grouping:** LINE Inbox analyze groups main action + following detail/spec lines into one suggestion with `suggested_note` (for example film percentages), so detail rows such as `ประตู 80%` are not saveable standalone items.
 - [ ] LINE Bot / Messaging API webhook / group message ingestion.
 
 ## Future Two-way Sync

@@ -22,8 +22,27 @@ function addUnique(target: string[], value: string) {
   target.push(clean);
 }
 
+function lineKey(value: string): string {
+  return String(value ?? "").replace(/\s+/g, "").toLowerCase();
+}
+
+function mergeNote(existing: string | undefined, next: string | undefined): string {
+  const parts = String(existing ?? "")
+    .split(/\s*\/\s*/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  for (const part of String(next ?? "")
+    .split(/\s*\/\s*/)
+    .map((p) => p.trim())
+    .filter(Boolean)) {
+    if (!parts.some((v) => lineKey(v) === lineKey(part))) parts.push(part);
+  }
+  return parts.join(" / ");
+}
+
 function asAiItemText(item: NonNullable<LineInboxAiAnalyzeDraft["items"]>[number]): {
   text: string;
+  note?: string;
   confidence?: number;
   reason?: string;
 } {
@@ -31,6 +50,7 @@ function asAiItemText(item: NonNullable<LineInboxAiAnalyzeDraft["items"]>[number
   const text = String(item.suggested_item_name ?? item.raw_text ?? "").trim();
   return {
     text,
+    note: String(item.suggested_note ?? "").trim() || undefined,
     confidence: typeof item.confidence === "number" ? item.confidence : undefined,
     reason: String(item.reason ?? "").trim() || undefined,
   };
@@ -40,7 +60,7 @@ function mergeAiWithRuleGuard(
   rawText: string,
   aiDraft: LineInboxAiAnalyzeDraft | null
 ): {
-  lines: Array<{ text: string; aiConfidence?: number; aiReason?: string }>;
+  lines: Array<{ text: string; note?: string; aiConfidence?: number; aiReason?: string }>;
   ignored_vehicle_spec_lines: string[];
   ignored_mention_lines: string[];
   ignored_noise_lines: string[];
@@ -59,11 +79,19 @@ function mergeAiWithRuleGuard(
   for (const line of aiDraft?.ignored_mention_lines ?? []) addUnique(ignoredMention, line);
   for (const line of aiDraft?.ignored_noise_lines ?? []) addUnique(ignoredNoise, line);
 
-  const sourceItems = aiDraft?.items?.length ? aiDraft.items : fallback.items;
-  const guardedLines: Array<{ text: string; aiConfidence?: number; aiReason?: string }> = [];
+  const fallbackGrouped = (fallback.grouped_items ?? []).filter((item) => item.text);
+  const sourceItems = aiDraft?.items?.length
+    ? aiDraft.items
+    : fallbackGrouped.length
+      ? fallbackGrouped.map((item) => ({
+          raw_text: item.text,
+          suggested_item_name: item.text,
+          suggested_note: item.note,
+        }))
+      : fallback.items;
+  const guardedLines: Array<{ text: string; note?: string; aiConfidence?: number; aiReason?: string }> = [];
 
   for (const source of sourceItems) {
-    const aiItem = typeof source === "string" ? undefined : source;
     const candidate = asAiItemText(source);
     if (!candidate.text) continue;
 
@@ -72,20 +100,35 @@ function mergeAiWithRuleGuard(
     for (const line of guarded.ignored_mention_lines) addUnique(ignoredMention, line);
     for (const line of guarded.ignored_noise_lines) addUnique(ignoredNoise, line);
 
-    for (const line of guarded.items) {
-      const key = line.toLowerCase();
-      if (guardedLines.some((v) => v.text.toLowerCase() === key)) continue;
+    for (const [lineIndex, line] of guarded.items.entries()) {
+      const key = lineKey(line);
+      const existingLine = guardedLines.find((v) => lineKey(v.text) === key);
+      const note = lineIndex === 0 ? candidate.note : undefined;
+      if (existingLine) {
+        existingLine.note = mergeNote(existingLine.note, note);
+        continue;
+      }
       guardedLines.push({
         text: line,
-        aiConfidence: candidate.confidence ?? (typeof aiItem?.confidence === "number" ? aiItem.confidence : undefined),
+        note,
+        aiConfidence: candidate.confidence,
         aiReason: candidate.reason,
       });
     }
   }
 
+  for (const grouped of fallbackGrouped) {
+    const existingLine = guardedLines.find((line) => lineKey(line.text) === lineKey(grouped.text));
+    if (existingLine) {
+      existingLine.note = mergeNote(existingLine.note, grouped.note);
+    } else {
+      guardedLines.push({ text: grouped.text, note: grouped.note || undefined });
+    }
+  }
+
   if (guardedLines.length === 0 && fallback.items.length > 0) {
-    for (const line of fallback.items) {
-      guardedLines.push({ text: line });
+    for (const grouped of fallbackGrouped.length ? fallbackGrouped : fallback.items.map((text) => ({ text, note: "" }))) {
+      guardedLines.push({ text: grouped.text, note: grouped.note || undefined });
     }
   }
 
@@ -153,6 +196,7 @@ export async function runLineInboxAnalyzeCore(
     items.push({
       raw_text: line,
       suggested_item_name: line.slice(0, 200),
+      suggested_note: String(lineInfo.note ?? "").trim() || undefined,
       suggested_category,
       suggested_status,
       duplicate_status: dup.duplicate_status,

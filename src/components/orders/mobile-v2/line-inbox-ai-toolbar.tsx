@@ -427,7 +427,7 @@ export function LineInboxAiToolbar({
         return {
           ...item,
           action,
-          note: "",
+          note: item.suggested_note ?? "",
           included: action !== "skip",
           itemName: item.suggested_item_name || item.raw_text,
           assignee: matched?.assignee_staff || mappedAssignee || "",
