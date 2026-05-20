@@ -427,7 +427,7 @@ export function LineInboxAiToolbar({
         return {
           ...item,
           action,
-          note: item.suggested_note ?? "",
+          note: "",
           included: action !== "skip",
           itemName: item.suggested_item_name || item.raw_text,
           assignee: matched?.assignee_staff || mappedAssignee || "",
@@ -971,6 +971,13 @@ export function LineInboxAiToolbar({
                           />
                         </label>
                       </div>
+
+                      {row.suggested_note ? (
+                        <p className="rounded-lg bg-sky-50 px-2 py-1.5 text-[11px] leading-snug text-sky-900 ring-1 ring-sky-200/80">
+                          {uiLang === "en" ? "Reference from LINE" : "รายละเอียดอ้างอิงจาก LINE"}:{" "}
+                          <span className="font-medium">{row.suggested_note}</span>
+                        </p>
+                      ) : null}
 
                       {row.reason ? <p className="text-[11px] text-slate-500">{row.reason}</p> : null}
                     </li>

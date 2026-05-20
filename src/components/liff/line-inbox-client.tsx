@@ -100,7 +100,7 @@ export function LineInboxClient({ initialCarRowId = "", initialCarId = null }: P
       const next: RowDraft[] = (data.items ?? []).map((item) => ({
         ...item,
         action: defaultAction(item),
-        note: item.suggested_note ?? "",
+        note: "",
       }));
       setRows(next);
     } catch (e) {
@@ -276,6 +276,11 @@ export function LineInboxClient({ initialCarRowId = "", initialCarId = null }: P
                   </span>
                 </div>
                 <p className="text-[12px] text-slate-600">{row.reason}</p>
+                {row.suggested_note ? (
+                  <p className="rounded-md bg-sky-50 px-2 py-1.5 text-[11px] text-sky-900 ring-1 ring-sky-200/80">
+                    รายละเอียดอ้างอิงจาก LINE: <span className="font-medium">{row.suggested_note}</span>
+                  </p>
+                ) : null}
                 <label className="block text-[11px] font-medium text-slate-600">ชื่องาน</label>
                 <input
                   className="w-full rounded border border-slate-200 px-2 py-1.5 text-[13px]"
