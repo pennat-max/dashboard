@@ -7812,6 +7812,8 @@ export function MobileOrderTrackingHome({
                       orders={lineInboxAiOrderPicks}
                       uiLang={uiLang}
                       preferredOrderId={initialFocusedOrderId}
+                      staffOptions={staffRoster}
+                      statusOptions={itemStatusRoster}
                       onSaved={() => router.refresh()}
                     />
                     {itemStatusFilterOptionsForToolbar.map((s) => (

@@ -28,12 +28,18 @@ export type LineInboxAnalyzeResponse = {
   ignored_vehicle_spec_lines?: string[];
   ignored_mention_lines?: string[];
   ignored_noise_lines?: string[];
+  existing_items?: ExistingOrderItemRow[];
   items: LineInboxAnalyzeItem[];
   needs_human_review: boolean;
 };
 
 export type ExistingOrderItemRow = {
   id: string;
+  order_task_id?: string;
   label: string;
   status: string;
+  assignee_staff?: string;
+  note?: string;
+  due_date?: string;
+  updated_at?: string;
 };

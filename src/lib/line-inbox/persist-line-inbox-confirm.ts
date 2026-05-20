@@ -13,6 +13,8 @@ export type PersistConfirmRow = {
   item_name: string;
   item_status?: string | null;
   note?: string | null;
+  assignee_staff?: string | null;
+  due_date?: string | null;
 };
 
 function isMissingDbColumnError(message: string): boolean {
@@ -85,17 +87,22 @@ export async function persistLineInboxConfirmations(
     if (c.action === "create") {
       const dbStatus = itemStatusForOrderItemsRow(c.item_status || undefined);
       const labelEnResolved = String(itemNameEnMap[c.item_name] ?? "").trim() || null;
+      const assigneeStaff = String(c.assignee_staff ?? "").trim();
+      const dueDate = String(c.due_date ?? "").trim();
+      const createPayload: Record<string, unknown> = {
+        order_task_id: taskId,
+        label: c.item_name,
+        label_en: labelEnResolved ?? undefined,
+        qty: 1,
+        status: dbStatus,
+        status_changed_at: new Date().toISOString(),
+        note: c.note || null,
+      };
+      if (assigneeStaff) createPayload.assignee_staff = assigneeStaff;
+      if (dueDate) createPayload.due_date = dueDate;
       const inserted = await supabase
         .from(ORDER_ITEMS_TABLE)
-        .insert({
-          order_task_id: taskId,
-          label: c.item_name,
-          label_en: labelEnResolved ?? undefined,
-          qty: 1,
-          status: dbStatus,
-          status_changed_at: new Date().toISOString(),
-          note: c.note || null,
-        })
+        .insert(createPayload)
         .select("id")
         .single();
       if (inserted.error) {
@@ -120,6 +127,9 @@ export async function persistLineInboxConfirmations(
           new_value: {
             label: c.item_name,
             status: dbStatus,
+            assignee_staff: assigneeStaff || null,
+            due_date: dueDate || null,
+            note: c.note || null,
             source: "line_inbox_confirm",
             line_inbox_message_id: lineInboxMsgRef || null,
           },
@@ -139,6 +149,9 @@ export async function persistLineInboxConfirmations(
         new_value: {
           label: c.item_name,
           status: dbStatus,
+          assignee_staff: assigneeStaff || null,
+          due_date: dueDate || null,
+          note: c.note || null,
           source: "line_inbox_confirm",
           line_inbox_message_id: lineInboxMsgRef || null,
         },
@@ -149,11 +162,20 @@ export async function persistLineInboxConfirmations(
       saved.push({ order_item_id: id, label: c.item_name, action: "create" });
     } else if (c.action === "merge") {
       const oid = String(c.order_item_id ?? "").trim();
-      const { data: before } = await supabase
+      let beforeQuery = await supabase
         .from(ORDER_ITEMS_TABLE)
-        .select("id,order_task_id,label,status")
+        .select("id,order_task_id,label,status,assignee_staff,note,due_date")
         .eq("id", oid)
         .maybeSingle();
+      if (beforeQuery.error && isMissingDbColumnError(beforeQuery.error.message)) {
+        beforeQuery = await supabase
+          .from(ORDER_ITEMS_TABLE)
+          .select("id,order_task_id,label,status")
+          .eq("id", oid)
+          .maybeSingle();
+      }
+      if (beforeQuery.error) throw new Error(beforeQuery.error.message);
+      const before = beforeQuery.data;
       if (!before || String(before.order_task_id ?? "").trim() !== taskId) {
         throw new Error(`order_item ${oid} not part of this car task`);
       }
@@ -168,6 +190,8 @@ export async function persistLineInboxConfirmations(
         status_changed_at: new Date().toISOString(),
       };
       if (c.note) patch.note = c.note;
+      if (String(c.assignee_staff ?? "").trim()) patch.assignee_staff = String(c.assignee_staff).trim();
+      if (String(c.due_date ?? "").trim()) patch.due_date = String(c.due_date).trim();
       if (labelEnResolved) patch.label_en = labelEnResolved;
 
       let { error } = await supabase.from(ORDER_ITEMS_TABLE).update(patch).eq("id", oid);
@@ -188,6 +212,9 @@ export async function persistLineInboxConfirmations(
         new_value: {
           label: labelNext,
           status: dbStatus,
+          assignee_staff: String(c.assignee_staff ?? "").trim() || null,
+          due_date: String(c.due_date ?? "").trim() || null,
+          note: c.note || null,
           source: "line_inbox_confirm_merge",
           line_inbox_message_id: lineInboxMsgRef || null,
         },

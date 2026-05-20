@@ -71,6 +71,7 @@
 - [x] **Issue #24 UX cleanup:** `/m/orders` LINE Inbox review shows detected car as full plate/spec with chassis/sale when available, hides ignored mention/spec/noise from normal staff UI, and keeps raw `car_row_id` only in dev-only debug details. Suggested save rows stay limited to real work items.
 - [x] **Issue #26 stock/spec + person-context matching:** LINE Inbox now treats stock/spec/model/color/red-plate lines as car context only, searches cars from stock-like numbers plus spec/brand/model/color/model-year tokens, filters person/chat-context lines such as `LoSo 🚙🚗 Aekkarach TH ... กวาง` into ignored context, returns full detected car data when matched, and requires manual car selection when unresolved instead of defaulting to the first loaded car.
 - [x] **AI whole-message analyze contract:** LINE Inbox AI now classifies the full pasted message into `car_context`, `people_context`, `actual_work_items`, `notes`, and `ignored_noise`; only guarded `actual_work_items` become saveable rows.
+- [x] **Issue #29 existing-vs-new review:** `/m/orders` manual LINE Inbox analyze now shows existing `order_items` for the detected car separately from AI-suggested new rows. Staff can edit item name, assignee, status, note, due date, and choose create/merge/skip before confirm. Duplicate suggestions show the matched existing item. No webhook/schema/public.cars change.
 - [ ] LINE Bot / Messaging API webhook / group message ingestion.
 
 ## Future Two-way Sync

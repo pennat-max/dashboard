@@ -3,7 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import type { DuplicateStatus, LineInboxAnalyzeItem, LineInboxAnalyzeResponse } from "@/lib/line-inbox/types";
+import type {
+  DuplicateStatus,
+  ExistingOrderItemRow,
+  LineInboxAnalyzeItem,
+  LineInboxAnalyzeResponse,
+} from "@/lib/line-inbox/types";
 
 export type LineInboxAiOrderPick = {
   id: string;
@@ -40,11 +45,21 @@ type RowDraft = LineInboxAnalyzeItem & {
   action: "skip" | "create" | "merge";
   note: string;
   included: boolean;
+  itemName: string;
+  assignee: string;
+  status: string;
+  dueDate: string;
 };
 
 function defaultAction(item: LineInboxAnalyzeItem): RowDraft["action"] {
   if (item.duplicate_status === "duplicate" && String(item.matched_order_item_id ?? "").trim()) {
     return "merge";
+  }
+  if (
+    item.duplicate_status === "possible_duplicate" &&
+    String(item.matched_order_item_id ?? "").trim()
+  ) {
+    return "skip";
   }
   return "create";
 }
@@ -81,15 +96,39 @@ function normalizeLookup(value: string | null | undefined): string {
     .toUpperCase();
 }
 
+function safeDateValue(value: string | null | undefined): string {
+  const raw = String(value ?? "").trim();
+  const m = raw.match(/^\d{4}-\d{2}-\d{2}/);
+  return m?.[0] ?? "";
+}
+
+function addUniqueOption(target: string[], value: string | null | undefined) {
+  const clean = String(value ?? "").trim();
+  if (!clean) return;
+  const key = clean.toLowerCase();
+  if (target.some((v) => v.toLowerCase() === key)) return;
+  target.push(clean);
+}
+
+function actionLabelTh(action: RowDraft["action"]): string {
+  if (action === "merge") return "อัปเดตงานเดิม";
+  if (action === "skip") return "ข้าม";
+  return "เพิ่มงานใหม่";
+}
+
 export function LineInboxAiToolbar({
   orders,
   uiLang,
   preferredOrderId,
+  staffOptions = [],
+  statusOptions = [],
   onSaved,
 }: {
   orders: LineInboxAiOrderPick[];
   uiLang: UiLang;
   preferredOrderId?: string | null;
+  staffOptions?: string[];
+  statusOptions?: string[];
   onSaved?: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -103,6 +142,7 @@ export function LineInboxAiToolbar({
   const [ignoredVehicleLines, setIgnoredVehicleLines] = useState<string[]>([]);
   const [ignoredMentionLines, setIgnoredMentionLines] = useState<string[]>([]);
   const [ignoredNoiseLines, setIgnoredNoiseLines] = useState<string[]>([]);
+  const [existingItems, setExistingItems] = useState<ExistingOrderItemRow[]>([]);
   const [rows, setRows] = useState<RowDraft[]>([]);
   const [saveHint, setSaveHint] = useState<string | null>(null);
 
@@ -238,6 +278,25 @@ export function LineInboxAiToolbar({
   }, [selected]);
   const hasEffectiveCar = Boolean(effectiveCarRowId || effectiveCarId != null);
 
+  const staffChoices = useMemo(() => {
+    const out: string[] = [];
+    for (const name of staffOptions) addUniqueOption(out, name);
+    for (const item of existingItems) addUniqueOption(out, item.assignee_staff);
+    for (const row of rows) addUniqueOption(out, row.assignee);
+    return out;
+  }, [existingItems, rows, staffOptions]);
+
+  const statusChoices = useMemo(() => {
+    const out: string[] = [];
+    for (const status of statusOptions) addUniqueOption(out, status);
+    for (const status of ["เช็ค", "มี", "สั่ง", "มา", "รถนอก", "ช่างนอก", "จบ"]) {
+      addUniqueOption(out, status);
+    }
+    for (const item of existingItems) addUniqueOption(out, item.status);
+    for (const row of rows) addUniqueOption(out, row.status);
+    return out;
+  }, [existingItems, rows, statusOptions]);
+
   const pendingSaveCount = useMemo(
     () => rows.filter((r) => r.included && r.action !== "skip").length,
     [rows]
@@ -303,6 +362,7 @@ export function LineInboxAiToolbar({
     setError(null);
     setSaveHint(null);
     setAnalyzeLoading(true);
+    setExistingItems([]);
     try {
       const res = await fetch("/api/line-inbox/analyze", {
         method: "POST",
@@ -320,17 +380,31 @@ export function LineInboxAiToolbar({
       setIgnoredVehicleLines(data.ignored_vehicle_spec_lines ?? []);
       setIgnoredMentionLines(data.ignored_mention_lines ?? []);
       setIgnoredNoiseLines(data.ignored_noise_lines ?? []);
-      const next: RowDraft[] = (data.items ?? []).map((item) => ({
-        ...item,
-        action: defaultAction(item),
-        note: "",
-        included: true,
-      }));
+      const existingFromAnalyze = data.existing_items ?? [];
+      setExistingItems(existingFromAnalyze);
+      const existingById = new Map(
+        existingFromAnalyze.map((item) => [String(item.id ?? "").trim(), item])
+      );
+      const next: RowDraft[] = (data.items ?? []).map((item) => {
+        const action = defaultAction(item);
+        const matched = existingById.get(String(item.matched_order_item_id ?? "").trim());
+        return {
+          ...item,
+          action,
+          note: "",
+          included: action !== "skip",
+          itemName: item.suggested_item_name || item.raw_text,
+          assignee: matched?.assignee_staff ?? "",
+          status: item.suggested_status || matched?.status || "",
+          dueDate: safeDateValue(matched?.due_date),
+        };
+      });
       setRows(next);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setRows([]);
       setDetected(null);
+      setExistingItems([]);
       setIgnoredVehicleLines([]);
       setIgnoredMentionLines([]);
       setIgnoredNoiseLines([]);
@@ -356,18 +430,25 @@ export function LineInboxAiToolbar({
         );
       }
       const confirmations = rows.map((r) => {
-        if (!r.included) {
+        const itemName = String(r.itemName || r.suggested_item_name || r.raw_text).trim();
+        const status = String(r.status || r.suggested_status || "").trim();
+        const note = String(r.note ?? "").trim();
+        const assignee = String(r.assignee ?? "").trim();
+        const dueDate = safeDateValue(r.dueDate);
+        if (!r.included || r.action === "skip") {
           return {
             action: "skip" as const,
-            item_name: r.suggested_item_name || r.raw_text,
+            item_name: itemName,
           };
         }
         return {
           action: r.action,
           order_item_id: r.action === "merge" ? r.matched_order_item_id : undefined,
-          item_name: r.suggested_item_name || r.raw_text,
-          item_status: r.suggested_status || undefined,
-          note: r.note.trim() || undefined,
+          item_name: itemName,
+          item_status: status || undefined,
+          note: note || undefined,
+          assignee_staff: assignee || undefined,
+          due_date: dueDate || undefined,
         };
       });
 
@@ -393,6 +474,7 @@ export function LineInboxAiToolbar({
       );
       setRows([]);
       setDetected(null);
+      setExistingItems([]);
       setIgnoredVehicleLines([]);
       setIgnoredMentionLines([]);
       setIgnoredNoiseLines([]);
@@ -684,41 +766,180 @@ export function LineInboxAiToolbar({
             </details>
           ) : null}
 
+          {detected && hasEffectiveCar ? (
+            <div className="mb-3 rounded-xl border border-slate-200 bg-white px-3 py-2 ring-1 ring-slate-100">
+              <div className="mb-2 flex items-baseline justify-between gap-2">
+                <p className="text-[12px] font-bold text-slate-800">งานเดิมของรถคันนี้</p>
+                <span className="text-[11px] font-semibold tabular-nums text-slate-500">
+                  {existingItems.length}
+                </span>
+              </div>
+              {existingItems.length === 0 ? (
+                <p className="rounded-lg bg-slate-50 px-2 py-2 text-[11px] text-slate-500">
+                  ยังไม่พบงานเดิมของรถคันนี้ใน order_items
+                </p>
+              ) : (
+                <ul className="max-h-[min(28vh,220px)] space-y-2 overflow-y-auto overscroll-contain pr-1">
+                  {existingItems.map((item) => (
+                    <li
+                      key={item.id}
+                      className="rounded-lg bg-slate-50 px-2 py-2 text-[11px] ring-1 ring-slate-200/80"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <span className="min-w-0 flex-1 font-semibold leading-snug text-slate-900">
+                          {item.label || "-"}
+                        </span>
+                        {item.status ? (
+                          <span className="rounded-full bg-white px-2 py-0.5 font-semibold text-slate-700 ring-1 ring-slate-200">
+                            {item.status}
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-slate-500">
+                        {item.assignee_staff ? <span>ผู้รับผิดชอบ: {item.assignee_staff}</span> : null}
+                        {item.due_date ? <span>วันกำหนด: {safeDateValue(item.due_date) || item.due_date}</span> : null}
+                        {item.updated_at ? <span>อัปเดต: {safeDateValue(item.updated_at) || item.updated_at}</span> : null}
+                      </div>
+                      {item.note ? <p className="mt-1 line-clamp-2 text-slate-500">หมายเหตุ: {item.note}</p> : null}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ) : null}
+
           {rows.length > 0 ? (
             <div className="space-y-2">
               <p className="text-[11px] font-semibold text-slate-700">
-                {uiLang === "en" ? "Suggested lines" : "รายการที่เสนอ"} ({rows.length})
+                {uiLang === "en" ? "New AI suggestions" : "งานใหม่ที่ AI เสนอ"} ({rows.length})
               </p>
-              <ul className="max-h-[min(35vh,240px)] space-y-2 overflow-y-auto overscroll-contain pr-1">
-                {rows.map((row, i) => (
-                  <li
-                    key={`${row.raw_text}-${i}`}
-                    className="rounded-xl border border-slate-200 bg-slate-50/90 p-2.5"
-                  >
-                    <label className="flex cursor-pointer gap-2">
-                      <input
-                        type="checkbox"
-                        checked={row.included}
-                        onChange={(e) => updateRow(i, { included: e.target.checked })}
-                        className="mt-0.5 h-5 w-5 shrink-0 rounded border-slate-400"
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span
-                          className={cn(
-                            "mb-1 inline-block rounded-full border px-2 py-0.5 text-[10px] font-semibold",
-                            duplicateBadgeClass(row.duplicate_status)
-                          )}
-                        >
-                          {duplicateLabelTh(row.duplicate_status)}
-                        </span>
-                        <span className="block text-[13px] font-medium leading-snug text-slate-900">
-                          {row.suggested_item_name || row.raw_text}
-                        </span>
-                        <span className="text-[11px] text-slate-500">{row.reason}</span>
-                      </span>
-                    </label>
-                  </li>
-                ))}
+              <ul className="max-h-[min(48vh,420px)] space-y-3 overflow-y-auto overscroll-contain pr-1">
+                {rows.map((row, i) => {
+                  const canMerge = Boolean(String(row.matched_order_item_id ?? "").trim());
+                  return (
+                    <li
+                      key={`${row.raw_text}-${i}`}
+                      className="space-y-2 rounded-xl border border-slate-200 bg-slate-50/90 p-2.5"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <label className="flex cursor-pointer items-center gap-2 text-[12px] font-semibold text-slate-900">
+                          <input
+                            type="checkbox"
+                            checked={row.included}
+                            onChange={(e) => updateRow(i, { included: e.target.checked })}
+                            className="h-5 w-5 shrink-0 rounded border-slate-400"
+                          />
+                          {uiLang === "en" ? "Approve" : "เลือกบันทึก"}
+                        </label>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span
+                            className={cn(
+                              "inline-block rounded-full border px-2 py-0.5 text-[10px] font-semibold",
+                              duplicateBadgeClass(row.duplicate_status)
+                            )}
+                          >
+                            {duplicateLabelTh(row.duplicate_status)}
+                          </span>
+                          <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-700 ring-1 ring-slate-200">
+                            {actionLabelTh(row.action)}
+                          </span>
+                        </div>
+                      </div>
+
+                      {row.matched_item_name ? (
+                        <p className="rounded-lg bg-amber-50 px-2 py-1 text-[11px] text-amber-900 ring-1 ring-amber-200/80">
+                          {uiLang === "en" ? "Similar existing item" : "คล้ายงานเดิม"}:{" "}
+                          <span className="font-semibold">{row.matched_item_name}</span>
+                        </p>
+                      ) : null}
+
+                      <label className="block text-[11px] font-medium text-slate-600">
+                        {uiLang === "en" ? "Item name" : "ชื่องาน"}
+                        <input
+                          value={row.itemName}
+                          onChange={(e) => updateRow(i, { itemName: e.target.value })}
+                          className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-[13px] font-medium text-slate-900 outline-none ring-violet-400 focus:ring-2"
+                        />
+                      </label>
+
+                      <div className="grid gap-2 sm:grid-cols-3">
+                        <label className="block text-[11px] font-medium text-slate-600">
+                          {uiLang === "en" ? "Action" : "การทำงาน"}
+                          <select
+                            value={row.action}
+                            onChange={(e) => {
+                              const action = e.target.value as RowDraft["action"];
+                              updateRow(i, {
+                                action,
+                                included: action === "skip" ? false : row.included || true,
+                              });
+                            }}
+                            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-[13px] font-semibold text-slate-900"
+                          >
+                            <option value="create">{uiLang === "en" ? "Create new" : "เพิ่มงานใหม่"}</option>
+                            <option value="merge" disabled={!canMerge}>
+                              {uiLang === "en" ? "Update existing" : "อัปเดตงานเดิม"}
+                            </option>
+                            <option value="skip">{uiLang === "en" ? "Skip" : "ข้าม"}</option>
+                          </select>
+                        </label>
+                        <label className="block text-[11px] font-medium text-slate-600">
+                          {uiLang === "en" ? "Assignee" : "ผู้รับผิดชอบ"}
+                          <select
+                            value={row.assignee}
+                            onChange={(e) => updateRow(i, { assignee: e.target.value })}
+                            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-[13px] font-semibold text-slate-900"
+                          >
+                            <option value="">{uiLang === "en" ? "Not set" : "ยังไม่ระบุ"}</option>
+                            {staffChoices.map((name) => (
+                              <option key={name} value={name}>
+                                {name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="block text-[11px] font-medium text-slate-600">
+                          {uiLang === "en" ? "Status" : "สถานะ"}
+                          <select
+                            value={row.status}
+                            onChange={(e) => updateRow(i, { status: e.target.value })}
+                            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-[13px] font-semibold text-slate-900"
+                          >
+                            <option value="">{uiLang === "en" ? "Not set" : "ยังไม่ระบุ"}</option>
+                            {statusChoices.map((status) => (
+                              <option key={status} value={status}>
+                                {status}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+
+                      <div className="grid gap-2 sm:grid-cols-[10rem_1fr]">
+                        <label className="block text-[11px] font-medium text-slate-600">
+                          {uiLang === "en" ? "Due date" : "วันกำหนด"}
+                          <input
+                            type="date"
+                            value={row.dueDate}
+                            onChange={(e) => updateRow(i, { dueDate: e.target.value })}
+                            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-[13px] font-semibold text-slate-900"
+                          />
+                        </label>
+                        <label className="block text-[11px] font-medium text-slate-600">
+                          {uiLang === "en" ? "Note" : "หมายเหตุ"}
+                          <input
+                            value={row.note}
+                            onChange={(e) => updateRow(i, { note: e.target.value })}
+                            placeholder={uiLang === "en" ? "Optional note" : "เพิ่มหมายเหตุได้"}
+                            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-[13px] text-slate-900 outline-none ring-violet-400 focus:ring-2"
+                          />
+                        </label>
+                      </div>
+
+                      {row.reason ? <p className="text-[11px] text-slate-500">{row.reason}</p> : null}
+                    </li>
+                  );
+                })}
               </ul>
 
               <Button

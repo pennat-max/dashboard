@@ -4,7 +4,7 @@ import { resolveCarFromContext } from "@/lib/line-inbox/resolve-car";
 import { classifyDuplicateLine, suggestCategoryAndStatus } from "@/lib/line-inbox/heuristic-suggest";
 import { runLineInboxAiAnalyze, type LineInboxAiAnalyzeDraft } from "@/lib/line-inbox/ai-analyze";
 import { splitLineTextForInbox } from "@/lib/line-inbox/split-line-text";
-import type { LineInboxAnalyzeResponse } from "@/lib/line-inbox/types";
+import type { ExistingOrderItemRow, LineInboxAnalyzeResponse } from "@/lib/line-inbox/types";
 
 export type RunLineInboxAnalyzeInput = {
   raw_text: string;
@@ -118,7 +118,7 @@ export async function runLineInboxAnalyzeCore(
   });
 
   const carResolved = Boolean(detected.car_row_id);
-  let existing: Array<{ id: string; label: string; status: string }> = [];
+  let existing: ExistingOrderItemRow[] = [];
   if (carResolved) {
     const taskId = await fetchOrderTaskIdForCar(supabase, detected.car_row_id, carIdForTask);
     if (taskId) {
@@ -184,6 +184,7 @@ export async function runLineInboxAnalyzeCore(
     ignored_vehicle_spec_lines: guarded.ignored_vehicle_spec_lines,
     ignored_mention_lines: guarded.ignored_mention_lines,
     ignored_noise_lines: guarded.ignored_noise_lines,
+    existing_items: existing,
     items,
     needs_human_review,
     attachments_meta_count: attachmentsCount,
