@@ -117,6 +117,102 @@ function actionLabelTh(action: RowDraft["action"]): string {
   return "เพิ่มงานใหม่";
 }
 
+const LINE_INBOX_PHOTO_REF_SPLIT_REGEX = /(ตามรูป|ตามภาพ|ref\s*pic|as\s+photo|see\s+photo)/gi;
+const LINE_INBOX_PHOTO_REF_EXACT_REGEX = /^(ตามรูป|ตามภาพ|ref\s*pic|as\s+photo|see\s+photo)$/i;
+
+function hasLineInboxPhotoReference(value: string | null | undefined): boolean {
+  return /(ตามรูป|ตามภาพ|ref\s*pic|as\s+photo|see\s+photo)/i.test(String(value ?? ""));
+}
+
+function stablePillIndex(value: string): number {
+  let h = 0;
+  for (let i = 0; i < value.length; i += 1) h = (h * 31 + value.charCodeAt(i)) >>> 0;
+  return h;
+}
+
+const LINE_INBOX_ASSIGNEE_PILL_CLASSES = [
+  "bg-emerald-100 text-emerald-950 ring-emerald-300",
+  "bg-cyan-100 text-cyan-950 ring-cyan-300",
+  "bg-lime-100 text-lime-950 ring-lime-300",
+  "bg-violet-100 text-violet-950 ring-violet-300",
+  "bg-fuchsia-100 text-fuchsia-950 ring-fuchsia-300",
+  "bg-amber-100 text-amber-950 ring-amber-300",
+  "bg-sky-100 text-sky-950 ring-sky-300",
+  "bg-rose-100 text-rose-950 ring-rose-300",
+];
+
+function lineInboxAssigneePillClasses(assignee: string | null | undefined): string {
+  const name = String(assignee ?? "").trim();
+  if (!name) return "bg-white text-slate-700 ring-slate-200";
+  return LINE_INBOX_ASSIGNEE_PILL_CLASSES[
+    stablePillIndex(name) % LINE_INBOX_ASSIGNEE_PILL_CLASSES.length
+  ]!;
+}
+
+function lineInboxStatusPillClasses(status: string | null | undefined): string {
+  const s = String(status ?? "").trim();
+  if (!s) return "bg-white text-slate-700 ring-slate-200";
+  if (s === "จบ") return "bg-sky-50 text-sky-800 ring-sky-300";
+  if (s === "สั่ง" || s === "เช็ค") return "bg-amber-50 text-amber-900 ring-amber-300";
+  return "bg-white text-emerald-900 ring-slate-200";
+}
+
+function LineInboxSuggestedItemNamePreview({
+  value,
+  uiLang,
+  onEdit,
+  onPhotoReference,
+}: {
+  value: string;
+  uiLang: UiLang;
+  onEdit: () => void;
+  onPhotoReference: () => void;
+}) {
+  const text = String(value ?? "").trim() || "-";
+  const parts = text.split(LINE_INBOX_PHOTO_REF_SPLIT_REGEX).filter(Boolean);
+  return (
+    <div
+      data-line-inbox-item-name-preview=""
+      role="button"
+      tabIndex={0}
+      onClick={onEdit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onEdit();
+        }
+      }}
+      className="min-w-0 flex-1 cursor-text rounded-xl px-1.5 py-1 text-sm font-semibold leading-snug text-slate-900 ring-1 ring-transparent hover:bg-white/70 focus:outline-none focus:ring-slate-300"
+      title={uiLang === "en" ? "Tap to edit item name" : "แตะเพื่อแก้ชื่องาน"}
+    >
+      {parts.map((part, index) => {
+        const isPhotoRef = LINE_INBOX_PHOTO_REF_EXACT_REGEX.test(part.trim());
+        if (!isPhotoRef) {
+          return (
+            <span key={`${part}-${index}`} className="whitespace-pre-wrap break-words">
+              {part}
+            </span>
+          );
+        }
+        return (
+          <button
+            key={`${part}-${index}`}
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onPhotoReference();
+            }}
+            className="inline cursor-pointer border-0 bg-transparent p-0 align-baseline font-inherit font-semibold text-sky-600 underline decoration-sky-400 decoration-2 underline-offset-2 hover:text-sky-700 active:text-sky-800"
+            title={uiLang === "en" ? "Photo reference" : "รูปอ้างอิง"}
+          >
+            {part}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function LineInboxAiToolbar({
   orders,
   uiLang,
@@ -147,6 +243,7 @@ export function LineInboxAiToolbar({
   const [ignoredNoiseLines, setIgnoredNoiseLines] = useState<string[]>([]);
   const [existingItems, setExistingItems] = useState<ExistingOrderItemRow[]>([]);
   const [rows, setRows] = useState<RowDraft[]>([]);
+  const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
   const [saveHint, setSaveHint] = useState<string | null>(null);
 
   const [queueMessages, setQueueMessages] = useState<PendingQueueMessage[]>([]);
@@ -436,9 +533,11 @@ export function LineInboxAiToolbar({
         };
       });
       setRows(next);
+      setExpandedRows({});
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setRows([]);
+      setExpandedRows({});
       setDetected(null);
       setExistingItems([]);
       setIgnoredVehicleLines([]);
@@ -451,6 +550,14 @@ export function LineInboxAiToolbar({
 
   const updateRow = useCallback((index: number, patch: Partial<RowDraft>) => {
     setRows((prev) => prev.map((r, i) => (i === index ? { ...r, ...patch } : r)));
+  }, []);
+
+  const setRowExpanded = useCallback((rowKey: string, expanded: boolean) => {
+    setExpandedRows((prev) => ({ ...prev, [rowKey]: expanded }));
+  }, []);
+
+  const toggleRowExpanded = useCallback((rowKey: string) => {
+    setExpandedRows((prev) => ({ ...prev, [rowKey]: !prev[rowKey] }));
   }, []);
 
   const runConfirm = useCallback(async () => {
@@ -509,6 +616,7 @@ export function LineInboxAiToolbar({
         uiLang === "en" ? `Saved ${count} line(s).` : `บันทึกแล้ว ${count} รายการ`
       );
       setRows([]);
+      setExpandedRows({});
       setDetected(null);
       setExistingItems([]);
       setIgnoredVehicleLines([]);
@@ -852,17 +960,31 @@ export function LineInboxAiToolbar({
               <ul className="max-h-[min(48vh,420px)] space-y-3 overflow-y-auto overscroll-contain pr-1">
                 {rows.map((row, i) => {
                   const canMerge = Boolean(String(row.matched_order_item_id ?? "").trim());
+                  const rowKey = `${row.raw_text}-${row.matched_order_item_id ?? ""}-${i}`;
+                  const expanded = Boolean(expandedRows[rowKey]);
+                  const hasPhotoRef = hasLineInboxPhotoReference(row.itemName);
                   return (
                     <li
                       key={`${row.raw_text}-${i}`}
-                      className="space-y-2 rounded-xl border border-slate-200 bg-slate-50/90 p-2.5"
+                      className={cn(
+                        "space-y-2 rounded-2xl border p-2.5 ring-1 ring-transparent",
+                        row.included ? "border-slate-200 bg-slate-100" : "border-slate-200 bg-slate-50 opacity-80",
+                        row.duplicate_status === "duplicate" ? "bg-amber-50" : "",
+                        row.duplicate_status === "possible_duplicate" ? "bg-orange-50" : ""
+                      )}
                     >
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <label className="flex cursor-pointer items-center gap-2 text-[12px] font-semibold text-slate-900">
                           <input
                             type="checkbox"
                             checked={row.included}
-                            onChange={(e) => updateRow(i, { included: e.target.checked })}
+                            onChange={(e) => {
+                              const included = e.target.checked;
+                              updateRow(i, {
+                                included,
+                                action: included && row.action === "skip" ? "create" : row.action,
+                              });
+                            }}
                             className="h-5 w-5 shrink-0 rounded border-slate-400"
                           />
                           {uiLang === "en" ? "Approve" : "เลือกบันทึก"}
@@ -882,6 +1004,65 @@ export function LineInboxAiToolbar({
                         </div>
                       </div>
 
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        <LineInboxSuggestedItemNamePreview
+                          value={row.itemName}
+                          uiLang={uiLang}
+                          onEdit={() => setRowExpanded(rowKey, true)}
+                          onPhotoReference={() => setRowExpanded(rowKey, true)}
+                        />
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          <select
+                            value={row.assignee}
+                            onChange={(e) => updateRow(i, { assignee: e.target.value })}
+                            title={uiLang === "en" ? "Owner" : "พนักงาน"}
+                            className={cn(
+                              "h-10 min-h-[40px] w-[76px] shrink-0 touch-manipulation rounded-full border-0 px-2 py-1.5 text-xs font-semibold shadow-sm outline-none ring-1 focus-visible:ring-2 sm:w-[88px]",
+                              lineInboxAssigneePillClasses(row.assignee)
+                            )}
+                          >
+                            <option value="">{uiLang === "en" ? "-" : "—"}</option>
+                            {staffChoices.map((name) => (
+                              <option key={name} value={name}>
+                                {name}
+                              </option>
+                            ))}
+                          </select>
+                          <select
+                            value={row.status}
+                            onChange={(e) => updateRow(i, { status: e.target.value })}
+                            title={uiLang === "en" ? "Item status" : "สถานะรายการ"}
+                            className={cn(
+                              "h-10 min-h-[40px] w-[5.5rem] shrink-0 touch-manipulation rounded-full border-0 px-2 py-1.5 text-xs font-medium shadow-sm outline-none ring-1 focus-visible:ring-2 sm:w-[6.25rem]",
+                              lineInboxStatusPillClasses(row.status)
+                            )}
+                          >
+                            <option value="">{uiLang === "en" ? "-" : "—"}</option>
+                            {statusChoices.map((status) => (
+                              <option key={status} value={status}>
+                                {status}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            onClick={() => toggleRowExpanded(rowKey)}
+                            className="h-10 min-h-[40px] shrink-0 rounded-full bg-white px-2.5 text-[11px] font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200"
+                            aria-expanded={expanded}
+                          >
+                            {expanded
+                              ? uiLang === "en"
+                                ? "Close"
+                                : "ปิด"
+                              : uiLang === "en"
+                                ? "Edit"
+                                : "แก้"}
+                          </button>
+                        </div>
+                      </div>
+
+                      {expanded ? (
+                        <>
                       {row.matched_item_name ? (
                         <p className="rounded-lg bg-amber-50 px-2 py-1 text-[11px] text-amber-900 ring-1 ring-amber-200/80">
                           {uiLang === "en" ? "Similar existing item" : "คล้ายงานเดิม"}:{" "}
@@ -972,6 +1153,18 @@ export function LineInboxAiToolbar({
                         </label>
                       </div>
 
+                      {hasPhotoRef ? (
+                        <div className="rounded-lg bg-sky-50 px-2 py-1.5 text-[11px] leading-snug text-sky-900 ring-1 ring-sky-200/80">
+                          <span className="font-semibold">
+                            {uiLang === "en" ? "Photo reference" : "รูปอ้างอิง"}
+                          </span>
+                          {" · "}
+                          {uiLang === "en"
+                            ? "Save this row first, then attach photos from the refreshed order card."
+                            : "บันทึกรายการนี้ก่อน แล้วแนบรูปจากการ์ดงานที่ refresh แล้ว"}
+                        </div>
+                      ) : null}
+
                       {row.suggested_note ? (
                         <p className="rounded-lg bg-sky-50 px-2 py-1.5 text-[11px] leading-snug text-sky-900 ring-1 ring-sky-200/80">
                           {uiLang === "en" ? "Reference from LINE" : "รายละเอียดอ้างอิงจาก LINE"}:{" "}
@@ -980,6 +1173,8 @@ export function LineInboxAiToolbar({
                       ) : null}
 
                       {row.reason ? <p className="text-[11px] text-slate-500">{row.reason}</p> : null}
+                        </>
+                      ) : null}
                     </li>
                   );
                 })}
