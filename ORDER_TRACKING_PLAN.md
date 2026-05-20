@@ -48,6 +48,7 @@ Sales creates request -> Store checks stock -> Store orders/receives parts -> Ga
 - **LINE Inbox review UI:** normal staff UI shows only the detected car summary and saveable work suggestions. Ignored mention/spec/noise context and raw `car_row_id` stay hidden unless a dev-only debug disclosure is available.
 - **LINE Inbox stock/spec matching:** stock number + vehicle spec/model/color/year lines are context for car matching, not order items. If no confident car match is found, staff must manually choose/search a car before save; the UI should not silently use the first/default car.
 - **LINE Inbox person/context filtering:** short LINE context lines made of names, roles, emoji, or chat decoration (for example `LoSo 🚙🚗 Aekkarach TH ... กวาง`) are ignored mention/noise context, not saveable order items.
+- **LINE Inbox AI context contract:** AI should read the whole message first, then classify `car_context`, `people_context`, `actual_work_items`, `notes`, and `ignored_noise`; deterministic post-processing still decides what can appear as a saveable item.
 
 ## Implementation status (as of last repo inspection)
 
