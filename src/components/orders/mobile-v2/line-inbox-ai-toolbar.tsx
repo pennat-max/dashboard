@@ -52,6 +52,17 @@ type RowDraft = LineInboxAnalyzeItem & {
   dueDate: string;
 };
 
+type LineInboxItemPhoto = {
+  id: string;
+  url: string;
+  created_at?: string | null;
+};
+
+type SuggestionPhotoSheetState = {
+  rowKey: string;
+  rowIndex: number;
+};
+
 function defaultAction(item: LineInboxAnalyzeItem): RowDraft["action"] {
   if (item.duplicate_status === "duplicate" && String(item.matched_order_item_id ?? "").trim()) {
     return "merge";
@@ -244,6 +255,9 @@ export function LineInboxAiToolbar({
   const [existingItems, setExistingItems] = useState<ExistingOrderItemRow[]>([]);
   const [rows, setRows] = useState<RowDraft[]>([]);
   const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
+  const [suggestionPhotoSheet, setSuggestionPhotoSheet] = useState<SuggestionPhotoSheetState | null>(null);
+  const [suggestionItemPhotos, setSuggestionItemPhotos] = useState<LineInboxItemPhoto[]>([]);
+  const [suggestionPhotosLoading, setSuggestionPhotosLoading] = useState(false);
   const [photoBusyRowKey, setPhotoBusyRowKey] = useState<string | null>(null);
   const [saveHint, setSaveHint] = useState<string | null>(null);
 
@@ -435,6 +449,18 @@ export function LineInboxAiToolbar({
     [rows]
   );
 
+  const suggestionPhotoSheetRow = useMemo(() => {
+    if (!suggestionPhotoSheet) return null;
+    return rows[suggestionPhotoSheet.rowIndex] ?? null;
+  }, [rows, suggestionPhotoSheet]);
+
+  const suggestionPhotoSheetItemId = String(
+    suggestionPhotoSheetRow?.matched_order_item_id ?? ""
+  ).trim();
+  const canUseSuggestionPhotoSheet = Boolean(
+    suggestionPhotoSheetItemId && (effectiveCarRowId || effectiveCarId != null)
+  );
+
   const rawBadgeTotal = queueTotalNew + pendingSaveCount;
   const showBadgeDot = rawBadgeTotal > 0;
 
@@ -535,10 +561,14 @@ export function LineInboxAiToolbar({
       });
       setRows(next);
       setExpandedRows({});
+      setSuggestionPhotoSheet(null);
+      setSuggestionItemPhotos([]);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setRows([]);
       setExpandedRows({});
+      setSuggestionPhotoSheet(null);
+      setSuggestionItemPhotos([]);
       setDetected(null);
       setExistingItems([]);
       setIgnoredVehicleLines([]);
@@ -560,6 +590,47 @@ export function LineInboxAiToolbar({
   const toggleRowExpanded = useCallback((rowKey: string) => {
     setExpandedRows((prev) => ({ ...prev, [rowKey]: !prev[rowKey] }));
   }, []);
+
+  const openSuggestionPhotoSheet = useCallback((rowKey: string, rowIndex: number) => {
+    setSuggestionPhotoSheet({ rowKey, rowIndex });
+    setSuggestionItemPhotos([]);
+  }, []);
+
+  const closeSuggestionPhotoSheet = useCallback(() => {
+    setSuggestionPhotoSheet(null);
+    setSuggestionItemPhotos([]);
+  }, []);
+
+  const loadSuggestionItemPhotos = useCallback(
+    async (orderItemId: string) => {
+      const itemId = String(orderItemId ?? "").trim();
+      if (!itemId || (!effectiveCarRowId && effectiveCarId == null)) {
+        setSuggestionItemPhotos([]);
+        return;
+      }
+      setSuggestionPhotosLoading(true);
+      try {
+        const params = new URLSearchParams();
+        if (effectiveCarRowId) params.set("car_row_id", effectiveCarRowId);
+        if (effectiveCarId != null) params.set("car_id", String(effectiveCarId));
+        const res = await fetch(`/api/m/order-photos/list?${params.toString()}`, {
+          credentials: "same-origin",
+        });
+        const data = (await res.json()) as {
+          error?: string;
+          itemPhotosByItemId?: Record<string, LineInboxItemPhoto[]>;
+        };
+        if (!res.ok) throw new Error(data.error || res.statusText || "load photos failed");
+        setSuggestionItemPhotos(data.itemPhotosByItemId?.[itemId] ?? []);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        setSuggestionItemPhotos([]);
+      } finally {
+        setSuggestionPhotosLoading(false);
+      }
+    },
+    [effectiveCarId, effectiveCarRowId]
+  );
 
   const uploadSuggestionPhotos = useCallback(
     async (rowKey: string, orderItemId: string | null | undefined, files: FileList | null) => {
@@ -587,6 +658,7 @@ export function LineInboxAiToolbar({
         setSaveHint(
           uiLang === "en" ? `Attached ${count} photo(s).` : `แนบรูปแล้ว ${count} รูป`
         );
+        await loadSuggestionItemPhotos(itemId);
         onSaved?.();
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -594,8 +666,22 @@ export function LineInboxAiToolbar({
         setPhotoBusyRowKey((cur) => (cur === rowKey ? null : cur));
       }
     },
-    [effectiveCarId, effectiveCarRowId, onSaved, uiLang]
+    [effectiveCarId, effectiveCarRowId, loadSuggestionItemPhotos, onSaved, uiLang]
   );
+
+  useEffect(() => {
+    if (!suggestionPhotoSheet) return;
+    if (!suggestionPhotoSheetItemId || !canUseSuggestionPhotoSheet) {
+      setSuggestionItemPhotos([]);
+      return;
+    }
+    void loadSuggestionItemPhotos(suggestionPhotoSheetItemId);
+  }, [
+    canUseSuggestionPhotoSheet,
+    loadSuggestionItemPhotos,
+    suggestionPhotoSheet,
+    suggestionPhotoSheetItemId,
+  ]);
 
   const runConfirm = useCallback(async () => {
     setError(null);
@@ -654,6 +740,8 @@ export function LineInboxAiToolbar({
       );
       setRows([]);
       setExpandedRows({});
+      setSuggestionPhotoSheet(null);
+      setSuggestionItemPhotos([]);
       setDetected(null);
       setExistingItems([]);
       setIgnoredVehicleLines([]);
@@ -1050,7 +1138,7 @@ export function LineInboxAiToolbar({
                           value={row.itemName}
                           uiLang={uiLang}
                           onEdit={() => setRowExpanded(rowKey, true)}
-                          onPhotoReference={() => setRowExpanded(rowKey, true)}
+                          onPhotoReference={() => openSuggestionPhotoSheet(rowKey, i)}
                         />
                         <div className="flex shrink-0 items-center gap-1.5">
                           <select
@@ -1086,7 +1174,9 @@ export function LineInboxAiToolbar({
                             ))}
                           </select>
                           {canAttachExistingPhotos ? (
-                            <label
+                            <button
+                              type="button"
+                              onClick={() => openSuggestionPhotoSheet(rowKey, i)}
                               className={cn(
                                 "flex h-10 min-h-[40px] shrink-0 cursor-pointer items-center justify-center rounded-full px-2.5 text-[11px] font-semibold shadow-sm ring-1 touch-manipulation",
                                 photoBusy
@@ -1102,19 +1192,7 @@ export function LineInboxAiToolbar({
                                 : uiLang === "en"
                                   ? "Add photo"
                                   : "เพิ่มรูป"}
-                              <input
-                                type="file"
-                                accept="image/*"
-                                multiple
-                                disabled={photoBusy}
-                                className="hidden"
-                                onChange={(event) => {
-                                  const files = event.currentTarget.files;
-                                  void uploadSuggestionPhotos(rowKey, matchedOrderItemId, files);
-                                  event.currentTarget.value = "";
-                                }}
-                              />
-                            </label>
+                            </button>
                           ) : null}
                           <button
                             type="button"
@@ -1260,6 +1338,110 @@ export function LineInboxAiToolbar({
               </Button>
             </div>
           ) : null}
+        </div>
+      ) : null}
+
+      {suggestionPhotoSheet ? (
+        <div
+          role="presentation"
+          className="fixed inset-0 z-[80] flex items-end justify-center bg-black/45 p-2 outline-none sm:p-3"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) closeSuggestionPhotoSheet();
+          }}
+        >
+          <div className="mb-[max(env(safe-area-inset-bottom),0px)] w-full max-w-md rounded-2xl bg-white p-4 shadow-xl ring-1 ring-slate-200/80">
+            <div className="mb-3 flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <b className="text-sm font-semibold text-slate-950">
+                  {uiLang === "en" ? "Item Photos" : "รูปตามรายการ"}
+                </b>
+                <p className="mt-1 line-clamp-2 text-xs font-medium text-slate-600">
+                  {String(suggestionPhotoSheetRow?.itemName || suggestionPhotoSheetRow?.suggested_item_name || "").trim() ||
+                    (uiLang === "en" ? "Suggested item" : "งานที่ AI เสนอ")}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeSuggestionPhotoSheet}
+                className="shrink-0 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-800 touch-manipulation"
+              >
+                {uiLang === "en" ? "Close" : "ปิด"}
+              </button>
+            </div>
+
+            {!canUseSuggestionPhotoSheet ? (
+              <p className="mb-3 text-xs font-medium text-amber-800">
+                {uiLang === "en" ? "Save first, then add photos from the refreshed card." : "บันทึกก่อน แล้วเพิ่มรูปจากการ์ดที่ refresh แล้ว"}
+              </p>
+            ) : null}
+
+            <div className="mb-3">
+              <label
+                className={cn(
+                  "inline-flex min-h-10 w-full cursor-pointer items-center justify-center rounded-xl px-3 text-xs font-semibold touch-manipulation",
+                  photoBusyRowKey === suggestionPhotoSheet.rowKey || !canUseSuggestionPhotoSheet
+                    ? "cursor-not-allowed bg-slate-200 text-slate-500"
+                    : "bg-sky-600 text-white"
+                )}
+              >
+                {photoBusyRowKey === suggestionPhotoSheet.rowKey
+                  ? uiLang === "en"
+                    ? "Uploading..."
+                    : "กำลังแนบรูป..."
+                  : uiLang === "en"
+                    ? "Add photo"
+                    : "เพิ่มรูป"}
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  disabled={photoBusyRowKey === suggestionPhotoSheet.rowKey || !canUseSuggestionPhotoSheet}
+                  className="hidden"
+                  onChange={(event) => {
+                    const files = event.currentTarget.files;
+                    void uploadSuggestionPhotos(
+                      suggestionPhotoSheet.rowKey,
+                      suggestionPhotoSheetItemId,
+                      files
+                    );
+                    event.currentTarget.value = "";
+                  }}
+                />
+              </label>
+            </div>
+
+            {canUseSuggestionPhotoSheet ? (
+              suggestionPhotosLoading ? (
+                <p className="mb-2 text-center text-xs font-medium text-slate-500">
+                  {uiLang === "en" ? "Loading photos..." : "กำลังโหลดรูป..."}
+                </p>
+              ) : suggestionItemPhotos.length === 0 ? (
+                <p className="text-center text-xs font-medium text-slate-500">
+                  {uiLang === "en" ? "No photos yet - use Add photo" : "ยังไม่มีรูป - กดเพิ่มรูปได้"}
+                </p>
+              ) : (
+                <div className="flex max-h-48 gap-2 overflow-x-auto overflow-y-auto pb-1">
+                  {suggestionItemPhotos.map((photo) => (
+                    <a
+                      key={photo.id}
+                      href={photo.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="group relative h-28 w-28 shrink-0 overflow-hidden rounded-xl bg-slate-100 ring-1 ring-slate-200"
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={photo.url}
+                        alt={uiLang === "en" ? "Item photo thumbnail" : "รูปรายการ"}
+                        className="h-full w-full object-cover transition-transform group-hover:scale-105"
+                        loading="lazy"
+                      />
+                    </a>
+                  ))}
+                </div>
+              )
+            ) : null}
+          </div>
         </div>
       ) : null}
     </>
