@@ -68,6 +68,7 @@
 - [x] **Planning doc:** `LINE_INBOX_AI_ANALYSIS_PLAN.md` — AI-assisted LINE Inbox analysis (human confirmation, duplicate rules vs `order_items`).
 - [x] **Implement:** `POST /api/line-inbox/analyze` + `POST /api/line-inbox/confirm` + LIFF `/liff/line-inbox` (`src/app/api/line-inbox/*`, `src/components/liff/line-inbox-client.tsx`).
 - [x] **Issue #22 fix:** LINE Inbox analyze can use Gemini/Groq when server env exists, then always applies rule-based post-processing. Mention/tag/person-only and emoji/punctuation-only lines go to `ignored_mention_lines` / `ignored_noise_lines`; vehicle spec context goes to `ignored_vehicle_spec_lines`; mention + real work strips tags before suggesting saveable items. No webhook/schema/public.cars change.
+- [x] **Issue #24 UX cleanup:** `/m/orders` LINE Inbox review shows detected car as full plate/spec with chassis/sale when available, hides ignored mention/spec/noise from normal staff UI, and keeps raw `car_row_id` only in dev-only debug details. Suggested save rows stay limited to real work items.
 - [ ] LINE Bot / Messaging API webhook / group message ingestion.
 
 ## Future Two-way Sync

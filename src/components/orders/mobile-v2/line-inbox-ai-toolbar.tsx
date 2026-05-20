@@ -9,6 +9,8 @@ export type LineInboxAiOrderPick = {
   id: string;
   fullPlate: string;
   car: string;
+  chassis?: string | null;
+  sale?: string | null;
   carRowId: string | null;
   carId: number | null;
 };
@@ -71,6 +73,12 @@ function duplicateBadgeClass(status: DuplicateStatus): string {
     default:
       return "border-slate-200 bg-slate-100 text-slate-800";
   }
+}
+
+function normalizeLookup(value: string | null | undefined): string {
+  return String(value ?? "")
+    .replace(/[\s-]+/g, "")
+    .toUpperCase();
 }
 
 export function LineInboxAiToolbar({
@@ -168,6 +176,56 @@ export function LineInboxAiToolbar({
     () => orders.find((o) => o.id === selectedOrderId) ?? null,
     [orders, selectedOrderId]
   );
+
+  const detectedOrder = useMemo(() => {
+    if (!detected) return null;
+
+    const rowId = String(detected.car_row_id ?? "").trim();
+    if (rowId) {
+      const byRow = orders.find((o) => String(o.carRowId ?? "").trim() === rowId);
+      if (byRow) return byRow;
+    }
+
+    const plateKey = normalizeLookup(detected.plate_text);
+    if (plateKey) {
+      const byPlate = orders.find((o) => {
+        const fullPlateKey = normalizeLookup(o.fullPlate);
+        return fullPlateKey === plateKey || fullPlateKey.includes(plateKey) || plateKey.includes(fullPlateKey);
+      });
+      if (byPlate) return byPlate;
+    }
+
+    const chassisKey = normalizeLookup(detected.chassis);
+    if (chassisKey) {
+      const byChassis = orders.find((o) => normalizeLookup(o.chassis).includes(chassisKey));
+      if (byChassis) return byChassis;
+    }
+
+    return selected;
+  }, [detected, orders, selected]);
+
+  const detectedCarTitle = useMemo(() => {
+    if (!detected) return "";
+    const plate = String(detectedOrder?.fullPlate || detected.plate_text || "").trim();
+    const car = String(detectedOrder?.car ?? "").trim();
+    const title = [plate, car].filter(Boolean).join(" ").trim();
+    return title || String(detected.chassis ?? "").trim();
+  }, [detected, detectedOrder]);
+
+  const detectedChassis = useMemo(() => {
+    if (!detected) return "";
+    return String(detectedOrder?.chassis || detected.chassis || "").trim();
+  }, [detected, detectedOrder]);
+
+  const detectedSale = String(detectedOrder?.sale ?? "").trim();
+  const showDebugDetails =
+    process.env.NODE_ENV !== "production" &&
+    Boolean(
+      String(detected?.car_row_id ?? "").trim() ||
+        ignoredVehicleLines.length ||
+        ignoredMentionLines.length ||
+        ignoredNoiseLines.length
+    );
 
   const effectiveCarRowId = useMemo(() => {
     const fromAnalyze = String(detected?.car_row_id ?? "").trim();
@@ -543,15 +601,21 @@ export function LineInboxAiToolbar({
           {detected ? (
             <div className="mb-3 rounded-xl bg-slate-50 px-3 py-2 text-[12px] ring-1 ring-slate-200/80">
               <div className="font-semibold text-slate-800">
-                {uiLang === "en" ? "Detected plate" : "ทะเบียนที่จับได้"}
+                {uiLang === "en" ? "Detected car" : "รถที่จับได้"}
                 {": "}
                 <span className="font-bold tabular-nums text-violet-900">
-                  {detected.plate_text?.trim() || "—"}
+                  {detectedCarTitle || (uiLang === "en" ? "Needs review" : "ต้องตรวจสอบ")}
                 </span>
               </div>
-              {detected.car_row_id ? (
-                <div className="mt-1 font-mono text-[10px] text-slate-500">
-                  car_row_id · {detected.car_row_id}
+              {detectedChassis ? (
+                <div className="mt-1 text-[11px] font-medium text-slate-600">
+                  {uiLang === "en" ? "Chassis" : "เลขถัง"}:{" "}
+                  <span className="font-mono text-[10px]">{detectedChassis}</span>
+                </div>
+              ) : null}
+              {detectedSale ? (
+                <div className="mt-1 text-[11px] font-medium text-slate-600">
+                  {uiLang === "en" ? "Sale" : "เซลล์"}: <span className="font-bold">{detectedSale}</span>
                 </div>
               ) : null}
               {needsReview ? (
@@ -564,34 +628,45 @@ export function LineInboxAiToolbar({
             </div>
           ) : null}
 
-          {ignoredMentionLines.length + ignoredNoiseLines.length > 0 ? (
-            <div className="mb-3 rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2 text-[11px] text-slate-600">
-              <p className="mb-1 font-semibold text-slate-700">
-                {uiLang === "en" ? "Not jobs: mentions / related people" : "ไม่ใช่งาน: mention/คนเกี่ยวข้อง"}
-              </p>
-              <ul className="space-y-0.5">
-                {[...ignoredMentionLines, ...ignoredNoiseLines].slice(0, 6).map((line, index) => (
-                  <li key={`${line}-${index}`} className="line-clamp-1">
-                    {line}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-
-          {ignoredVehicleLines.length > 0 ? (
-            <div className="mb-3 rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2 text-[11px] text-slate-600">
-              <p className="mb-1 font-semibold text-slate-700">
-                {uiLang === "en" ? "Used for car matching, not jobs" : "ใช้สำหรับจับรถ ไม่ใช่งาน"}
-              </p>
-              <ul className="space-y-0.5">
-                {ignoredVehicleLines.slice(0, 6).map((line, index) => (
-                  <li key={`${line}-${index}`} className="line-clamp-1">
-                    {line}
-                  </li>
-                ))}
-              </ul>
-            </div>
+          {showDebugDetails ? (
+            <details className="mb-3 rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2 text-[11px] text-slate-600">
+              <summary className="cursor-pointer select-none font-semibold text-slate-700">
+                {uiLang === "en" ? "AI ignored details" : "รายละเอียดที่ AI ตัดออก"}
+              </summary>
+              {detected?.car_row_id ? (
+                <p className="mt-2 break-all font-mono text-[10px] text-slate-500">
+                  car_row_id · {detected.car_row_id}
+                </p>
+              ) : null}
+              {ignoredMentionLines.length || ignoredNoiseLines.length ? (
+                <div className="mt-2">
+                  <p className="font-semibold text-slate-700">
+                    {uiLang === "en" ? "Mentions / noise" : "mention / noise"}
+                  </p>
+                  <ul className="mt-1 space-y-0.5">
+                    {[...ignoredMentionLines, ...ignoredNoiseLines].slice(0, 6).map((line, index) => (
+                      <li key={`ignored-mention-${index}`} className="line-clamp-1">
+                        {line}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {ignoredVehicleLines.length ? (
+                <div className="mt-2">
+                  <p className="font-semibold text-slate-700">
+                    {uiLang === "en" ? "Vehicle context" : "ข้อมูลรถที่ใช้เป็น context"}
+                  </p>
+                  <ul className="mt-1 space-y-0.5">
+                    {ignoredVehicleLines.slice(0, 6).map((line, index) => (
+                      <li key={`ignored-vehicle-${index}`} className="line-clamp-1">
+                        {line}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </details>
           ) : null}
 
           {rows.length > 0 ? (

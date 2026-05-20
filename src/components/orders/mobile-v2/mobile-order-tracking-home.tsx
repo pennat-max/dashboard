@@ -5943,6 +5943,8 @@ export function MobileOrderTrackingHome({
       id: o.id,
       fullPlate: o.fullPlate,
       car: o.car,
+      chassis: o.chassis,
+      sale: o.sale,
       carRowId: o.carRowId,
       carId: o.carId,
     }));
