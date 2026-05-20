@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { resolveSaleStaffForOrder } from "@/lib/orders/sale-assignees-shared";
 import type {
   DuplicateStatus,
   ExistingOrderItemRow,
@@ -121,6 +122,7 @@ export function LineInboxAiToolbar({
   uiLang,
   preferredOrderId,
   staffOptions = [],
+  saleAssigneesBySale = {},
   statusOptions = [],
   onSaved,
 }: {
@@ -128,6 +130,7 @@ export function LineInboxAiToolbar({
   uiLang: UiLang;
   preferredOrderId?: string | null;
   staffOptions?: string[];
+  saleAssigneesBySale?: Record<string, string>;
   statusOptions?: string[];
   onSaved?: () => void;
 }) {
@@ -258,6 +261,38 @@ export function LineInboxAiToolbar({
   }, [detected, detectedOrder]);
 
   const detectedSale = String(detectedOrder?.sale || detected?.sale || "").trim();
+
+  const resolveMappedAssigneeForDetectedCar = useCallback(
+    (detectedCar: LineInboxAnalyzeResponse["detected_car"] | null) => {
+      if (!detectedCar) return "";
+
+      let matchedOrder: LineInboxAiOrderPick | null = null;
+      const rowId = String(detectedCar.car_row_id ?? "").trim();
+      if (rowId) {
+        matchedOrder = orders.find((o) => String(o.carRowId ?? "").trim() === rowId) ?? null;
+      }
+
+      const plateKey = normalizeLookup(detectedCar.plate_text);
+      if (!matchedOrder && plateKey) {
+        matchedOrder =
+          orders.find((o) => {
+            const fullPlateKey = normalizeLookup(o.fullPlate);
+            return fullPlateKey === plateKey || fullPlateKey.includes(plateKey) || plateKey.includes(fullPlateKey);
+          }) ?? null;
+      }
+
+      const chassisKey = normalizeLookup(detectedCar.chassis);
+      if (!matchedOrder && chassisKey) {
+        matchedOrder = orders.find((o) => normalizeLookup(o.chassis).includes(chassisKey)) ?? null;
+      }
+
+      if (!matchedOrder && selected) matchedOrder = selected;
+      const sale = String(matchedOrder?.sale || detectedCar.sale || "").trim();
+      return resolveSaleStaffForOrder(sale, saleAssigneesBySale);
+    },
+    [orders, saleAssigneesBySale, selected]
+  );
+
   const showDebugDetails =
     process.env.NODE_ENV !== "production" &&
     Boolean(
@@ -385,6 +420,7 @@ export function LineInboxAiToolbar({
       const existingById = new Map(
         existingFromAnalyze.map((item) => [String(item.id ?? "").trim(), item])
       );
+      const mappedAssignee = resolveMappedAssigneeForDetectedCar(data.detected_car);
       const next: RowDraft[] = (data.items ?? []).map((item) => {
         const action = defaultAction(item);
         const matched = existingById.get(String(item.matched_order_item_id ?? "").trim());
@@ -394,7 +430,7 @@ export function LineInboxAiToolbar({
           note: "",
           included: action !== "skip",
           itemName: item.suggested_item_name || item.raw_text,
-          assignee: matched?.assignee_staff ?? "",
+          assignee: matched?.assignee_staff || mappedAssignee || "",
           status: item.suggested_status || matched?.status || "",
           dueDate: safeDateValue(matched?.due_date),
         };
@@ -411,7 +447,7 @@ export function LineInboxAiToolbar({
     } finally {
       setAnalyzeLoading(false);
     }
-  }, [rawText, selected, effectiveCarId]);
+  }, [rawText, selected, effectiveCarId, resolveMappedAssigneeForDetectedCar]);
 
   const updateRow = useCallback((index: number, patch: Partial<RowDraft>) => {
     setRows((prev) => prev.map((r, i) => (i === index ? { ...r, ...patch } : r)));

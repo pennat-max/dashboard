@@ -7813,6 +7813,7 @@ export function MobileOrderTrackingHome({
                       uiLang={uiLang}
                       preferredOrderId={initialFocusedOrderId}
                       staffOptions={staffRoster}
+                      saleAssigneesBySale={saleAssignees}
                       statusOptions={itemStatusRoster}
                       onSaved={() => router.refresh()}
                     />

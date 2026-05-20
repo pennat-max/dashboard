@@ -49,7 +49,7 @@ Sales creates request -> Store checks stock -> Store orders/receives parts -> Ga
 - **LINE Inbox stock/spec matching:** stock number + vehicle spec/model/color/year lines are context for car matching, not order items. If no confident car match is found, staff must manually choose/search a car before save; the UI should not silently use the first/default car.
 - **LINE Inbox person/context filtering:** short LINE context lines made of names, roles, emoji, or chat decoration (for example `LoSo 🚙🚗 Aekkarach TH ... กวาง`) are ignored mention/noise context, not saveable order items.
 - **LINE Inbox AI context contract:** AI should read the whole message first, then classify `car_context`, `people_context`, `actual_work_items`, `notes`, and `ignored_noise`; deterministic post-processing still decides what can appear as a saveable item.
-- **LINE Inbox existing-vs-new review:** after analyze detects a car, `/m/orders` shows compact existing `order_items` for that car before AI suggestions. Staff still approves manually and can edit item name, assignee, status, note, due date, and choose create/merge/skip before saving.
+- **LINE Inbox existing-vs-new review:** after analyze detects a car, `/m/orders` shows compact existing `order_items` for that car before AI suggestions. Staff still approves manually and can edit item name, assignee, status, note, due date, and choose create/merge/skip before saving. New suggestion assignee defaults from the existing sale-code owner mapping when available; no mapping means unassigned.
 
 ## Implementation status (as of last repo inspection)
 
