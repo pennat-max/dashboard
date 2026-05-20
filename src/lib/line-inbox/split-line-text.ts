@@ -32,6 +32,9 @@ const REAL_WORK_EXCLUDING_GENERIC_ENTRY_RE =
   /(กุญแจ|กันสาด|โรบาร์|สติ๊กเกอร์|ฟิล์ม|บันได|กันชน|แร็ค|แรค|ฝาครอบ|ไฟ|กล้อง|เซ็นเซอร์|ยาง|ล้อ|แบต|แบตเตอรี่|โช้ค|ยกสูง|เอกสาร|ซ่อม|เปลี่ยน|ขาด|แตก|เสีย|หาย|ต้องสั่ง|สั่ง|ส่งอู่|ทำสี|ตรวจ|เช็ค|ติดตั้ง|เพิ่ม|แปลง|ล้าง|ขัด|เคลือบ|เก็บงาน|ประเมิน|รับงาน)/i;
 const ROLE_OR_PERSON_NOISE_RE =
   /^(?:[A-Za-z.'"-]+|\bTH\b|\bChecker\b|\bSale\b|\bSales\b|\bSupport\b|\bStore\b|\bGarage\b|\bAdmin\b|\bTeam\b|\bStaff\b|\bQC\b|\bLoSo\b|\bManbappe\b|\bAof\b|\bFrank\b|\bKik\b|\bNutkun\b|\bJoy\b|\bMint\b|\bPrew\b|\bGwang\b|\bAor\b|\bWan\b|\bMai\b|\bNat\b|\bNoey\b|\bSine\b|\bPloo\b|\bYing\b|\bFairy\b|\bFah\b|\bBam\b|\bKoi\b|\bTarn\b)+$/i;
+const LINE_PERSON_CONTEXT_RE =
+  /(?:\bLoSo\b|\bAekkarach\b|\bTH\b|\bChecker\b|\bManbappe\b|\bAof\b|\bFrank\b|\bKik\b|\bNutkun\b|\bJoy\b|\bMint\b|\bPrew\b|\bGwang\b|\bAor\b|\bWan\b|\bMai\b|\bNat\b|\bNoey\b|\bSine\b|\bPloo\b|\bYing\b|\bFairy\b|\bFah\b|\bBam\b|\bKoi\b|\bTarn\b|กวาง|ออฟ|นัท|แฟรงค์|จอย|มิ้นท์|พริว|เอ๋|เช็คเกอร์)/i;
+const EMOJI_OR_SYMBOL_RE = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}%^*:*]/u;
 
 function sanitizeLine(raw: string): string {
   return raw.replace(/^[\s\-•*]+/, "").replace(/\s+/g, " ").trim();
@@ -77,7 +80,29 @@ function looksLikeMentionOnly(raw: string): boolean {
   return ROLE_OR_PERSON_NOISE_RE.test(compact);
 }
 
+function looksLikeLinePersonContext(raw: string): boolean {
+  if (STRONG_WORK_INTENT_RE.test(raw)) return false;
+  if (looksLikeStockSpecContext(raw)) return false;
+
+  const noMentions = removeMentions(raw);
+  const tokens = semanticTokens(noMentions);
+  if (tokens.length === 0) return true;
+  if (tokens.length > 8) return false;
+
+  const compact = tokens.join("");
+  if (ROLE_OR_PERSON_NOISE_RE.test(compact)) return true;
+
+  const hasPersonContext = LINE_PERSON_CONTEXT_RE.test(noMentions);
+  if (!hasPersonContext) return false;
+
+  const hasLineDecoration = EMOJI_OR_SYMBOL_RE.test(raw) || /\.\.\.|["'@]/.test(raw);
+  const latinTokens = tokens.filter((token) => /^[A-Za-z][A-Za-z.'-]*$/.test(token));
+  const thaiTokens = tokens.filter((token) => /[ก-ฮ]/.test(token));
+  return hasLineDecoration || latinTokens.length >= 2 || thaiTokens.length <= 2;
+}
+
 function looksLikeNoiseOnly(raw: string): boolean {
+  if (looksLikeLinePersonContext(raw)) return true;
   if (WORK_INTENT_RE.test(raw)) return false;
   const noMentions = removeMentions(raw);
   const tokens = semanticTokens(noMentions);
@@ -150,6 +175,11 @@ export function splitLineTextForInbox(text: string): SplitLineTextResult {
 
   for (const rawLine of lines) {
     if (looksLikeMentionOnly(rawLine)) {
+      addUnique(ignoredMentions, rawLine);
+      continue;
+    }
+
+    if (looksLikeLinePersonContext(rawLine)) {
       addUnique(ignoredMentions, rawLine);
       continue;
     }
