@@ -9,6 +9,8 @@ type AiAnalyzeItem = Partial<
 
 export type LineInboxAiAnalyzeDraft = {
   detected_car?: Partial<LineInboxAnalyzeResponse["detected_car"]>;
+  detected_car_text?: string;
+  candidate_cars?: Array<{ text?: string; confidence?: number; reason?: string }>;
   items?: Array<string | AiAnalyzeItem>;
   ignored_vehicle_spec_lines?: string[];
   ignored_mention_lines?: string[];
@@ -38,6 +40,8 @@ function normalizeDraft(raw: unknown): LineInboxAiAnalyzeDraft | null {
           plate_text: safeString((detectedRaw as Record<string, unknown>).plate_text),
           chassis: safeString((detectedRaw as Record<string, unknown>).chassis),
           car_row_id: safeString((detectedRaw as Record<string, unknown>).car_row_id),
+          spec_text: safeString((detectedRaw as Record<string, unknown>).spec_text),
+          sale: safeString((detectedRaw as Record<string, unknown>).sale),
           confidence:
             typeof (detectedRaw as Record<string, unknown>).confidence === "number"
               ? Number((detectedRaw as Record<string, unknown>).confidence)
@@ -68,6 +72,24 @@ function normalizeDraft(raw: unknown): LineInboxAiAnalyzeDraft | null {
 
   return {
     detected_car,
+    detected_car_text: safeString(input.detected_car_text),
+    candidate_cars: Array.isArray(input.candidate_cars)
+      ? input.candidate_cars
+          .map((item) => {
+            if (typeof item === "string") return { text: item };
+            if (!item || typeof item !== "object") return null;
+            const obj = item as Record<string, unknown>;
+            const text = safeString(obj.text) || safeString(obj.spec) || safeString(obj.label);
+            if (!text) return null;
+            return {
+              text,
+              confidence: typeof obj.confidence === "number" ? Number(obj.confidence) : undefined,
+              reason: safeString(obj.reason),
+            };
+          })
+          .filter(Boolean)
+          .slice(0, 10) as Array<{ text?: string; confidence?: number; reason?: string }>
+      : [],
     items,
     ignored_vehicle_spec_lines: asStringArray(input.ignored_vehicle_spec_lines),
     ignored_mention_lines: asStringArray(input.ignored_mention_lines),
@@ -97,18 +119,22 @@ function buildPrompt(rawText: string): string {
     "",
     "Separate the LINE message into:",
     "1. detected_car",
-    "2. actual work items",
-    "3. ignored_mention_lines",
-    "4. ignored_vehicle_spec_lines",
-    "5. ignored_noise_lines",
-    "6. needs_human_review",
+    "2. detected_car_text",
+    "3. candidate_cars",
+    "4. actual work items",
+    "5. ignored_mention_lines",
+    "6. ignored_vehicle_spec_lines",
+    "7. ignored_noise_lines",
+    "8. needs_human_review",
     "",
     "Rules:",
     "- AI only suggests. It never saves anything.",
     "- Mentions/tags such as @JOY, @MINT, @Aof are context only, not order items.",
     "- If a line is only people, roles, tags, emoji, or punctuation, put it in ignored_mention_lines or ignored_noise_lines.",
     "- Vehicle spec/model/plate/chassis-only lines are context only, not order items.",
-    "- Examples of vehicle spec: RANGER, REVO, HILUX, VIGO, 4WD, 2WD, 2.0, 2.4, 2.8, AT, MT, Double Cab, WHITE, GRAY, BLACK, year.",
+    "- Stock/spec/model lines are context only, not order items. Example: 03306 Nissan navara D-cab 2.3 DC Pro4x 7AT 4WD Grey ป้ายแดง.",
+    "- Put stock/spec/model lines in detected_car_text and ignored_vehicle_spec_lines. If there may be multiple cars, put possible matches in candidate_cars and set needs_human_review=true.",
+    "- Examples of vehicle spec: RANGER, REVO, HILUX, VIGO, NAVARA, NISSAN, 4WD, 2WD, 2.0, 2.3, 2.4, 2.8, AT, MT, Double Cab, D-cab, PRO4X, WHITE, GRAY/GREY, BLACK, red plate, year.",
     "- If a line has mentions plus real work, remove the mentions from the item name.",
     "- If a line has plate/chassis plus real work, remove plate/chassis from the item name.",
     "- Work items are actionable tasks like accessories, parts, checks, repair, install, paint, order, garage work.",
@@ -116,7 +142,9 @@ function buildPrompt(rawText: string): string {
     "",
     "JSON schema:",
     JSON.stringify({
-      detected_car: { plate_text: "", chassis: "", car_row_id: "", confidence: 0 },
+      detected_car: { plate_text: "", chassis: "", car_row_id: "", spec_text: "", sale: "", confidence: 0 },
+      detected_car_text: "",
+      candidate_cars: [{ text: "", confidence: 0, reason: "" }],
       items: [
         {
           raw_text: "",

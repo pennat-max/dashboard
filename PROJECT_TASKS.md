@@ -69,6 +69,7 @@
 - [x] **Implement:** `POST /api/line-inbox/analyze` + `POST /api/line-inbox/confirm` + LIFF `/liff/line-inbox` (`src/app/api/line-inbox/*`, `src/components/liff/line-inbox-client.tsx`).
 - [x] **Issue #22 fix:** LINE Inbox analyze can use Gemini/Groq when server env exists, then always applies rule-based post-processing. Mention/tag/person-only and emoji/punctuation-only lines go to `ignored_mention_lines` / `ignored_noise_lines`; vehicle spec context goes to `ignored_vehicle_spec_lines`; mention + real work strips tags before suggesting saveable items. No webhook/schema/public.cars change.
 - [x] **Issue #24 UX cleanup:** `/m/orders` LINE Inbox review shows detected car as full plate/spec with chassis/sale when available, hides ignored mention/spec/noise from normal staff UI, and keeps raw `car_row_id` only in dev-only debug details. Suggested save rows stay limited to real work items.
+- [x] **Issue #26 stock/spec matching:** LINE Inbox now treats stock/spec/model/color/red-plate lines as car context only, searches cars from stock-like numbers plus spec/brand/model/color/model-year tokens, returns full detected car data when matched, and requires manual car selection when unresolved instead of defaulting to the first loaded car.
 - [ ] LINE Bot / Messaging API webhook / group message ingestion.
 
 ## Future Two-way Sync

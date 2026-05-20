@@ -168,7 +168,7 @@ export function LineInboxAiToolbar({
     }
     setSelectedOrderId((prev) => {
       if (prev && orders.some((o) => o.id === prev)) return prev;
-      return orders[0]?.id ?? "";
+      return "";
     });
   }, [orders, preferredOrderId]);
 
@@ -207,7 +207,7 @@ export function LineInboxAiToolbar({
   const detectedCarTitle = useMemo(() => {
     if (!detected) return "";
     const plate = String(detectedOrder?.fullPlate || detected.plate_text || "").trim();
-    const car = String(detectedOrder?.car ?? "").trim();
+    const car = String(detectedOrder?.car || detected.spec_text || "").trim();
     const title = [plate, car].filter(Boolean).join(" ").trim();
     return title || String(detected.chassis ?? "").trim();
   }, [detected, detectedOrder]);
@@ -217,7 +217,7 @@ export function LineInboxAiToolbar({
     return String(detectedOrder?.chassis || detected.chassis || "").trim();
   }, [detected, detectedOrder]);
 
-  const detectedSale = String(detectedOrder?.sale ?? "").trim();
+  const detectedSale = String(detectedOrder?.sale || detected?.sale || "").trim();
   const showDebugDetails =
     process.env.NODE_ENV !== "production" &&
     Boolean(
@@ -236,6 +236,7 @@ export function LineInboxAiToolbar({
     const id = selected?.carId;
     return id != null && Number.isFinite(Number(id)) ? Number(id) : null;
   }, [selected]);
+  const hasEffectiveCar = Boolean(effectiveCarRowId || effectiveCarId != null);
 
   const pendingSaveCount = useMemo(
     () => rows.filter((r) => r.included && r.action !== "skip").length,
@@ -549,11 +550,18 @@ export function LineInboxAiToolbar({
               {orders.length === 0 ? (
                 <option value="">{uiLang === "en" ? "No cars in list" : "ไม่มีรถในรายการ"}</option>
               ) : (
-                orders.map((o) => (
-                  <option key={o.id} value={o.id}>
-                    {(o.fullPlate || "-").trim()} · {(o.car || "").slice(0, 42)}
+                <>
+                  <option value="">
+                    {uiLang === "en"
+                      ? "Let AI match from message / pick if not found"
+                      : "ให้ AI จับรถจากข้อความ / เลือกเองถ้าจับไม่ได้"}
                   </option>
-                ))
+                  {orders.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {(o.fullPlate || "-").trim()} · {(o.car || "").slice(0, 42)}
+                    </option>
+                  ))}
+                </>
               )}
             </select>
           </label>
@@ -623,6 +631,13 @@ export function LineInboxAiToolbar({
                   {uiLang === "en"
                     ? "Review suggested — car or duplicate lines may need your check."
                     : "ระบบแนะนำให้ตรวจทาน — รถหรืองานซ้ำอาจต้องยืนยันเอง"}
+                </p>
+              ) : null}
+              {!hasEffectiveCar ? (
+                <p className="mt-1 text-[11px] font-medium text-rose-700">
+                  {uiLang === "en"
+                    ? "Car not found yet — search or pick a car before saving."
+                    : "ยังจับคู่รถไม่ได้ — ค้นหรือเลือกรถก่อนบันทึก"}
                 </p>
               ) : null}
             </div>

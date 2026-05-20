@@ -22,6 +22,8 @@ export type LineInboxAnalyzeResponse = {
     chassis: string;
     car_row_id: string;
     confidence: number;
+    spec_text?: string;
+    sale?: string;
   };
   ignored_vehicle_spec_lines?: string[];
   ignored_mention_lines?: string[];

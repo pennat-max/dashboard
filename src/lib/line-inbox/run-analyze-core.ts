@@ -52,6 +52,10 @@ function mergeAiWithRuleGuard(
   const ignoredNoise = [...fallback.ignored_noise_lines];
 
   for (const line of aiDraft?.ignored_vehicle_spec_lines ?? []) addUnique(ignoredVehicle, line);
+  if (aiDraft?.detected_car_text) addUnique(ignoredVehicle, aiDraft.detected_car_text);
+  for (const candidate of aiDraft?.candidate_cars ?? []) {
+    if (candidate.text) addUnique(ignoredVehicle, candidate.text);
+  }
   for (const line of aiDraft?.ignored_mention_lines ?? []) addUnique(ignoredMention, line);
   for (const line of aiDraft?.ignored_noise_lines ?? []) addUnique(ignoredNoise, line);
 
@@ -90,7 +94,7 @@ function mergeAiWithRuleGuard(
     ignored_vehicle_spec_lines: ignoredVehicle.slice(0, 30),
     ignored_mention_lines: ignoredMention.slice(0, 30),
     ignored_noise_lines: ignoredNoise.slice(0, 30),
-    aiNeedsHumanReview: Boolean(aiDraft?.needs_human_review),
+    aiNeedsHumanReview: Boolean(aiDraft?.needs_human_review || (aiDraft?.candidate_cars?.length ?? 0) > 1),
   };
 }
 
@@ -174,6 +178,8 @@ export async function runLineInboxAnalyzeCore(
       chassis: detected.chassis || String(aiDraft?.detected_car?.chassis ?? "").trim(),
       car_row_id: detected.car_row_id,
       confidence: Math.round(detected.confidence * 100) / 100,
+      spec_text: detected.spec_text,
+      sale: detected.sale,
     },
     ignored_vehicle_spec_lines: guarded.ignored_vehicle_spec_lines,
     ignored_mention_lines: guarded.ignored_mention_lines,

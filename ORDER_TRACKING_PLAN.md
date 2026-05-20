@@ -46,6 +46,7 @@ Sales creates request -> Store checks stock -> Store orders/receives parts -> Ga
 - **LINE Inbox + AI:** **`POST /api/line-inbox/analyze`** (read-only suggestions) + **`POST /api/line-inbox/confirm`** (writes after human confirm) + LIFF **`/liff/line-inbox`**. Spec: **`LINE_INBOX_AI_ANALYSIS_PLAN.md`**. **No** auto-save from analyze; **no** secrets in browser.
 - **LINE Inbox safety:** mention/tag/person-only and emoji/punctuation-only LINE text is context/noise only; tags are stripped from real work lines before suggestions are saved. When Gemini/Groq is available for `/api/line-inbox/analyze`, AI output is still guarded by deterministic post-processing before any human-confirmed save.
 - **LINE Inbox review UI:** normal staff UI shows only the detected car summary and saveable work suggestions. Ignored mention/spec/noise context and raw `car_row_id` stay hidden unless a dev-only debug disclosure is available.
+- **LINE Inbox stock/spec matching:** stock number + vehicle spec/model/color/year lines are context for car matching, not order items. If no confident car match is found, staff must manually choose/search a car before save; the UI should not silently use the first/default car.
 
 ## Implementation status (as of last repo inspection)
 

@@ -15,8 +15,21 @@ const THAI_PLATE_RE = /\d{0,2}[ก-ฮ]{1,3}[-\s]?\d{2,4}/g;
 const CHASSIS_RE = /\b[A-HJ-NPR-Z0-9]{17}\b/i;
 const VEHICLE_SPEC_RE =
   /(REVO|FORTUNER|HILUX|VIGO|RANGER|D-MAX|TRITON|CAMRY|2WD|4WD|AT|MT|DOUBLE[_\s-]?CAB|SMART[_\s-]?CAB|SILVER|BLACK|WHITE|GRAY|GREY|JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC|\b[123]\.\d\b|\b(?:19|20)\d{2}\b)/i;
+const VEHICLE_BRAND_MODEL_RE =
+  /(TOYOTA|NISSAN|NAVARA|ISUZU|MAZDA|MITSUBISHI|FORD|HONDA|REVO|FORTUNER|HILUX|VIGO|RANGER|D-MAX|DMAX|TRITON|CAMRY|ALTIS|YARIS|VIOS|MU-X|EVEREST|PAJERO|PRO4X|PRO-4X|RAPTOR)/i;
+const VEHICLE_BODY_SPEC_RE =
+  /(D[-\s]?CAB|DOUBLE[_\s-]?CAB|SMART[_\s-]?CAB|CAB|DC|2WD|4WD|AT|MT|7AT|6AT|STANDARD|HIGH|LOW|PRE[-\s]?RUNNER|\b[123]\.\d\b|ป้ายแดง)/i;
+const VEHICLE_COLOR_YEAR_RE =
+  /(SILVER|BLACK|WHITE|GRAY|GREY|BLUE|RED|GREEN|ORANGE|BRONZE|BROWN|GOLD|YELLOW|PEARL|ป้ายแดง|JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC|\b(?:19|20)\d{2}\b|[A-Z][a-z]{2}\d{2})/i;
+const STOCK_NUMBER_RE = /\b\d{4,6}\b/;
 const WORK_INTENT_RE =
   /(กันสาด|โรบาร์|สติ๊กเกอร์|ฟิล์ม|บันได|กันชน|แร็ค|แรค|ฝาครอบ|ไฟ|กล้อง|เซ็นเซอร์|ยาง|ล้อ|แบต|แบตเตอรี่|โช้ค|ยกสูง|ป้าย|เอกสาร|ซ่อม|เปลี่ยน|ขาด|แตก|เสีย|หาย|ต้องสั่ง|ส่งอู่|ทำสี|ตรวจ|เช็ค|ติด|ติดตั้ง|เพิ่ม|ใส่|แปลง|ล้าง|ขัด|เคลือบ|เก็บงาน|ประเมิน|รับงาน|งาน)/i;
+const STRONG_WORK_INTENT_RE =
+  /(กุญแจ|กันสาด|โรบาร์|สติ๊กเกอร์|ฟิล์ม|บันได|กันชน|แร็ค|แรค|ฝาครอบ|ไฟ|กล้อง|เซ็นเซอร์|ยาง|ล้อ|แบต|แบตเตอรี่|โช้ค|ยกสูง|เอกสาร|ซ่อม|เปลี่ยน|ขาด|แตก|เสีย|หาย|ต้องสั่ง|สั่ง|ส่งอู่|ทำสี|ตรวจ|เช็ค|ติด|ติดตั้ง|เพิ่ม|ใส่|แปลง|ล้าง|ขัด|เคลือบ|เก็บงาน|ประเมิน|รับงาน|งาน)/i;
+const CAR_REFERENCE_META_RE =
+  /(ใส่\s*ปี.*(?:chassis|chasis|เลขถัง|ตัวถัง)|(?:chassis|chasis|เลขถัง|ตัวถัง).*(?:ปี|link|ลิงก์|ถูก|ทุกครั้ง|หลายที่)|(?:ปี|link|ลิงก์).*(?:chassis|chasis|เลขถัง|ตัวถัง))/i;
+const REAL_WORK_EXCLUDING_GENERIC_ENTRY_RE =
+  /(กุญแจ|กันสาด|โรบาร์|สติ๊กเกอร์|ฟิล์ม|บันได|กันชน|แร็ค|แรค|ฝาครอบ|ไฟ|กล้อง|เซ็นเซอร์|ยาง|ล้อ|แบต|แบตเตอรี่|โช้ค|ยกสูง|เอกสาร|ซ่อม|เปลี่ยน|ขาด|แตก|เสีย|หาย|ต้องสั่ง|สั่ง|ส่งอู่|ทำสี|ตรวจ|เช็ค|ติดตั้ง|เพิ่ม|แปลง|ล้าง|ขัด|เคลือบ|เก็บงาน|ประเมิน|รับงาน)/i;
 const ROLE_OR_PERSON_NOISE_RE =
   /^(?:[A-Za-z.'"-]+|\bTH\b|\bChecker\b|\bSale\b|\bSales\b|\bSupport\b|\bStore\b|\bGarage\b|\bAdmin\b|\bTeam\b|\bStaff\b|\bQC\b|\bLoSo\b|\bManbappe\b|\bAof\b|\bFrank\b|\bKik\b|\bNutkun\b|\bJoy\b|\bMint\b|\bPrew\b|\bGwang\b|\bAor\b|\bWan\b|\bMai\b|\bNat\b|\bNoey\b|\bSine\b|\bPloo\b|\bYing\b|\bFairy\b|\bFah\b|\bBam\b|\bKoi\b|\bTarn\b)+$/i;
 
@@ -75,8 +88,42 @@ function looksLikeNoiseOnly(raw: string): boolean {
   return false;
 }
 
+function looksLikeCarReferenceMeta(raw: string): boolean {
+  if (!CAR_REFERENCE_META_RE.test(raw)) return false;
+  return !REAL_WORK_EXCLUDING_GENERIC_ENTRY_RE.test(raw);
+}
+
+function vehicleSignalScore(raw: string): number {
+  let score = 0;
+  if (STOCK_NUMBER_RE.test(raw)) score += 2;
+  if (VEHICLE_BRAND_MODEL_RE.test(raw)) score += 2;
+  if (VEHICLE_BODY_SPEC_RE.test(raw)) score += 1;
+  if (VEHICLE_SPEC_RE.test(raw)) score += 1;
+  if (VEHICLE_COLOR_YEAR_RE.test(raw)) score += 1;
+  if (THAI_PLATE_RE.test(raw)) score += 2;
+  THAI_PLATE_RE.lastIndex = 0;
+  if (CHASSIS_RE.test(raw)) score += 3;
+  return score;
+}
+
+function looksLikeStockSpecContext(raw: string): boolean {
+  const tokens = semanticTokens(raw);
+  if (tokens.length < 3) return false;
+
+  const score = vehicleSignalScore(raw);
+  if (score < 4) return false;
+
+  // "ป้ายแดง" is vehicle context, not the actionable "ป้าย" task.
+  const withoutRedPlate = raw.replace(/ป้ายแดง/gi, " ");
+  const hasStrongWork = STRONG_WORK_INTENT_RE.test(withoutRedPlate);
+  if (hasStrongWork && score < 6) return false;
+
+  return true;
+}
+
 function looksLikeVehicleContext(raw: string): boolean {
-  if (WORK_INTENT_RE.test(raw)) return false;
+  if (looksLikeStockSpecContext(raw)) return true;
+  if (STRONG_WORK_INTENT_RE.test(raw)) return false;
   const hasThaiPlateLike = THAI_PLATE_RE.test(raw);
   THAI_PLATE_RE.lastIndex = 0;
   if (hasThaiPlateLike && VEHICLE_SPEC_RE.test(raw)) return true;
@@ -104,6 +151,11 @@ export function splitLineTextForInbox(text: string): SplitLineTextResult {
   for (const rawLine of lines) {
     if (looksLikeMentionOnly(rawLine)) {
       addUnique(ignoredMentions, rawLine);
+      continue;
+    }
+
+    if (looksLikeCarReferenceMeta(rawLine)) {
+      addUnique(ignoredNoise, rawLine);
       continue;
     }
 
