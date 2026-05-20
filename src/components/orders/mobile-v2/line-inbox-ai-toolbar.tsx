@@ -58,6 +58,12 @@ type LineInboxItemPhoto = {
   created_at?: string | null;
 };
 
+type LineInboxStagedPhoto = {
+  id: string;
+  file: File;
+  previewUrl: string;
+};
+
 type SuggestionPhotoSheetState = {
   rowKey: string;
   rowIndex: number;
@@ -133,6 +139,12 @@ const LINE_INBOX_PHOTO_REF_EXACT_REGEX = /^(ตามรูป|ตามภา�
 
 function hasLineInboxPhotoReference(value: string | null | undefined): boolean {
   return /(ตามรูป|ตามภาพ|ref\s*pic|as\s+photo|see\s+photo)/i.test(String(value ?? ""));
+}
+
+function revokeStagedPhotoMap(map: Record<string, LineInboxStagedPhoto[]>) {
+  Object.values(map).forEach((list) => {
+    list.forEach((photo) => URL.revokeObjectURL(photo.previewUrl));
+  });
 }
 
 function stablePillIndex(value: string): number {
@@ -258,6 +270,7 @@ export function LineInboxAiToolbar({
   const [suggestionPhotoSheet, setSuggestionPhotoSheet] = useState<SuggestionPhotoSheetState | null>(null);
   const [suggestionItemPhotos, setSuggestionItemPhotos] = useState<LineInboxItemPhoto[]>([]);
   const [suggestionPhotosLoading, setSuggestionPhotosLoading] = useState(false);
+  const [stagedSuggestionPhotos, setStagedSuggestionPhotos] = useState<Record<string, LineInboxStagedPhoto[]>>({});
   const [photoBusyRowKey, setPhotoBusyRowKey] = useState<string | null>(null);
   const [saveHint, setSaveHint] = useState<string | null>(null);
 
@@ -460,6 +473,9 @@ export function LineInboxAiToolbar({
   const canUseSuggestionPhotoSheet = Boolean(
     suggestionPhotoSheetItemId && (effectiveCarRowId || effectiveCarId != null)
   );
+  const stagedPhotosForOpenSheet = suggestionPhotoSheet
+    ? stagedSuggestionPhotos[suggestionPhotoSheet.rowKey] ?? []
+    : [];
 
   const rawBadgeTotal = queueTotalNew + pendingSaveCount;
   const showBadgeDot = rawBadgeTotal > 0;
@@ -563,12 +579,20 @@ export function LineInboxAiToolbar({
       setExpandedRows({});
       setSuggestionPhotoSheet(null);
       setSuggestionItemPhotos([]);
+      setStagedSuggestionPhotos((prev) => {
+        revokeStagedPhotoMap(prev);
+        return {};
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setRows([]);
       setExpandedRows({});
       setSuggestionPhotoSheet(null);
       setSuggestionItemPhotos([]);
+      setStagedSuggestionPhotos((prev) => {
+        revokeStagedPhotoMap(prev);
+        return {};
+      });
       setDetected(null);
       setExistingItems([]);
       setIgnoredVehicleLines([]);
@@ -599,6 +623,42 @@ export function LineInboxAiToolbar({
   const closeSuggestionPhotoSheet = useCallback(() => {
     setSuggestionPhotoSheet(null);
     setSuggestionItemPhotos([]);
+  }, []);
+
+  const clearStagedSuggestionPhotos = useCallback(() => {
+    setStagedSuggestionPhotos((prev) => {
+      revokeStagedPhotoMap(prev);
+      return {};
+    });
+  }, []);
+
+  const stageSuggestionPhotos = useCallback((rowKey: string, files: FileList | null) => {
+    const images = Array.from(files ?? []).filter((file) => String(file.type ?? "").startsWith("image/"));
+    if (!images.length) return;
+    setStagedSuggestionPhotos((prev) => ({
+      ...prev,
+      [rowKey]: [
+        ...(prev[rowKey] ?? []),
+        ...images.map((file) => ({
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+          file,
+          previewUrl: URL.createObjectURL(file),
+        })),
+      ],
+    }));
+  }, []);
+
+  const removeStagedSuggestionPhoto = useCallback((rowKey: string, photoId: string) => {
+    setStagedSuggestionPhotos((prev) => {
+      const current = prev[rowKey] ?? [];
+      const target = current.find((photo) => photo.id === photoId);
+      if (target) URL.revokeObjectURL(target.previewUrl);
+      const nextList = current.filter((photo) => photo.id !== photoId);
+      const next = { ...prev };
+      if (nextList.length) next[rowKey] = nextList;
+      else delete next[rowKey];
+      return next;
+    });
   }, []);
 
   const loadSuggestionItemPhotos = useCallback(
@@ -633,13 +693,18 @@ export function LineInboxAiToolbar({
   );
 
   const uploadSuggestionPhotos = useCallback(
-    async (rowKey: string, orderItemId: string | null | undefined, files: FileList | null) => {
+    async (
+      rowKey: string,
+      orderItemId: string | null | undefined,
+      files: FileList | File[] | null,
+      options: { silent?: boolean } = {}
+    ) => {
       const itemId = String(orderItemId ?? "").trim();
       if (!itemId || !files?.length) return;
       if (!effectiveCarRowId && effectiveCarId == null) return;
       setPhotoBusyRowKey(rowKey);
       setError(null);
-      setSaveHint(null);
+      if (!options.silent) setSaveHint(null);
       try {
         const form = new FormData();
         form.append("target_type", "item");
@@ -655,9 +720,9 @@ export function LineInboxAiToolbar({
         const data = (await res.json()) as { ok?: boolean; error?: string; uploaded?: unknown[] };
         if (!res.ok) throw new Error(data.error || res.statusText || "upload failed");
         const count = Array.isArray(data.uploaded) ? data.uploaded.length : files.length;
-        setSaveHint(
-          uiLang === "en" ? `Attached ${count} photo(s).` : `แนบรูปแล้ว ${count} รูป`
-        );
+        if (!options.silent) {
+          setSaveHint(uiLang === "en" ? `Attached ${count} photo(s).` : `แนบรูปแล้ว ${count} รูป`);
+        }
         await loadSuggestionItemPhotos(itemId);
         onSaved?.();
       } catch (e) {
@@ -735,13 +800,36 @@ export function LineInboxAiToolbar({
       };
       if (!res.ok) throw new Error(data.error || res.statusText || "confirm failed");
       const count = data.skipped_all ? 0 : (data.saved ?? []).length;
+      const actionableRowKeys = rows
+        .map((r, index) => ({
+          row: r,
+          rowKey: `${r.raw_text}-${r.matched_order_item_id ?? ""}-${index}`,
+        }))
+        .filter(({ row }) => row.included && row.action !== "skip");
+      let attachedPhotoCount = 0;
+      for (let i = 0; i < actionableRowKeys.length; i += 1) {
+        const savedItemId = String(data.saved?.[i]?.order_item_id ?? "").trim();
+        const rowKey = actionableRowKeys[i]?.rowKey ?? "";
+        const staged = rowKey ? stagedSuggestionPhotos[rowKey] ?? [] : [];
+        if (!savedItemId || staged.length === 0) continue;
+        await uploadSuggestionPhotos(
+          rowKey,
+          savedItemId,
+          staged.map((photo) => photo.file),
+          { silent: true }
+        );
+        attachedPhotoCount += staged.length;
+      }
       setSaveHint(
-        uiLang === "en" ? `Saved ${count} line(s).` : `บันทึกแล้ว ${count} รายการ`
+        uiLang === "en"
+          ? `Saved ${count} line(s)${attachedPhotoCount ? ` + attached ${attachedPhotoCount} photo(s)` : ""}.`
+          : `บันทึกแล้ว ${count} รายการ${attachedPhotoCount ? ` + แนบรูป ${attachedPhotoCount} รูป` : ""}`
       );
       setRows([]);
       setExpandedRows({});
       setSuggestionPhotoSheet(null);
       setSuggestionItemPhotos([]);
+      clearStagedSuggestionPhotos();
       setDetected(null);
       setExistingItems([]);
       setIgnoredVehicleLines([]);
@@ -754,7 +842,16 @@ export function LineInboxAiToolbar({
     } finally {
       setConfirmLoading(false);
     }
-  }, [effectiveCarRowId, effectiveCarId, rows, onSaved, uiLang]);
+  }, [
+    clearStagedSuggestionPhotos,
+    effectiveCarId,
+    effectiveCarRowId,
+    rows,
+    onSaved,
+    stagedSuggestionPhotos,
+    uiLang,
+    uploadSuggestionPhotos,
+  ]);
 
   return (
     <>
@@ -1369,17 +1466,11 @@ export function LineInboxAiToolbar({
               </button>
             </div>
 
-            {!canUseSuggestionPhotoSheet ? (
-              <p className="mb-3 text-xs font-medium text-amber-800">
-                {uiLang === "en" ? "Save first, then add photos from the refreshed card." : "บันทึกก่อน แล้วเพิ่มรูปจากการ์ดที่ refresh แล้ว"}
-              </p>
-            ) : null}
-
             <div className="mb-3">
               <label
                 className={cn(
                   "inline-flex min-h-10 w-full cursor-pointer items-center justify-center rounded-xl px-3 text-xs font-semibold touch-manipulation",
-                  photoBusyRowKey === suggestionPhotoSheet.rowKey || !canUseSuggestionPhotoSheet
+                  photoBusyRowKey === suggestionPhotoSheet.rowKey
                     ? "cursor-not-allowed bg-slate-200 text-slate-500"
                     : "bg-sky-600 text-white"
                 )}
@@ -1395,20 +1486,56 @@ export function LineInboxAiToolbar({
                   type="file"
                   accept="image/*"
                   multiple
-                  disabled={photoBusyRowKey === suggestionPhotoSheet.rowKey || !canUseSuggestionPhotoSheet}
+                  disabled={photoBusyRowKey === suggestionPhotoSheet.rowKey}
                   className="hidden"
                   onChange={(event) => {
                     const files = event.currentTarget.files;
-                    void uploadSuggestionPhotos(
-                      suggestionPhotoSheet.rowKey,
-                      suggestionPhotoSheetItemId,
-                      files
-                    );
+                    if (canUseSuggestionPhotoSheet) {
+                      void uploadSuggestionPhotos(
+                        suggestionPhotoSheet.rowKey,
+                        suggestionPhotoSheetItemId,
+                        files
+                      );
+                    } else {
+                      stageSuggestionPhotos(suggestionPhotoSheet.rowKey, files);
+                    }
                     event.currentTarget.value = "";
                   }}
                 />
               </label>
             </div>
+
+            {stagedPhotosForOpenSheet.length > 0 ? (
+              <div className="mb-3">
+                <p className="mb-2 text-[11px] font-semibold text-slate-600">
+                  {uiLang === "en"
+                    ? `Ready to attach after save (${stagedPhotosForOpenSheet.length})`
+                    : `พร้อมแนบหลังบันทึก (${stagedPhotosForOpenSheet.length})`}
+                </p>
+                <div className="flex gap-2 overflow-x-auto pb-1">
+                  {stagedPhotosForOpenSheet.map((photo) => (
+                    <div
+                      key={photo.id}
+                      className="relative h-24 w-24 shrink-0 overflow-hidden rounded-xl bg-slate-100 ring-1 ring-slate-200"
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={photo.previewUrl}
+                        alt={uiLang === "en" ? "Pending item photo" : "รูปที่รอแนบ"}
+                        className="h-full w-full object-cover"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeStagedSuggestionPhoto(suggestionPhotoSheet.rowKey, photo.id)}
+                        className="absolute right-1 top-1 rounded-full bg-black/70 px-2 py-0.5 text-[10px] font-semibold text-white"
+                      >
+                        {uiLang === "en" ? "Remove" : "ลบ"}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
 
             {canUseSuggestionPhotoSheet ? (
               suggestionPhotosLoading ? (
