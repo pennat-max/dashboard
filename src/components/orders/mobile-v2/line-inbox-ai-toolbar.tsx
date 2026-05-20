@@ -244,6 +244,7 @@ export function LineInboxAiToolbar({
   const [existingItems, setExistingItems] = useState<ExistingOrderItemRow[]>([]);
   const [rows, setRows] = useState<RowDraft[]>([]);
   const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
+  const [photoBusyRowKey, setPhotoBusyRowKey] = useState<string | null>(null);
   const [saveHint, setSaveHint] = useState<string | null>(null);
 
   const [queueMessages, setQueueMessages] = useState<PendingQueueMessage[]>([]);
@@ -559,6 +560,42 @@ export function LineInboxAiToolbar({
   const toggleRowExpanded = useCallback((rowKey: string) => {
     setExpandedRows((prev) => ({ ...prev, [rowKey]: !prev[rowKey] }));
   }, []);
+
+  const uploadSuggestionPhotos = useCallback(
+    async (rowKey: string, orderItemId: string | null | undefined, files: FileList | null) => {
+      const itemId = String(orderItemId ?? "").trim();
+      if (!itemId || !files?.length) return;
+      if (!effectiveCarRowId && effectiveCarId == null) return;
+      setPhotoBusyRowKey(rowKey);
+      setError(null);
+      setSaveHint(null);
+      try {
+        const form = new FormData();
+        form.append("target_type", "item");
+        form.append("order_item_id", itemId);
+        if (effectiveCarRowId) form.append("car_row_id", effectiveCarRowId);
+        if (effectiveCarId != null) form.append("car_id", String(effectiveCarId));
+        Array.from(files).forEach((file) => form.append("files", file));
+        const res = await fetch("/api/m/order-photos/upload", {
+          method: "POST",
+          body: form,
+          credentials: "same-origin",
+        });
+        const data = (await res.json()) as { ok?: boolean; error?: string; uploaded?: unknown[] };
+        if (!res.ok) throw new Error(data.error || res.statusText || "upload failed");
+        const count = Array.isArray(data.uploaded) ? data.uploaded.length : files.length;
+        setSaveHint(
+          uiLang === "en" ? `Attached ${count} photo(s).` : `แนบรูปแล้ว ${count} รูป`
+        );
+        onSaved?.();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setPhotoBusyRowKey((cur) => (cur === rowKey ? null : cur));
+      }
+    },
+    [effectiveCarId, effectiveCarRowId, onSaved, uiLang]
+  );
 
   const runConfirm = useCallback(async () => {
     setError(null);
@@ -963,6 +1000,10 @@ export function LineInboxAiToolbar({
                   const rowKey = `${row.raw_text}-${row.matched_order_item_id ?? ""}-${i}`;
                   const expanded = Boolean(expandedRows[rowKey]);
                   const hasPhotoRef = hasLineInboxPhotoReference(row.itemName);
+                  const matchedOrderItemId = String(row.matched_order_item_id ?? "").trim();
+                  const canAttachExistingPhotos =
+                    hasPhotoRef && row.included && row.action !== "skip" && Boolean(matchedOrderItemId);
+                  const photoBusy = photoBusyRowKey === rowKey;
                   return (
                     <li
                       key={`${row.raw_text}-${i}`}
@@ -1044,6 +1085,37 @@ export function LineInboxAiToolbar({
                               </option>
                             ))}
                           </select>
+                          {canAttachExistingPhotos ? (
+                            <label
+                              className={cn(
+                                "flex h-10 min-h-[40px] shrink-0 cursor-pointer items-center justify-center rounded-full px-2.5 text-[11px] font-semibold shadow-sm ring-1 touch-manipulation",
+                                photoBusy
+                                  ? "bg-slate-200 text-slate-500 ring-slate-300"
+                                  : "bg-slate-950 text-white ring-slate-900"
+                              )}
+                              title={uiLang === "en" ? "Attach item photo" : "เพิ่มรูปตามรายการ"}
+                            >
+                              {photoBusy
+                                ? uiLang === "en"
+                                  ? "Uploading"
+                                  : "แนบ..."
+                                : uiLang === "en"
+                                  ? "Add photo"
+                                  : "เพิ่มรูป"}
+                              <input
+                                type="file"
+                                accept="image/*"
+                                multiple
+                                disabled={photoBusy}
+                                className="hidden"
+                                onChange={(event) => {
+                                  const files = event.currentTarget.files;
+                                  void uploadSuggestionPhotos(rowKey, matchedOrderItemId, files);
+                                  event.currentTarget.value = "";
+                                }}
+                              />
+                            </label>
+                          ) : null}
                           <button
                             type="button"
                             onClick={() => toggleRowExpanded(rowKey)}
@@ -1152,18 +1224,6 @@ export function LineInboxAiToolbar({
                           />
                         </label>
                       </div>
-
-                      {hasPhotoRef ? (
-                        <div className="rounded-lg bg-sky-50 px-2 py-1.5 text-[11px] leading-snug text-sky-900 ring-1 ring-sky-200/80">
-                          <span className="font-semibold">
-                            {uiLang === "en" ? "Photo reference" : "รูปอ้างอิง"}
-                          </span>
-                          {" · "}
-                          {uiLang === "en"
-                            ? "Save this row first, then attach photos from the refreshed order card."
-                            : "บันทึกรายการนี้ก่อน แล้วแนบรูปจากการ์ดงานที่ refresh แล้ว"}
-                        </div>
-                      ) : null}
 
                       {row.suggested_note ? (
                         <p className="rounded-lg bg-sky-50 px-2 py-1.5 text-[11px] leading-snug text-sky-900 ring-1 ring-sky-200/80">
