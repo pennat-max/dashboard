@@ -137,10 +137,6 @@ function actionLabelTh(action: RowDraft["action"]): string {
 const LINE_INBOX_PHOTO_REF_SPLIT_REGEX = /(ตามรูป|ตามภาพ|ref\s*pic|as\s+photo|see\s+photo)/gi;
 const LINE_INBOX_PHOTO_REF_EXACT_REGEX = /^(ตามรูป|ตามภาพ|ref\s*pic|as\s+photo|see\s+photo)$/i;
 
-function hasLineInboxPhotoReference(value: string | null | undefined): boolean {
-  return /(ตามรูป|ตามภาพ|ref\s*pic|as\s+photo|see\s+photo)/i.test(String(value ?? ""));
-}
-
 function revokeStagedPhotoMap(map: Record<string, LineInboxStagedPhoto[]>) {
   Object.values(map).forEach((list) => {
     list.forEach((photo) => URL.revokeObjectURL(photo.previewUrl));
@@ -1184,11 +1180,6 @@ export function LineInboxAiToolbar({
                   const canMerge = Boolean(String(row.matched_order_item_id ?? "").trim());
                   const rowKey = `${row.raw_text}-${row.matched_order_item_id ?? ""}-${i}`;
                   const expanded = Boolean(expandedRows[rowKey]);
-                  const hasPhotoRef = hasLineInboxPhotoReference(row.itemName);
-                  const matchedOrderItemId = String(row.matched_order_item_id ?? "").trim();
-                  const canAttachExistingPhotos =
-                    hasPhotoRef && row.included && row.action !== "skip" && Boolean(matchedOrderItemId);
-                  const photoBusy = photoBusyRowKey === rowKey;
                   return (
                     <li
                       key={`${row.raw_text}-${i}`}
@@ -1270,27 +1261,6 @@ export function LineInboxAiToolbar({
                               </option>
                             ))}
                           </select>
-                          {canAttachExistingPhotos ? (
-                            <button
-                              type="button"
-                              onClick={() => openSuggestionPhotoSheet(rowKey, i)}
-                              className={cn(
-                                "flex h-10 min-h-[40px] shrink-0 cursor-pointer items-center justify-center rounded-full px-2.5 text-[11px] font-semibold shadow-sm ring-1 touch-manipulation",
-                                photoBusy
-                                  ? "bg-slate-200 text-slate-500 ring-slate-300"
-                                  : "bg-slate-950 text-white ring-slate-900"
-                              )}
-                              title={uiLang === "en" ? "Attach item photo" : "เพิ่มรูปตามรายการ"}
-                            >
-                              {photoBusy
-                                ? uiLang === "en"
-                                  ? "Uploading"
-                                  : "แนบ..."
-                                : uiLang === "en"
-                                  ? "Add photo"
-                                  : "เพิ่มรูป"}
-                            </button>
-                          ) : null}
                           <button
                             type="button"
                             onClick={() => toggleRowExpanded(rowKey)}
