@@ -214,18 +214,19 @@ function LineInboxSuggestedItemNamePreview({
           );
         }
         return (
-          <button
+          <a
             key={`${part}-${index}`}
-            type="button"
+            href="#line-inbox-item-photos"
             onClick={(event) => {
+              event.preventDefault();
               event.stopPropagation();
               onPhotoReference();
             }}
-            className="inline cursor-pointer border-0 bg-transparent p-0 align-baseline font-inherit font-semibold text-sky-600 underline decoration-sky-400 decoration-2 underline-offset-2 hover:text-sky-700 active:text-sky-800"
+            className="inline cursor-pointer align-baseline font-inherit font-semibold text-sky-600 underline decoration-sky-400 decoration-2 underline-offset-2 hover:text-sky-700 active:text-sky-800"
             title={uiLang === "en" ? "Photo reference" : "รูปอ้างอิง"}
           >
             {part}
-          </button>
+          </a>
         );
       })}
     </div>
