@@ -45,6 +45,7 @@ export async function POST(request: Request) {
       car_row_id: car_row_id_in || null,
       car_id: car_id_in ?? null,
       attachmentsCount: attachments.length,
+      useAi: true,
     });
 
     const payload: LineInboxAnalyzeResponse & {

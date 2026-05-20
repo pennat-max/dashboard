@@ -92,6 +92,7 @@ export function LineInboxAiToolbar({
   const [error, setError] = useState<string | null>(null);
   const [detected, setDetected] = useState<LineInboxAnalyzeResponse["detected_car"] | null>(null);
   const [needsReview, setNeedsReview] = useState(false);
+  const [ignoredVehicleLines, setIgnoredVehicleLines] = useState<string[]>([]);
   const [ignoredMentionLines, setIgnoredMentionLines] = useState<string[]>([]);
   const [ignoredNoiseLines, setIgnoredNoiseLines] = useState<string[]>([]);
   const [rows, setRows] = useState<RowDraft[]>([]);
@@ -257,6 +258,7 @@ export function LineInboxAiToolbar({
       if (!res.ok) throw new Error(data.error || res.statusText || "analyze failed");
       setDetected(data.detected_car);
       setNeedsReview(Boolean(data.needs_human_review));
+      setIgnoredVehicleLines(data.ignored_vehicle_spec_lines ?? []);
       setIgnoredMentionLines(data.ignored_mention_lines ?? []);
       setIgnoredNoiseLines(data.ignored_noise_lines ?? []);
       const next: RowDraft[] = (data.items ?? []).map((item) => ({
@@ -270,6 +272,7 @@ export function LineInboxAiToolbar({
       setError(e instanceof Error ? e.message : String(e));
       setRows([]);
       setDetected(null);
+      setIgnoredVehicleLines([]);
       setIgnoredMentionLines([]);
       setIgnoredNoiseLines([]);
     } finally {
@@ -331,6 +334,7 @@ export function LineInboxAiToolbar({
       );
       setRows([]);
       setDetected(null);
+      setIgnoredVehicleLines([]);
       setIgnoredMentionLines([]);
       setIgnoredNoiseLines([]);
       setRawText("");
@@ -567,6 +571,21 @@ export function LineInboxAiToolbar({
               </p>
               <ul className="space-y-0.5">
                 {[...ignoredMentionLines, ...ignoredNoiseLines].slice(0, 6).map((line, index) => (
+                  <li key={`${line}-${index}`} className="line-clamp-1">
+                    {line}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          {ignoredVehicleLines.length > 0 ? (
+            <div className="mb-3 rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2 text-[11px] text-slate-600">
+              <p className="mb-1 font-semibold text-slate-700">
+                {uiLang === "en" ? "Used for car matching, not jobs" : "ใช้สำหรับจับรถ ไม่ใช่งาน"}
+              </p>
+              <ul className="space-y-0.5">
+                {ignoredVehicleLines.slice(0, 6).map((line, index) => (
                   <li key={`${line}-${index}`} className="line-clamp-1">
                     {line}
                   </li>

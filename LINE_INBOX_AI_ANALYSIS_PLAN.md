@@ -170,6 +170,8 @@ Thresholds are tunable server-side env vars.
 - Empty strings allowed where N/A.
 - Vehicle identity/spec, mention/tag/person-only, emoji-only, and punctuation-only lines are context only.
 - `items` must contain actionable work/order lines only; strip LINE mentions from real work lines before returning suggestions.
+- When `GEMINI_API_KEY` or `GROQ_API_KEY` exists on the server, `/api/line-inbox/analyze` may ask AI for this schema.
+- AI output is still advisory: the server runs rule-based post-processing after AI and removes mention-only, vehicle spec-only, plate/chassis-only, emoji-only, and punctuation-only text from saveable `items`.
 
 ---
 
