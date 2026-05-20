@@ -23,6 +23,9 @@ export type LineInboxAnalyzeResponse = {
     car_row_id: string;
     confidence: number;
   };
+  ignored_vehicle_spec_lines?: string[];
+  ignored_mention_lines?: string[];
+  ignored_noise_lines?: string[];
   items: LineInboxAnalyzeItem[];
   needs_human_review: boolean;
 };

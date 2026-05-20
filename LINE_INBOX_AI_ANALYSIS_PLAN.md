@@ -146,6 +146,9 @@ Thresholds are tunable server-side env vars.
     "car_row_id": "",
     "confidence": 0
   },
+  "ignored_vehicle_spec_lines": [],
+  "ignored_mention_lines": [],
+  "ignored_noise_lines": [],
   "items": [
     {
       "raw_text": "",
@@ -165,6 +168,8 @@ Thresholds are tunable server-side env vars.
 
 - `matched_order_item_id` / `matched_item_name` populated when `duplicate` or `possible_duplicate`.
 - Empty strings allowed where N/A.
+- Vehicle identity/spec, mention/tag/person-only, emoji-only, and punctuation-only lines are context only.
+- `items` must contain actionable work/order lines only; strip LINE mentions from real work lines before returning suggestions.
 
 ---
 

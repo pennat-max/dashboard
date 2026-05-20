@@ -2,7 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { fetchOrderItemsForTask, fetchOrderTaskIdForCar } from "@/lib/line-inbox/fetch-task-items";
 import { resolveCarFromContext } from "@/lib/line-inbox/resolve-car";
 import { classifyDuplicateLine, suggestCategoryAndStatus } from "@/lib/line-inbox/heuristic-suggest";
-import { splitLineTextToTaskLines } from "@/lib/line-inbox/split-line-text";
+import { splitLineTextForInbox } from "@/lib/line-inbox/split-line-text";
 import type { LineInboxAnalyzeResponse } from "@/lib/line-inbox/types";
 
 export type RunLineInboxAnalyzeInput = {
@@ -40,7 +40,8 @@ export async function runLineInboxAnalyzeCore(
     }
   }
 
-  const lines = splitLineTextToTaskLines(raw_text);
+  const split = splitLineTextForInbox(raw_text);
+  const lines = split.items;
   const items: LineInboxAnalyzeResponse["items"] = [];
 
   for (const line of lines) {
@@ -77,6 +78,9 @@ export async function runLineInboxAnalyzeCore(
       car_row_id: detected.car_row_id,
       confidence: Math.round(detected.confidence * 100) / 100,
     },
+    ignored_vehicle_spec_lines: split.ignored_vehicle_spec_lines,
+    ignored_mention_lines: split.ignored_mention_lines,
+    ignored_noise_lines: split.ignored_noise_lines,
     items,
     needs_human_review,
     attachments_meta_count: attachmentsCount,
