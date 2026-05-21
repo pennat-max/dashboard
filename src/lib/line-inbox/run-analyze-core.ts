@@ -14,6 +14,8 @@ export type RunLineInboxAnalyzeInput = {
   useAi?: boolean;
 };
 
+type GuardedLine = { text: string; note?: string; aiConfidence?: number; aiReason?: string };
+
 function addUnique(target: string[], value: string) {
   const clean = String(value ?? "").replace(/\s+/g, " ").trim();
   if (!clean) return;
@@ -24,6 +26,65 @@ function addUnique(target: string[], value: string) {
 
 function lineKey(value: string): string {
   return String(value ?? "").replace(/\s+/g, "").toLowerCase();
+}
+
+function comparableLineKey(value: string): string {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/ตาม\s*(?:รูป|ภาพ)/g, "")
+    .replace(/\b(?:photo|image|pic|picture)\b/g, "")
+    .replace(/[^\p{L}\p{N}%]+/gu, "")
+    .trim();
+}
+
+function hasReferencePhotoText(value: string): boolean {
+  return /ตาม\s*(?:รูป|ภาพ)|\b(?:photo|image|pic|picture)\b/i.test(value);
+}
+
+function hasPreservedDetailToken(value: string): boolean {
+  return /[\d%]|(?:km|กม\.?|กิโล|เปอร์เซ็น|นิ้ว|cm|mm|inch|วัน|เดือน|ปี)/i.test(value);
+}
+
+function areEquivalentWorkLines(left: string, right: string): boolean {
+  const a = comparableLineKey(left);
+  const b = comparableLineKey(right);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const shorter = a.length <= b.length ? a : b;
+  const longer = a.length <= b.length ? b : a;
+  return shorter.length >= 6 && longer.includes(shorter);
+}
+
+function workLineScore(line: GuardedLine): number {
+  const text = String(line.text ?? "");
+  let score = comparableLineKey(text).length;
+  if (hasReferencePhotoText(text)) score += 100;
+  if (hasPreservedDetailToken(text)) score += 40;
+  if (line.note) score += Math.min(30, line.note.length);
+  if (typeof line.aiConfidence === "number") score += line.aiConfidence;
+  return score;
+}
+
+function upsertGuardedLine(target: GuardedLine[], next: GuardedLine) {
+  const cleanText = String(next.text ?? "").replace(/\s+/g, " ").trim();
+  if (!cleanText) return;
+  const candidate: GuardedLine = { ...next, text: cleanText };
+  const existingIndex = target.findIndex((line) => areEquivalentWorkLines(line.text, candidate.text));
+  if (existingIndex < 0) {
+    target.push(candidate);
+    return;
+  }
+
+  const existing = target[existingIndex];
+  const keepCandidate = workLineScore(candidate) > workLineScore(existing);
+  const kept: GuardedLine = keepCandidate ? candidate : existing;
+  const other: GuardedLine = keepCandidate ? existing : candidate;
+  target[existingIndex] = {
+    ...kept,
+    note: mergeNote(kept.note, other.note),
+    aiConfidence: kept.aiConfidence ?? other.aiConfidence,
+    aiReason: kept.aiReason ?? other.aiReason,
+  };
 }
 
 function mergeNote(existing: string | undefined, next: string | undefined): string {
@@ -60,7 +121,7 @@ function mergeAiWithRuleGuard(
   rawText: string,
   aiDraft: LineInboxAiAnalyzeDraft | null
 ): {
-  lines: Array<{ text: string; note?: string; aiConfidence?: number; aiReason?: string }>;
+  lines: GuardedLine[];
   ignored_vehicle_spec_lines: string[];
   ignored_mention_lines: string[];
   ignored_noise_lines: string[];
@@ -89,7 +150,7 @@ function mergeAiWithRuleGuard(
           suggested_note: item.note,
         }))
       : fallback.items;
-  const guardedLines: Array<{ text: string; note?: string; aiConfidence?: number; aiReason?: string }> = [];
+  const guardedLines: GuardedLine[] = [];
 
   for (const source of sourceItems) {
     const candidate = asAiItemText(source);
@@ -101,14 +162,8 @@ function mergeAiWithRuleGuard(
     for (const line of guarded.ignored_noise_lines) addUnique(ignoredNoise, line);
 
     for (const [lineIndex, line] of guarded.items.entries()) {
-      const key = lineKey(line);
-      const existingLine = guardedLines.find((v) => lineKey(v.text) === key);
       const note = lineIndex === 0 ? candidate.note : undefined;
-      if (existingLine) {
-        existingLine.note = mergeNote(existingLine.note, note);
-        continue;
-      }
-      guardedLines.push({
+      upsertGuardedLine(guardedLines, {
         text: line,
         note,
         aiConfidence: candidate.confidence,
@@ -118,17 +173,12 @@ function mergeAiWithRuleGuard(
   }
 
   for (const grouped of fallbackGrouped) {
-    const existingLine = guardedLines.find((line) => lineKey(line.text) === lineKey(grouped.text));
-    if (existingLine) {
-      existingLine.note = mergeNote(existingLine.note, grouped.note);
-    } else {
-      guardedLines.push({ text: grouped.text, note: grouped.note || undefined });
-    }
+    upsertGuardedLine(guardedLines, { text: grouped.text, note: grouped.note || undefined });
   }
 
   if (guardedLines.length === 0 && fallback.items.length > 0) {
     for (const grouped of fallbackGrouped.length ? fallbackGrouped : fallback.items.map((text) => ({ text, note: "" }))) {
-      guardedLines.push({ text: grouped.text, note: grouped.note || undefined });
+      upsertGuardedLine(guardedLines, { text: grouped.text, note: grouped.note || undefined });
     }
   }
 
