@@ -5943,6 +5943,8 @@ export function MobileOrderTrackingHome({
       id: o.id,
       fullPlate: o.fullPlate,
       car: o.car,
+      chassis: o.chassis,
+      sale: o.sale,
       carRowId: o.carRowId,
       carId: o.carId,
     }));
@@ -7810,6 +7812,9 @@ export function MobileOrderTrackingHome({
                       orders={lineInboxAiOrderPicks}
                       uiLang={uiLang}
                       preferredOrderId={initialFocusedOrderId}
+                      staffOptions={staffRoster}
+                      saleAssigneesBySale={saleAssignees}
+                      statusOptions={itemStatusRoster}
                       onSaved={() => router.refresh()}
                     />
                     {itemStatusFilterOptionsForToolbar.map((s) => (

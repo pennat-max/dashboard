@@ -39,6 +39,14 @@ const confirmRowSchema = z
       (v) => (v === null || v === undefined ? undefined : String(v)),
       z.string().max(4000).optional()
     ),
+    assignee_staff: z.preprocess(
+      (v) => (v === null || v === undefined ? undefined : String(v)),
+      z.string().max(500).optional()
+    ),
+    due_date: z.preprocess(
+      (v) => (v === null || v === undefined ? undefined : String(v)),
+      z.string().max(100).optional()
+    ),
   })
   .superRefine((row, ctx) => {
     const oid = row.order_item_id != null ? String(row.order_item_id).trim() : "";

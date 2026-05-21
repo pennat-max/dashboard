@@ -1,14 +1,23 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Check, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import type { DuplicateStatus, LineInboxAnalyzeItem, LineInboxAnalyzeResponse } from "@/lib/line-inbox/types";
+import { resolveSaleStaffForOrder } from "@/lib/orders/sale-assignees-shared";
+import type {
+  DuplicateStatus,
+  ExistingOrderItemRow,
+  LineInboxAnalyzeItem,
+  LineInboxAnalyzeResponse,
+} from "@/lib/line-inbox/types";
 
 export type LineInboxAiOrderPick = {
   id: string;
   fullPlate: string;
   car: string;
+  chassis?: string | null;
+  sale?: string | null;
   carRowId: string | null;
   carId: number | null;
 };
@@ -38,11 +47,38 @@ type RowDraft = LineInboxAnalyzeItem & {
   action: "skip" | "create" | "merge";
   note: string;
   included: boolean;
+  itemName: string;
+  assignee: string;
+  status: string;
+  dueDate: string;
+};
+
+type LineInboxItemPhoto = {
+  id: string;
+  url: string;
+  created_at?: string | null;
+};
+
+type LineInboxStagedPhoto = {
+  id: string;
+  file: File;
+  previewUrl: string;
+};
+
+type SuggestionPhotoSheetState = {
+  rowKey: string;
+  rowIndex: number;
 };
 
 function defaultAction(item: LineInboxAnalyzeItem): RowDraft["action"] {
   if (item.duplicate_status === "duplicate" && String(item.matched_order_item_id ?? "").trim()) {
     return "merge";
+  }
+  if (
+    item.duplicate_status === "possible_duplicate" &&
+    String(item.matched_order_item_id ?? "").trim()
+  ) {
+    return "skip";
   }
   return "create";
 }
@@ -73,27 +109,292 @@ function duplicateBadgeClass(status: DuplicateStatus): string {
   }
 }
 
+function normalizeLookup(value: string | null | undefined): string {
+  return String(value ?? "")
+    .replace(/[\s-]+/g, "")
+    .toUpperCase();
+}
+
+function safeDateValue(value: string | null | undefined): string {
+  const raw = String(value ?? "").trim();
+  const m = raw.match(/^\d{4}-\d{2}-\d{2}/);
+  return m?.[0] ?? "";
+}
+
+function normalizeSearchText(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, "");
+}
+
+function buildLineReplyText({
+  plate,
+  lines,
+  uiLang,
+}: {
+  plate: string;
+  lines: Array<{ name: string; status: string }>;
+  uiLang: UiLang;
+}): string {
+  const safePlate = plate.trim() || "-";
+  const itemLines =
+    lines.length > 0
+      ? lines.map((line, index) => `${index + 1}. ${line.name.trim() || "-"} - ${line.status.trim() || "-"}`).join("\n")
+      : "-";
+
+  if (uiLang === "en") {
+    return [
+      "Received the request.",
+      `Car: ${safePlate}`,
+      "Items:",
+      itemLines,
+      "You can follow the status in Order Tracking.",
+    ].join("\n");
+  }
+
+  return [
+    "รับงานแล้วครับ",
+    `รถ: ${safePlate}`,
+    "รายการ:",
+    itemLines,
+    "ติดตามสถานะในระบบ Order Tracking ได้ครับ",
+  ].join("\n");
+}
+
+function addUniqueOption(target: string[], value: string | null | undefined) {
+  const clean = String(value ?? "").trim();
+  if (!clean) return;
+  const key = clean.toLowerCase();
+  if (target.some((v) => v.toLowerCase() === key)) return;
+  target.push(clean);
+}
+
+function actionLabelTh(action: RowDraft["action"]): string {
+  if (action === "merge") return "อัปเดตงานเดิม";
+  if (action === "skip") return "ข้าม";
+  return "เพิ่มงานใหม่";
+}
+
+const LINE_INBOX_PHOTO_REF_SPLIT_REGEX = /(ตามรูป|ตามภาพ|ref\s*pic|as\s+photo|see\s+photo)/gi;
+const LINE_INBOX_PHOTO_REF_EXACT_REGEX = /^(ตามรูป|ตามภาพ|ref\s*pic|as\s+photo|see\s+photo)$/i;
+
+function revokeStagedPhotoMap(map: Record<string, LineInboxStagedPhoto[]>) {
+  Object.values(map).forEach((list) => {
+    list.forEach((photo) => URL.revokeObjectURL(photo.previewUrl));
+  });
+}
+
+function stablePillIndex(value: string): number {
+  let h = 0;
+  for (let i = 0; i < value.length; i += 1) h = (h * 31 + value.charCodeAt(i)) >>> 0;
+  return h;
+}
+
+const LINE_INBOX_ASSIGNEE_SURFACE_CLASSES = [
+  "bg-emerald-100 text-emerald-950 ring-emerald-300",
+  "bg-cyan-100 text-cyan-950 ring-cyan-300",
+  "bg-lime-100 text-lime-950 ring-lime-300",
+  "bg-violet-100 text-violet-950 ring-violet-300",
+  "bg-fuchsia-100 text-fuchsia-950 ring-fuchsia-300",
+  "bg-amber-100 text-amber-950 ring-amber-300",
+  "bg-sky-100 text-sky-950 ring-sky-300",
+  "bg-rose-100 text-rose-950 ring-rose-300",
+];
+
+function lineInboxAssigneeLinkClasses(assignee: string | null | undefined): string {
+  const name = String(assignee ?? "").trim();
+  if (!name) return "bg-white text-slate-700 ring-slate-200";
+  return LINE_INBOX_ASSIGNEE_SURFACE_CLASSES[
+    stablePillIndex(name) % LINE_INBOX_ASSIGNEE_SURFACE_CLASSES.length
+  ]!;
+}
+
+function lineInboxStatusLinkClasses(status: string | null | undefined): string {
+  const s = String(status ?? "").trim();
+  if (!s) return "bg-white text-slate-700 ring-slate-200";
+  if (s === "จบ") return "bg-sky-50 text-sky-800 ring-sky-300";
+  if (s === "สั่ง" || s === "เช็ค") return "bg-white text-amber-900 ring-slate-200";
+  return "bg-white text-emerald-900 ring-slate-200";
+}
+
+function lineInboxAssigneePillClasses(assignee: string | null | undefined): string {
+  return lineInboxAssigneeLinkClasses(assignee);
+}
+
+function lineInboxStatusPillClasses(status: string | null | undefined): string {
+  return lineInboxStatusLinkClasses(status);
+}
+
+function LineInboxInlineSelectLink({
+  value,
+  options,
+  onChange,
+  title,
+  emptyLabel,
+  className,
+}: {
+  value: string;
+  options: string[];
+  onChange: (value: string) => void;
+  title: string;
+  emptyLabel: string;
+  className?: string;
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      title={title}
+      aria-label={title}
+      className={cn(
+        "h-10 min-h-[40px] w-[76px] min-w-[4.5rem] shrink-0 touch-manipulation rounded-full border-0 px-2 py-1.5 text-xs font-semibold shadow-sm outline-none ring-1 focus-visible:ring-2 sm:w-[88px]",
+        className
+      )}
+    >
+      <option value="">{emptyLabel}</option>
+      {options.map((option) => (
+        <option key={option} value={option}>
+          {option}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function LineInboxSuggestedItemNameField({
+  value,
+  uiLang,
+  onChange,
+  onPhotoReference,
+}: {
+  value: string;
+  uiLang: UiLang;
+  onChange: (value: string) => void;
+  onPhotoReference: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const text = String(value ?? "");
+  const trimmed = text.trim();
+  const hasPhotoReference = LINE_INBOX_PHOTO_REF_SPLIT_REGEX.test(text);
+  LINE_INBOX_PHOTO_REF_SPLIT_REGEX.lastIndex = 0;
+
+  useEffect(() => {
+    if (!editing) return;
+    const el = inputRef.current;
+    if (!el) return;
+    el.focus();
+    const len = el.value.length;
+    try {
+      el.setSelectionRange(len, len);
+    } catch {
+      /* ignore */
+    }
+  }, [editing]);
+
+  const inputClass =
+    "min-w-0 flex-1 basis-0 rounded-xl bg-transparent px-1.5 py-1.5 text-sm font-semibold text-slate-900 outline-none focus:bg-white focus:ring-2 focus:ring-slate-300/80";
+
+  if (!hasPhotoReference || editing) {
+    return (
+      <input
+        ref={inputRef}
+        value={text}
+        onChange={(event) => onChange(event.target.value)}
+        onBlur={() => setEditing(false)}
+        placeholder={uiLang === "en" ? "Task name" : "ชื่องาน"}
+        className={inputClass}
+      />
+    );
+  }
+
+  const parts = trimmed.split(LINE_INBOX_PHOTO_REF_SPLIT_REGEX).filter(Boolean);
+  return (
+    <div
+      data-line-inbox-item-name-preview=""
+      role="button"
+      tabIndex={0}
+      onClick={(event) => {
+        if ((event.target as HTMLElement).closest("[data-line-inbox-photo-link]")) return;
+        setEditing(true);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          setEditing(true);
+        }
+      }}
+      className="inline-flex max-w-full min-w-0 flex-1 cursor-text flex-nowrap items-baseline gap-0 overflow-x-auto rounded-xl bg-transparent px-1.5 py-1.5 text-sm font-semibold leading-snug text-slate-900 ring-1 ring-transparent hover:bg-slate-50/80 focus:outline-none focus:ring-slate-300"
+      title={uiLang === "en" ? "Tap to edit task name" : "ชื่องาน — แตะเพื่อแก้ไข"}
+    >
+      {parts.map((part, index) => {
+        const isPhotoRef = LINE_INBOX_PHOTO_REF_EXACT_REGEX.test(part.trim());
+        if (!isPhotoRef) {
+          return (
+            <span key={`${part}-${index}`} className="whitespace-pre-wrap break-words">
+              {part}
+            </span>
+          );
+        }
+        return (
+          <button
+            type="button"
+            data-line-inbox-photo-link=""
+            key={`${part}-${index}`}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onPhotoReference();
+            }}
+            className="inline shrink-0 cursor-pointer border-0 bg-transparent p-0 align-baseline font-inherit font-semibold text-sky-600 underline decoration-sky-400 decoration-2 underline-offset-2 hover:text-sky-700 active:text-sky-800"
+            title={uiLang === "en" ? "Upload/view photos for this item" : "เพิ่มรูปและดูรูปตามรายการนี้"}
+          >
+            {part}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function LineInboxAiToolbar({
   orders,
   uiLang,
   preferredOrderId,
+  staffOptions = [],
+  saleAssigneesBySale = {},
+  statusOptions = [],
   onSaved,
 }: {
   orders: LineInboxAiOrderPick[];
   uiLang: UiLang;
   preferredOrderId?: string | null;
+  staffOptions?: string[];
+  saleAssigneesBySale?: Record<string, string>;
+  statusOptions?: string[];
   onSaved?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [selectedOrderId, setSelectedOrderId] = useState("");
+  const [carSearch, setCarSearch] = useState("");
   const [rawText, setRawText] = useState("");
   const [analyzeLoading, setAnalyzeLoading] = useState(false);
   const [confirmLoading, setConfirmLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [detected, setDetected] = useState<LineInboxAnalyzeResponse["detected_car"] | null>(null);
   const [needsReview, setNeedsReview] = useState(false);
+  const [ignoredVehicleLines, setIgnoredVehicleLines] = useState<string[]>([]);
+  const [ignoredMentionLines, setIgnoredMentionLines] = useState<string[]>([]);
+  const [ignoredNoiseLines, setIgnoredNoiseLines] = useState<string[]>([]);
+  const [existingItems, setExistingItems] = useState<ExistingOrderItemRow[]>([]);
   const [rows, setRows] = useState<RowDraft[]>([]);
+  const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
+  const [suggestionPhotoSheet, setSuggestionPhotoSheet] = useState<SuggestionPhotoSheetState | null>(null);
+  const [suggestionItemPhotos, setSuggestionItemPhotos] = useState<LineInboxItemPhoto[]>([]);
+  const [suggestionPhotosLoading, setSuggestionPhotosLoading] = useState(false);
+  const [stagedSuggestionPhotos, setStagedSuggestionPhotos] = useState<Record<string, LineInboxStagedPhoto[]>>({});
+  const [photoBusyRowKey, setPhotoBusyRowKey] = useState<string | null>(null);
   const [saveHint, setSaveHint] = useState<string | null>(null);
+  const [replyText, setReplyText] = useState("");
+  const [replyCopied, setReplyCopied] = useState(false);
 
   const [queueMessages, setQueueMessages] = useState<PendingQueueMessage[]>([]);
   const [queueTotalNew, setQueueTotalNew] = useState(0);
@@ -157,7 +458,7 @@ export function LineInboxAiToolbar({
     }
     setSelectedOrderId((prev) => {
       if (prev && orders.some((o) => o.id === prev)) return prev;
-      return orders[0]?.id ?? "";
+      return "";
     });
   }, [orders, preferredOrderId]);
 
@@ -165,6 +466,103 @@ export function LineInboxAiToolbar({
     () => orders.find((o) => o.id === selectedOrderId) ?? null,
     [orders, selectedOrderId]
   );
+
+  const visibleOrders = useMemo(() => {
+    const q = normalizeSearchText(carSearch);
+    const filtered = q
+      ? orders.filter((o) =>
+          normalizeSearchText(
+            `${o.fullPlate} ${o.car} ${o.chassis ?? ""} ${o.sale ?? ""} ${o.carRowId ?? ""} ${o.carId ?? ""}`
+          ).includes(q)
+        )
+      : orders;
+    if (selected && !filtered.some((o) => o.id === selected.id)) {
+      return [selected, ...filtered];
+    }
+    return filtered;
+  }, [carSearch, orders, selected]);
+
+  const detectedOrder = useMemo(() => {
+    if (!detected) return null;
+
+    const rowId = String(detected.car_row_id ?? "").trim();
+    if (rowId) {
+      const byRow = orders.find((o) => String(o.carRowId ?? "").trim() === rowId);
+      if (byRow) return byRow;
+    }
+
+    const plateKey = normalizeLookup(detected.plate_text);
+    if (plateKey) {
+      const byPlate = orders.find((o) => {
+        const fullPlateKey = normalizeLookup(o.fullPlate);
+        return fullPlateKey === plateKey || fullPlateKey.includes(plateKey) || plateKey.includes(fullPlateKey);
+      });
+      if (byPlate) return byPlate;
+    }
+
+    const chassisKey = normalizeLookup(detected.chassis);
+    if (chassisKey) {
+      const byChassis = orders.find((o) => normalizeLookup(o.chassis).includes(chassisKey));
+      if (byChassis) return byChassis;
+    }
+
+    return selected;
+  }, [detected, orders, selected]);
+
+  const detectedCarTitle = useMemo(() => {
+    if (!detected) return "";
+    const plate = String(detectedOrder?.fullPlate || detected.plate_text || "").trim();
+    const car = String(detectedOrder?.car || detected.spec_text || "").trim();
+    const title = [plate, car].filter(Boolean).join(" ").trim();
+    return title || String(detected.chassis ?? "").trim();
+  }, [detected, detectedOrder]);
+
+  const detectedChassis = useMemo(() => {
+    if (!detected) return "";
+    return String(detectedOrder?.chassis || detected.chassis || "").trim();
+  }, [detected, detectedOrder]);
+
+  const detectedSale = String(detectedOrder?.sale || detected?.sale || "").trim();
+
+  const resolveMappedAssigneeForDetectedCar = useCallback(
+    (detectedCar: LineInboxAnalyzeResponse["detected_car"] | null) => {
+      if (!detectedCar) return "";
+
+      let matchedOrder: LineInboxAiOrderPick | null = null;
+      const rowId = String(detectedCar.car_row_id ?? "").trim();
+      if (rowId) {
+        matchedOrder = orders.find((o) => String(o.carRowId ?? "").trim() === rowId) ?? null;
+      }
+
+      const plateKey = normalizeLookup(detectedCar.plate_text);
+      if (!matchedOrder && plateKey) {
+        matchedOrder =
+          orders.find((o) => {
+            const fullPlateKey = normalizeLookup(o.fullPlate);
+            return fullPlateKey === plateKey || fullPlateKey.includes(plateKey) || plateKey.includes(fullPlateKey);
+          }) ?? null;
+      }
+
+      const chassisKey = normalizeLookup(detectedCar.chassis);
+      if (!matchedOrder && chassisKey) {
+        matchedOrder = orders.find((o) => normalizeLookup(o.chassis).includes(chassisKey)) ?? null;
+      }
+
+      if (!matchedOrder && selected) matchedOrder = selected;
+      const sale = String(matchedOrder?.sale || detectedCar.sale || "").trim();
+      return resolveSaleStaffForOrder(sale, saleAssigneesBySale);
+    },
+    [orders, saleAssigneesBySale, selected]
+  );
+
+  const showDebugDetails =
+    process.env.NODE_ENV !== "production" &&
+    Boolean(
+      String(detected?.car_row_id ?? "").trim() ||
+        ignoredVehicleLines.length ||
+        ignoredMentionLines.length ||
+        ignoredNoiseLines.length
+    );
 
   const effectiveCarRowId = useMemo(() => {
     const fromAnalyze = String(detected?.car_row_id ?? "").trim();
@@ -175,11 +573,50 @@ export function LineInboxAiToolbar({
     const id = selected?.carId;
     return id != null && Number.isFinite(Number(id)) ? Number(id) : null;
   }, [selected]);
+  const hasEffectiveCar = Boolean(effectiveCarRowId || effectiveCarId != null);
+
+  const staffChoices = useMemo(() => {
+    const out: string[] = [];
+    for (const name of staffOptions) addUniqueOption(out, name);
+    for (const item of existingItems) addUniqueOption(out, item.assignee_staff);
+    for (const row of rows) addUniqueOption(out, row.assignee);
+    return out;
+  }, [existingItems, rows, staffOptions]);
+
+  const statusChoices = useMemo(() => {
+    const out: string[] = [];
+    for (const status of statusOptions) addUniqueOption(out, status);
+    for (const status of ["เช็ค", "มี", "สั่ง", "มา", "รถนอก", "ช่างนอก", "จบ"]) {
+      addUniqueOption(out, status);
+    }
+    for (const item of existingItems) addUniqueOption(out, item.status);
+    for (const row of rows) addUniqueOption(out, row.status);
+    return out;
+  }, [existingItems, rows, statusOptions]);
 
   const pendingSaveCount = useMemo(
     () => rows.filter((r) => r.included && r.action !== "skip").length,
     [rows]
   );
+  const selectedRiskCount = useMemo(
+    () => rows.filter((r) => r.included && r.action !== "skip" && r.duplicate_status !== "new").length,
+    [rows]
+  );
+
+  const suggestionPhotoSheetRow = useMemo(() => {
+    if (!suggestionPhotoSheet) return null;
+    return rows[suggestionPhotoSheet.rowIndex] ?? null;
+  }, [rows, suggestionPhotoSheet]);
+
+  const suggestionPhotoSheetItemId = String(
+    suggestionPhotoSheetRow?.matched_order_item_id ?? ""
+  ).trim();
+  const canUseSuggestionPhotoSheet = Boolean(
+    suggestionPhotoSheetItemId && (effectiveCarRowId || effectiveCarId != null)
+  );
+  const stagedPhotosForOpenSheet = suggestionPhotoSheet
+    ? stagedSuggestionPhotos[suggestionPhotoSheet.rowKey] ?? []
+    : [];
 
   const rawBadgeTotal = queueTotalNew + pendingSaveCount;
   const showBadgeDot = rawBadgeTotal > 0;
@@ -210,6 +647,8 @@ export function LineInboxAiToolbar({
       setSavingInboxId(m.inbox_id);
       setError(null);
       setSaveHint(null);
+      setReplyText("");
+      setReplyCopied(false);
       try {
         const res = await fetch("/api/line-inbox/pending-save", {
           method: "POST",
@@ -226,6 +665,19 @@ export function LineInboxAiToolbar({
             ? `Saved ${indices.length} new line(s) from LINE queue.`
             : `บันทึกจากคิว LINE แล้ว ${indices.length} งาน`
         );
+        const savedLines = m.new_lines
+          .filter((line) => indices.includes(line.item_index))
+          .map((line) => ({
+            name: line.suggested_item_name || line.raw_text,
+            status: line.suggested_status || "เช็ค",
+          }));
+        setReplyText(
+          buildLineReplyText({
+            plate: m.plate_display || "",
+            lines: savedLines,
+            uiLang,
+          })
+        );
         await fetchQueue();
         onSaved?.();
       } catch (e) {
@@ -240,7 +692,10 @@ export function LineInboxAiToolbar({
   const runAnalyze = useCallback(async () => {
     setError(null);
     setSaveHint(null);
+    setReplyText("");
+    setReplyCopied(false);
     setAnalyzeLoading(true);
+    setExistingItems([]);
     try {
       const res = await fetch("/api/line-inbox/analyze", {
         method: "POST",
@@ -255,29 +710,215 @@ export function LineInboxAiToolbar({
       if (!res.ok) throw new Error(data.error || res.statusText || "analyze failed");
       setDetected(data.detected_car);
       setNeedsReview(Boolean(data.needs_human_review));
-      const next: RowDraft[] = (data.items ?? []).map((item) => ({
-        ...item,
-        action: defaultAction(item),
-        note: "",
-        included: true,
-      }));
+      setIgnoredVehicleLines(data.ignored_vehicle_spec_lines ?? []);
+      setIgnoredMentionLines(data.ignored_mention_lines ?? []);
+      setIgnoredNoiseLines(data.ignored_noise_lines ?? []);
+      const existingFromAnalyze = data.existing_items ?? [];
+      setExistingItems(existingFromAnalyze);
+      const existingById = new Map(
+        existingFromAnalyze.map((item) => [String(item.id ?? "").trim(), item])
+      );
+      const mappedAssignee = resolveMappedAssigneeForDetectedCar(data.detected_car);
+      const next: RowDraft[] = (data.items ?? []).map((item) => {
+        const action = defaultAction(item);
+        const matched = existingById.get(String(item.matched_order_item_id ?? "").trim());
+        return {
+          ...item,
+          action,
+          note: "",
+          included: action !== "skip",
+          itemName: item.suggested_item_name || item.raw_text,
+          assignee: matched?.assignee_staff || mappedAssignee || "",
+          status: item.suggested_status || matched?.status || "",
+          dueDate: safeDateValue(matched?.due_date),
+        };
+      });
       setRows(next);
+      setExpandedRows({});
+      setSuggestionPhotoSheet(null);
+      setSuggestionItemPhotos([]);
+      setStagedSuggestionPhotos((prev) => {
+        revokeStagedPhotoMap(prev);
+        return {};
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setRows([]);
+      setExpandedRows({});
+      setSuggestionPhotoSheet(null);
+      setSuggestionItemPhotos([]);
+      setStagedSuggestionPhotos((prev) => {
+        revokeStagedPhotoMap(prev);
+        return {};
+      });
       setDetected(null);
+      setExistingItems([]);
+      setIgnoredVehicleLines([]);
+      setIgnoredMentionLines([]);
+      setIgnoredNoiseLines([]);
     } finally {
       setAnalyzeLoading(false);
     }
-  }, [rawText, selected, effectiveCarId]);
+  }, [rawText, selected, effectiveCarId, resolveMappedAssigneeForDetectedCar]);
 
   const updateRow = useCallback((index: number, patch: Partial<RowDraft>) => {
     setRows((prev) => prev.map((r, i) => (i === index ? { ...r, ...patch } : r)));
   }, []);
 
+  const toggleRowExpanded = useCallback((rowKey: string) => {
+    setExpandedRows((prev) => ({ ...prev, [rowKey]: !prev[rowKey] }));
+  }, []);
+
+  const openSuggestionPhotoSheet = useCallback((rowKey: string, rowIndex: number) => {
+    setSuggestionPhotoSheet({ rowKey, rowIndex });
+    setSuggestionItemPhotos([]);
+  }, []);
+
+  const closeSuggestionPhotoSheet = useCallback(() => {
+    setSuggestionPhotoSheet(null);
+    setSuggestionItemPhotos([]);
+  }, []);
+
+  const clearStagedSuggestionPhotos = useCallback(() => {
+    setStagedSuggestionPhotos((prev) => {
+      revokeStagedPhotoMap(prev);
+      return {};
+    });
+  }, []);
+
+  const stageSuggestionPhotos = useCallback((rowKey: string, files: FileList | null) => {
+    const images = Array.from(files ?? []).filter((file) => String(file.type ?? "").startsWith("image/"));
+    if (!images.length) return;
+    setStagedSuggestionPhotos((prev) => ({
+      ...prev,
+      [rowKey]: [
+        ...(prev[rowKey] ?? []),
+        ...images.map((file) => ({
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+          file,
+          previewUrl: URL.createObjectURL(file),
+        })),
+      ],
+    }));
+  }, []);
+
+  const removeStagedSuggestionPhoto = useCallback((rowKey: string, photoId: string) => {
+    setStagedSuggestionPhotos((prev) => {
+      const current = prev[rowKey] ?? [];
+      const target = current.find((photo) => photo.id === photoId);
+      if (target) URL.revokeObjectURL(target.previewUrl);
+      const nextList = current.filter((photo) => photo.id !== photoId);
+      const next = { ...prev };
+      if (nextList.length) next[rowKey] = nextList;
+      else delete next[rowKey];
+      return next;
+    });
+  }, []);
+
+  const loadSuggestionItemPhotos = useCallback(
+    async (orderItemId: string) => {
+      const itemId = String(orderItemId ?? "").trim();
+      if (!itemId || (!effectiveCarRowId && effectiveCarId == null)) {
+        setSuggestionItemPhotos([]);
+        return;
+      }
+      setSuggestionPhotosLoading(true);
+      try {
+        const params = new URLSearchParams();
+        if (effectiveCarRowId) params.set("car_row_id", effectiveCarRowId);
+        if (effectiveCarId != null) params.set("car_id", String(effectiveCarId));
+        const res = await fetch(`/api/m/order-photos/list?${params.toString()}`, {
+          credentials: "same-origin",
+        });
+        const data = (await res.json()) as {
+          error?: string;
+          itemPhotosByItemId?: Record<string, LineInboxItemPhoto[]>;
+        };
+        if (!res.ok) throw new Error(data.error || res.statusText || "load photos failed");
+        setSuggestionItemPhotos(data.itemPhotosByItemId?.[itemId] ?? []);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        setSuggestionItemPhotos([]);
+      } finally {
+        setSuggestionPhotosLoading(false);
+      }
+    },
+    [effectiveCarId, effectiveCarRowId]
+  );
+
+  const uploadSuggestionPhotos = useCallback(
+    async (
+      rowKey: string,
+      orderItemId: string | null | undefined,
+      files: FileList | File[] | null,
+      options: { silent?: boolean } = {}
+    ) => {
+      const itemId = String(orderItemId ?? "").trim();
+      if (!itemId || !files?.length) return;
+      if (!effectiveCarRowId && effectiveCarId == null) return;
+      setPhotoBusyRowKey(rowKey);
+      setError(null);
+      if (!options.silent) setSaveHint(null);
+      try {
+        const form = new FormData();
+        form.append("target_type", "item");
+        form.append("order_item_id", itemId);
+        if (effectiveCarRowId) form.append("car_row_id", effectiveCarRowId);
+        if (effectiveCarId != null) form.append("car_id", String(effectiveCarId));
+        Array.from(files).forEach((file) => form.append("files", file));
+        const res = await fetch("/api/m/order-photos/upload", {
+          method: "POST",
+          body: form,
+          credentials: "same-origin",
+        });
+        const data = (await res.json()) as { ok?: boolean; error?: string; uploaded?: unknown[] };
+        if (!res.ok) throw new Error(data.error || res.statusText || "upload failed");
+        const count = Array.isArray(data.uploaded) ? data.uploaded.length : files.length;
+        if (!options.silent) {
+          setSaveHint(uiLang === "en" ? `Attached ${count} photo(s).` : `แนบรูปแล้ว ${count} รูป`);
+        }
+        await loadSuggestionItemPhotos(itemId);
+        onSaved?.();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setPhotoBusyRowKey((cur) => (cur === rowKey ? null : cur));
+      }
+    },
+    [effectiveCarId, effectiveCarRowId, loadSuggestionItemPhotos, onSaved, uiLang]
+  );
+
+  useEffect(() => {
+    if (!suggestionPhotoSheet) return;
+    if (!suggestionPhotoSheetItemId || !canUseSuggestionPhotoSheet) {
+      setSuggestionItemPhotos([]);
+      return;
+    }
+    void loadSuggestionItemPhotos(suggestionPhotoSheetItemId);
+  }, [
+    canUseSuggestionPhotoSheet,
+    loadSuggestionItemPhotos,
+    suggestionPhotoSheet,
+    suggestionPhotoSheetItemId,
+  ]);
+
+  const copyReply = useCallback(async () => {
+    const text = replyText.trim();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setReplyCopied(true);
+      window.setTimeout(() => setReplyCopied(false), 1400);
+    } catch {
+      window.prompt(uiLang === "en" ? "Copy LINE reply" : "คัดลอกข้อความตอบ LINE", text);
+    }
+  }, [replyText, uiLang]);
+
   const runConfirm = useCallback(async () => {
     setError(null);
     setSaveHint(null);
+    setReplyText("");
+    setReplyCopied(false);
     setConfirmLoading(true);
     try {
       if (!effectiveCarRowId && effectiveCarId == null) {
@@ -287,19 +928,36 @@ export function LineInboxAiToolbar({
             : "เลือกรถจากรายการ หรือให้วิเคราะห์จับคู่รถได้ก่อนบันทึก"
         );
       }
+      const selectedRows = rows.filter((r) => r.included && r.action !== "skip");
+      const riskyRows = selectedRows.filter((r) => r.duplicate_status !== "new");
+      if (riskyRows.length > 0) {
+        const ok = window.confirm(
+          uiLang === "en"
+            ? `${riskyRows.length} selected line(s) may be duplicate or unclear. Continue saving?`
+            : `มี ${riskyRows.length} รายการที่อาจซ้ำหรือไม่ชัด ต้องการบันทึกต่อหรือไม่?`
+        );
+        if (!ok) return;
+      }
       const confirmations = rows.map((r) => {
-        if (!r.included) {
+        const itemName = String(r.itemName || r.suggested_item_name || r.raw_text).trim();
+        const status = String(r.status || r.suggested_status || "").trim();
+        const note = String(r.note ?? "").trim();
+        const assignee = String(r.assignee ?? "").trim();
+        const dueDate = safeDateValue(r.dueDate);
+        if (!r.included || r.action === "skip") {
           return {
             action: "skip" as const,
-            item_name: r.suggested_item_name || r.raw_text,
+            item_name: itemName,
           };
         }
         return {
           action: r.action,
           order_item_id: r.action === "merge" ? r.matched_order_item_id : undefined,
-          item_name: r.suggested_item_name || r.raw_text,
-          item_status: r.suggested_status || undefined,
-          note: r.note.trim() || undefined,
+          item_name: itemName,
+          item_status: status || undefined,
+          note: note || undefined,
+          assignee_staff: assignee || undefined,
+          due_date: dueDate || undefined,
         };
       });
 
@@ -320,11 +978,51 @@ export function LineInboxAiToolbar({
       };
       if (!res.ok) throw new Error(data.error || res.statusText || "confirm failed");
       const count = data.skipped_all ? 0 : (data.saved ?? []).length;
+      const actionableRowKeys = rows
+        .map((r, index) => ({
+          row: r,
+          rowKey: `${r.raw_text}-${r.matched_order_item_id ?? ""}-${index}`,
+        }))
+        .filter(({ row }) => row.included && row.action !== "skip");
+      let attachedPhotoCount = 0;
+      for (let i = 0; i < actionableRowKeys.length; i += 1) {
+        const savedItemId = String(data.saved?.[i]?.order_item_id ?? "").trim();
+        const rowKey = actionableRowKeys[i]?.rowKey ?? "";
+        const staged = rowKey ? stagedSuggestionPhotos[rowKey] ?? [] : [];
+        if (!savedItemId || staged.length === 0) continue;
+        await uploadSuggestionPhotos(
+          rowKey,
+          savedItemId,
+          staged.map((photo) => photo.file),
+          { silent: true }
+        );
+        attachedPhotoCount += staged.length;
+      }
       setSaveHint(
-        uiLang === "en" ? `Saved ${count} line(s).` : `บันทึกแล้ว ${count} รายการ`
+        uiLang === "en"
+          ? `Saved ${count} line(s)${attachedPhotoCount ? ` + attached ${attachedPhotoCount} photo(s)` : ""}.`
+          : `บันทึกแล้ว ${count} รายการ${attachedPhotoCount ? ` + แนบรูป ${attachedPhotoCount} รูป` : ""}`
+      );
+      setReplyText(
+        buildLineReplyText({
+          plate: detectedOrder?.fullPlate || selected?.fullPlate || detected?.plate_text || "",
+          lines: selectedRows.map((row) => ({
+            name: String(row.itemName || row.suggested_item_name || row.raw_text).trim(),
+            status: String(row.status || row.suggested_status || "เช็ค").trim(),
+          })),
+          uiLang,
+        })
       );
       setRows([]);
+      setExpandedRows({});
+      setSuggestionPhotoSheet(null);
+      setSuggestionItemPhotos([]);
+      clearStagedSuggestionPhotos();
       setDetected(null);
+      setExistingItems([]);
+      setIgnoredVehicleLines([]);
+      setIgnoredMentionLines([]);
+      setIgnoredNoiseLines([]);
       setRawText("");
       onSaved?.();
     } catch (e) {
@@ -332,7 +1030,19 @@ export function LineInboxAiToolbar({
     } finally {
       setConfirmLoading(false);
     }
-  }, [effectiveCarRowId, effectiveCarId, rows, onSaved, uiLang]);
+  }, [
+    clearStagedSuggestionPhotos,
+    detected,
+    detectedOrder,
+    effectiveCarId,
+    effectiveCarRowId,
+    rows,
+    onSaved,
+    selected,
+    stagedSuggestionPhotos,
+    uiLang,
+    uploadSuggestionPhotos,
+  ]);
 
   return (
     <>
@@ -469,7 +1179,14 @@ export function LineInboxAiToolbar({
           </p>
 
           <label className="mb-2 block text-[11px] font-medium text-slate-600">
-            {uiLang === "en" ? "Car (all loaded; ignores filters)" : "รถ (ทั้งหมดที่โหลด — ไม่ตามการกรองหน้า)"}
+            {uiLang === "en" ? "Search/select car" : "ค้นหา/เลือกรถ"}
+            <input
+              value={carSearch}
+              onChange={(e) => setCarSearch(e.target.value)}
+              placeholder={uiLang === "en" ? "Plate / chassis / keyword" : "ทะเบียน / เลขถัง / คำค้นรถ"}
+              className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-2 py-2 text-sm font-medium text-slate-900 outline-none ring-violet-400 focus:ring-2"
+              autoComplete="off"
+            />
             <select
               value={selectedOrderId}
               onChange={(e) => setSelectedOrderId(e.target.value)}
@@ -479,11 +1196,24 @@ export function LineInboxAiToolbar({
               {orders.length === 0 ? (
                 <option value="">{uiLang === "en" ? "No cars in list" : "ไม่มีรถในรายการ"}</option>
               ) : (
-                orders.map((o) => (
-                  <option key={o.id} value={o.id}>
-                    {(o.fullPlate || "-").trim()} · {(o.car || "").slice(0, 42)}
+                <>
+                  <option value="">
+                    {uiLang === "en"
+                      ? "Let AI match from message / pick if not found"
+                      : "ให้ AI จับรถจากข้อความ / เลือกเองถ้าจับไม่ได้"}
                   </option>
-                ))
+                  {visibleOrders.length === 0 ? (
+                    <option value="" disabled>
+                      {uiLang === "en" ? "No car matches this search" : "ไม่พบรถตามคำค้น"}
+                    </option>
+                  ) : (
+                    visibleOrders.map((o) => (
+                      <option key={o.id} value={o.id}>
+                        {(o.fullPlate || "-").trim()} · {(o.car || "").slice(0, 42)}
+                      </option>
+                    ))
+                  )}
+                </>
               )}
             </select>
           </label>
@@ -528,18 +1258,52 @@ export function LineInboxAiToolbar({
             </div>
           ) : null}
 
+          {replyText ? (
+            <div className="mb-3 rounded-xl border border-sky-200 bg-sky-50 px-2.5 py-2 text-xs text-sky-950">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <p className="font-bold">
+                  {uiLang === "en" ? "Copy-ready LINE reply" : "ข้อความตอบ LINE พร้อมคัดลอก"}
+                </p>
+                <button
+                  type="button"
+                  onPointerDown={(e) => e.preventDefault()}
+                  onClick={() => void copyReply()}
+                  className="inline-flex min-h-8 items-center gap-1 rounded-full bg-slate-950 px-3 py-1 text-[11px] font-bold text-white touch-manipulation"
+                >
+                  {replyCopied ? <Check className="h-3.5 w-3.5" aria-hidden /> : <Copy className="h-3.5 w-3.5" aria-hidden />}
+                  {replyCopied
+                    ? uiLang === "en"
+                      ? "Copied"
+                      : "คัดลอกแล้ว"
+                    : uiLang === "en"
+                      ? "Copy"
+                      : "คัดลอกข้อความตอบ LINE"}
+                </button>
+              </div>
+              <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-lg bg-white/85 p-2 text-[11px] leading-relaxed text-slate-800 ring-1 ring-sky-100">
+                {replyText}
+              </pre>
+            </div>
+          ) : null}
+
           {detected ? (
             <div className="mb-3 rounded-xl bg-slate-50 px-3 py-2 text-[12px] ring-1 ring-slate-200/80">
               <div className="font-semibold text-slate-800">
-                {uiLang === "en" ? "Detected plate" : "ทะเบียนที่จับได้"}
+                {uiLang === "en" ? "Detected car" : "รถที่จับได้"}
                 {": "}
                 <span className="font-bold tabular-nums text-violet-900">
-                  {detected.plate_text?.trim() || "—"}
+                  {detectedCarTitle || (uiLang === "en" ? "Needs review" : "ต้องตรวจสอบ")}
                 </span>
               </div>
-              {detected.car_row_id ? (
-                <div className="mt-1 font-mono text-[10px] text-slate-500">
-                  car_row_id · {detected.car_row_id}
+              {detectedChassis ? (
+                <div className="mt-1 text-[11px] font-medium text-slate-600">
+                  {uiLang === "en" ? "Chassis" : "เลขถัง"}:{" "}
+                  <span className="font-mono text-[10px]">{detectedChassis}</span>
+                </div>
+              ) : null}
+              {detectedSale ? (
+                <div className="mt-1 text-[11px] font-medium text-slate-600">
+                  {uiLang === "en" ? "Sale" : "เซลล์"}: <span className="font-bold">{detectedSale}</span>
                 </div>
               ) : null}
               {needsReview ? (
@@ -549,45 +1313,269 @@ export function LineInboxAiToolbar({
                     : "ระบบแนะนำให้ตรวจทาน — รถหรืองานซ้ำอาจต้องยืนยันเอง"}
                 </p>
               ) : null}
+              {!hasEffectiveCar ? (
+                <p className="mt-1 text-[11px] font-medium text-rose-700">
+                  {uiLang === "en"
+                    ? "Car not found yet — search or pick a car before saving."
+                    : "ยังจับคู่รถไม่ได้ — ค้นหรือเลือกรถก่อนบันทึก"}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
+          {showDebugDetails ? (
+            <details className="mb-3 rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2 text-[11px] text-slate-600">
+              <summary className="cursor-pointer select-none font-semibold text-slate-700">
+                {uiLang === "en" ? "AI ignored details" : "รายละเอียดที่ AI ตัดออก"}
+              </summary>
+              {detected?.car_row_id ? (
+                <p className="mt-2 break-all font-mono text-[10px] text-slate-500">
+                  car_row_id · {detected.car_row_id}
+                </p>
+              ) : null}
+              {ignoredMentionLines.length || ignoredNoiseLines.length ? (
+                <div className="mt-2">
+                  <p className="font-semibold text-slate-700">
+                    {uiLang === "en" ? "Mentions / noise" : "mention / noise"}
+                  </p>
+                  <ul className="mt-1 space-y-0.5">
+                    {[...ignoredMentionLines, ...ignoredNoiseLines].slice(0, 6).map((line, index) => (
+                      <li key={`ignored-mention-${index}`} className="line-clamp-1">
+                        {line}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {ignoredVehicleLines.length ? (
+                <div className="mt-2">
+                  <p className="font-semibold text-slate-700">
+                    {uiLang === "en" ? "Vehicle context" : "ข้อมูลรถที่ใช้เป็น context"}
+                  </p>
+                  <ul className="mt-1 space-y-0.5">
+                    {ignoredVehicleLines.slice(0, 6).map((line, index) => (
+                      <li key={`ignored-vehicle-${index}`} className="line-clamp-1">
+                        {line}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </details>
+          ) : null}
+
+          {detected && hasEffectiveCar ? (
+            <div className="mb-3 rounded-xl border border-slate-200 bg-white px-3 py-2 ring-1 ring-slate-100">
+              <div className="mb-2 flex items-baseline justify-between gap-2">
+                <p className="text-[12px] font-bold text-slate-800">งานเดิมของรถคันนี้</p>
+                <span className="text-[11px] font-semibold tabular-nums text-slate-500">
+                  {existingItems.length}
+                </span>
+              </div>
+              {existingItems.length === 0 ? (
+                <p className="rounded-lg bg-slate-50 px-2 py-2 text-[11px] text-slate-500">
+                  ยังไม่พบงานเดิมของรถคันนี้ใน order_items
+                </p>
+              ) : (
+                <ul className="max-h-[min(28vh,220px)] space-y-2 overflow-y-auto overscroll-contain pr-1">
+                  {existingItems.map((item) => (
+                    <li
+                      key={item.id}
+                      className="rounded-lg bg-slate-50 px-2 py-2 text-[11px] ring-1 ring-slate-200/80"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <span className="min-w-0 flex-1 font-semibold leading-snug text-slate-900">
+                          {item.label || "-"}
+                        </span>
+                        {item.status ? (
+                          <span className="rounded-full bg-white px-2 py-0.5 font-semibold text-slate-700 ring-1 ring-slate-200">
+                            {item.status}
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-slate-500">
+                        {item.assignee_staff ? <span>ผู้รับผิดชอบ: {item.assignee_staff}</span> : null}
+                        {item.due_date ? <span>วันกำหนด: {safeDateValue(item.due_date) || item.due_date}</span> : null}
+                        {item.updated_at ? <span>อัปเดต: {safeDateValue(item.updated_at) || item.updated_at}</span> : null}
+                      </div>
+                      {item.note ? <p className="mt-1 line-clamp-2 text-slate-500">หมายเหตุ: {item.note}</p> : null}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           ) : null}
 
           {rows.length > 0 ? (
             <div className="space-y-2">
               <p className="text-[11px] font-semibold text-slate-700">
-                {uiLang === "en" ? "Suggested lines" : "รายการที่เสนอ"} ({rows.length})
+                {uiLang === "en" ? "New AI suggestions" : "งานใหม่ที่ AI เสนอ"} ({rows.length})
               </p>
-              <ul className="max-h-[min(35vh,240px)] space-y-2 overflow-y-auto overscroll-contain pr-1">
-                {rows.map((row, i) => (
-                  <li
-                    key={`${row.raw_text}-${i}`}
-                    className="rounded-xl border border-slate-200 bg-slate-50/90 p-2.5"
-                  >
-                    <label className="flex cursor-pointer gap-2">
-                      <input
-                        type="checkbox"
-                        checked={row.included}
-                        onChange={(e) => updateRow(i, { included: e.target.checked })}
-                        className="mt-0.5 h-5 w-5 shrink-0 rounded border-slate-400"
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span
-                          className={cn(
-                            "mb-1 inline-block rounded-full border px-2 py-0.5 text-[10px] font-semibold",
-                            duplicateBadgeClass(row.duplicate_status)
-                          )}
-                        >
-                          {duplicateLabelTh(row.duplicate_status)}
-                        </span>
-                        <span className="block text-[13px] font-medium leading-snug text-slate-900">
-                          {row.suggested_item_name || row.raw_text}
-                        </span>
-                        <span className="text-[11px] text-slate-500">{row.reason}</span>
-                      </span>
-                    </label>
-                  </li>
-                ))}
+              <ul className="max-h-[min(48vh,420px)] space-y-3 overflow-y-auto overscroll-contain pr-1">
+                {rows.map((row, i) => {
+                  const canMerge = Boolean(String(row.matched_order_item_id ?? "").trim());
+                  const rowKey = `${row.raw_text}-${row.matched_order_item_id ?? ""}-${i}`;
+                  const expanded = Boolean(expandedRows[rowKey]);
+                  return (
+                    <li
+                      key={`${row.raw_text}-${i}`}
+                      className={cn(
+                        "space-y-2 rounded-2xl border p-2.5 ring-1 ring-transparent",
+                        row.included ? "border-slate-200 bg-slate-100" : "border-slate-200 bg-slate-50 opacity-80",
+                        row.duplicate_status === "duplicate" ? "bg-amber-50" : "",
+                        row.duplicate_status === "possible_duplicate" ? "bg-orange-50" : ""
+                      )}
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <label className="flex cursor-pointer items-center gap-2 text-[12px] font-semibold text-slate-900">
+                          <input
+                            type="checkbox"
+                            checked={row.included}
+                            onChange={(e) => {
+                              const included = e.target.checked;
+                              updateRow(i, {
+                                included,
+                                action: included && row.action === "skip" ? "create" : row.action,
+                              });
+                            }}
+                            className="h-5 w-5 shrink-0 rounded border-slate-400"
+                          />
+                          {uiLang === "en" ? "Approve" : "เลือกบันทึก"}
+                        </label>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span
+                            className={cn(
+                              "inline-block rounded-full border px-2 py-0.5 text-[10px] font-semibold",
+                              duplicateBadgeClass(row.duplicate_status)
+                            )}
+                          >
+                            {duplicateLabelTh(row.duplicate_status)}
+                          </span>
+                          <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-700 ring-1 ring-slate-200">
+                            {actionLabelTh(row.action)}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        <LineInboxSuggestedItemNameField
+                          value={row.itemName}
+                          uiLang={uiLang}
+                          onChange={(value) => updateRow(i, { itemName: value })}
+                          onPhotoReference={() => openSuggestionPhotoSheet(rowKey, i)}
+                        />
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          <LineInboxInlineSelectLink
+                            value={row.assignee}
+                            options={staffChoices}
+                            onChange={(value) => updateRow(i, { assignee: value })}
+                            title={uiLang === "en" ? "Owner" : "พนักงาน"}
+                            emptyLabel={uiLang === "en" ? "-" : "—"}
+                            className={lineInboxAssigneePillClasses(row.assignee)}
+                          />
+                          <LineInboxInlineSelectLink
+                            value={row.status}
+                            options={statusChoices}
+                            onChange={(value) => updateRow(i, { status: value })}
+                            title={uiLang === "en" ? "Item status" : "สถานะรายการ"}
+                            emptyLabel={uiLang === "en" ? "-" : "—"}
+                            className={cn(
+                              "w-[5.5rem] min-w-[5.5rem] font-medium sm:w-[6.25rem]",
+                              lineInboxStatusPillClasses(row.status)
+                            )}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => toggleRowExpanded(rowKey)}
+                            className="h-10 min-h-[40px] shrink-0 rounded-full bg-white px-2.5 text-[11px] font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200"
+                            aria-expanded={expanded}
+                          >
+                            {expanded
+                              ? uiLang === "en"
+                                ? "Close"
+                                : "ปิด"
+                              : uiLang === "en"
+                                ? "Edit"
+                                : "แก้"}
+                          </button>
+                        </div>
+                      </div>
+
+                      {expanded ? (
+                        <>
+                      {row.matched_item_name ? (
+                        <p className="rounded-lg bg-amber-50 px-2 py-1 text-[11px] text-amber-900 ring-1 ring-amber-200/80">
+                          {uiLang === "en" ? "Similar existing item" : "คล้ายงานเดิม"}:{" "}
+                          <span className="font-semibold">{row.matched_item_name}</span>
+                        </p>
+                      ) : null}
+
+                      <div className="grid gap-2 sm:grid-cols-[minmax(0,12rem)]">
+                        <label className="block text-[11px] font-medium text-slate-600">
+                          {uiLang === "en" ? "Action" : "การทำงาน"}
+                          <select
+                            value={row.action}
+                            onChange={(e) => {
+                              const action = e.target.value as RowDraft["action"];
+                              updateRow(i, {
+                                action,
+                                included: action === "skip" ? false : row.included || true,
+                              });
+                            }}
+                            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-[13px] font-semibold text-slate-900"
+                          >
+                            <option value="create">{uiLang === "en" ? "Create new" : "เพิ่มงานใหม่"}</option>
+                            <option value="merge" disabled={!canMerge}>
+                              {uiLang === "en" ? "Update existing" : "อัปเดตงานเดิม"}
+                            </option>
+                            <option value="skip">{uiLang === "en" ? "Skip" : "ข้าม"}</option>
+                          </select>
+                        </label>
+                      </div>
+
+                      <div className="grid gap-2 sm:grid-cols-[10rem_1fr]">
+                        <label className="block text-[11px] font-medium text-slate-600">
+                          {uiLang === "en" ? "Due date" : "วันกำหนด"}
+                          <input
+                            type="date"
+                            value={row.dueDate}
+                            onChange={(e) => updateRow(i, { dueDate: e.target.value })}
+                            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-[13px] font-semibold text-slate-900"
+                          />
+                        </label>
+                        <label className="block text-[11px] font-medium text-slate-600">
+                          {uiLang === "en" ? "Note" : "หมายเหตุ"}
+                          <input
+                            value={row.note}
+                            onChange={(e) => updateRow(i, { note: e.target.value })}
+                            placeholder={uiLang === "en" ? "Optional note" : "เพิ่มหมายเหตุได้"}
+                            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-[13px] text-slate-900 outline-none ring-violet-400 focus:ring-2"
+                          />
+                        </label>
+                      </div>
+
+                      {row.suggested_note ? (
+                        <p className="rounded-lg bg-sky-50 px-2 py-1.5 text-[11px] leading-snug text-sky-900 ring-1 ring-sky-200/80">
+                          {uiLang === "en" ? "Reference from LINE" : "รายละเอียดอ้างอิงจาก LINE"}:{" "}
+                          <span className="font-medium">{row.suggested_note}</span>
+                        </p>
+                      ) : null}
+
+                      {row.reason ? <p className="text-[11px] text-slate-500">{row.reason}</p> : null}
+                        </>
+                      ) : null}
+                    </li>
+                  );
+                })}
               </ul>
+
+              {selectedRiskCount > 0 ? (
+                <p className="rounded-lg bg-amber-50 px-2 py-1.5 text-[11px] font-medium text-amber-900 ring-1 ring-amber-200/80">
+                  {uiLang === "en"
+                    ? `${selectedRiskCount} selected line(s) may be duplicate or unclear. You will be asked again before saving.`
+                    : `มี ${selectedRiskCount} รายการที่อาจซ้ำหรือไม่ชัด ระบบจะถามยืนยันอีกครั้งก่อนบันทึก`}
+                </p>
+              ) : null}
 
               <Button
                 type="button"
@@ -609,6 +1597,140 @@ export function LineInboxAiToolbar({
               </Button>
             </div>
           ) : null}
+        </div>
+      ) : null}
+
+      {suggestionPhotoSheet ? (
+        <div
+          role="presentation"
+          className="fixed inset-0 z-[80] flex items-end justify-center bg-black/45 p-2 outline-none sm:p-3"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) closeSuggestionPhotoSheet();
+          }}
+        >
+          <div className="mb-[max(env(safe-area-inset-bottom),0px)] w-full max-w-md rounded-2xl bg-white p-4 shadow-xl ring-1 ring-slate-200/80">
+            <div className="mb-3 flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <b className="text-sm font-semibold text-slate-950">
+                  {uiLang === "en" ? "Item Photos" : "รูปตามรายการ"}
+                </b>
+                <p className="mt-1 line-clamp-2 text-xs font-medium text-slate-600">
+                  {String(suggestionPhotoSheetRow?.itemName || suggestionPhotoSheetRow?.suggested_item_name || "").trim() ||
+                    (uiLang === "en" ? "Suggested item" : "งานที่ AI เสนอ")}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeSuggestionPhotoSheet}
+                className="shrink-0 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-800 touch-manipulation"
+              >
+                {uiLang === "en" ? "Close" : "ปิด"}
+              </button>
+            </div>
+
+            <div className="mb-3">
+              <label
+                className={cn(
+                  "inline-flex min-h-10 w-full cursor-pointer items-center justify-center rounded-xl px-3 text-xs font-semibold touch-manipulation",
+                  photoBusyRowKey === suggestionPhotoSheet.rowKey
+                    ? "cursor-not-allowed bg-slate-200 text-slate-500"
+                    : "bg-sky-600 text-white"
+                )}
+              >
+                {photoBusyRowKey === suggestionPhotoSheet.rowKey
+                  ? uiLang === "en"
+                    ? "Uploading..."
+                    : "กำลังแนบรูป..."
+                  : uiLang === "en"
+                    ? "Add photo"
+                    : "เพิ่มรูป"}
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  disabled={photoBusyRowKey === suggestionPhotoSheet.rowKey}
+                  className="hidden"
+                  onChange={(event) => {
+                    const files = event.currentTarget.files;
+                    if (canUseSuggestionPhotoSheet) {
+                      void uploadSuggestionPhotos(
+                        suggestionPhotoSheet.rowKey,
+                        suggestionPhotoSheetItemId,
+                        files
+                      );
+                    } else {
+                      stageSuggestionPhotos(suggestionPhotoSheet.rowKey, files);
+                    }
+                    event.currentTarget.value = "";
+                  }}
+                />
+              </label>
+            </div>
+
+            {stagedPhotosForOpenSheet.length > 0 ? (
+              <div className="mb-3">
+                <p className="mb-2 text-[11px] font-semibold text-slate-600">
+                  {uiLang === "en"
+                    ? `Ready to attach after save (${stagedPhotosForOpenSheet.length})`
+                    : `พร้อมแนบหลังบันทึก (${stagedPhotosForOpenSheet.length})`}
+                </p>
+                <div className="flex gap-2 overflow-x-auto pb-1">
+                  {stagedPhotosForOpenSheet.map((photo) => (
+                    <div
+                      key={photo.id}
+                      className="relative h-24 w-24 shrink-0 overflow-hidden rounded-xl bg-slate-100 ring-1 ring-slate-200"
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={photo.previewUrl}
+                        alt={uiLang === "en" ? "Pending item photo" : "รูปที่รอแนบ"}
+                        className="h-full w-full object-cover"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeStagedSuggestionPhoto(suggestionPhotoSheet.rowKey, photo.id)}
+                        className="absolute right-1 top-1 rounded-full bg-black/70 px-2 py-0.5 text-[10px] font-semibold text-white"
+                      >
+                        {uiLang === "en" ? "Remove" : "ลบ"}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {canUseSuggestionPhotoSheet ? (
+              suggestionPhotosLoading ? (
+                <p className="mb-2 text-center text-xs font-medium text-slate-500">
+                  {uiLang === "en" ? "Loading photos..." : "กำลังโหลดรูป..."}
+                </p>
+              ) : suggestionItemPhotos.length === 0 ? (
+                <p className="text-center text-xs font-medium text-slate-500">
+                  {uiLang === "en" ? "No photos yet - use Add photo" : "ยังไม่มีรูป - กดเพิ่มรูปได้"}
+                </p>
+              ) : (
+                <div className="flex max-h-48 gap-2 overflow-x-auto overflow-y-auto pb-1">
+                  {suggestionItemPhotos.map((photo) => (
+                    <a
+                      key={photo.id}
+                      href={photo.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="group relative h-28 w-28 shrink-0 overflow-hidden rounded-xl bg-slate-100 ring-1 ring-slate-200"
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={photo.url}
+                        alt={uiLang === "en" ? "Item photo thumbnail" : "รูปรายการ"}
+                        className="h-full w-full object-cover transition-transform group-hover:scale-105"
+                        loading="lazy"
+                      />
+                    </a>
+                  ))}
+                </div>
+              )
+            ) : null}
+          </div>
         </div>
       ) : null}
     </>

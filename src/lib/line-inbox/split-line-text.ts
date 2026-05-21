@@ -1,50 +1,275 @@
 /**
- * Heuristic LINE text → task lines (aligned with order-intake ai-split guardrails)
+ * Heuristic LINE text -> task lines (aligned with order-intake ai-split guardrails).
+ * Mentions/tags and conversation noise are returned as ignored context, not order items.
  */
 
+export type SplitLineTextResult = {
+  items: string[];
+  grouped_items: Array<{ text: string; note: string }>;
+  ignored_vehicle_spec_lines: string[];
+  ignored_mention_lines: string[];
+  ignored_noise_lines: string[];
+};
+
+const MENTION_RE = /@\S+/g;
+const THAI_PLATE_RE = /\d{0,2}[ก-ฮ]{1,3}[-\s]?\d{2,4}/g;
+const CHASSIS_RE = /\b[A-HJ-NPR-Z0-9]{17}\b/i;
+const VEHICLE_SPEC_RE =
+  /(REVO|FORTUNER|HILUX|VIGO|RANGER|D-MAX|TRITON|CAMRY|2WD|4WD|AT|MT|DOUBLE[_\s-]?CAB|SMART[_\s-]?CAB|SILVER|BLACK|WHITE|GRAY|GREY|JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC|\b[123]\.\d\b|\b(?:19|20)\d{2}\b)/i;
+const VEHICLE_BRAND_MODEL_RE =
+  /(TOYOTA|NISSAN|NAVARA|ISUZU|MAZDA|MITSUBISHI|FORD|HONDA|REVO|FORTUNER|HILUX|VIGO|RANGER|D-MAX|DMAX|TRITON|CAMRY|ALTIS|YARIS|VIOS|MU-X|EVEREST|PAJERO|PRO4X|PRO-4X|RAPTOR)/i;
+const VEHICLE_BODY_SPEC_RE =
+  /(D[-\s]?CAB|DOUBLE[_\s-]?CAB|SMART[_\s-]?CAB|CAB|DC|2WD|4WD|AT|MT|7AT|6AT|STANDARD|HIGH|LOW|PRE[-\s]?RUNNER|\b[123]\.\d\b|ป้ายแดง)/i;
+const VEHICLE_COLOR_YEAR_RE =
+  /(SILVER|BLACK|WHITE|GRAY|GREY|BLUE|RED|GREEN|ORANGE|BRONZE|BROWN|GOLD|YELLOW|PEARL|ป้ายแดง|JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC|\b(?:19|20)\d{2}\b|[A-Z][a-z]{2}\d{2})/i;
+const STOCK_NUMBER_RE = /\b\d{4,6}\b/;
+const WORK_INTENT_RE =
+  /(กันสาด|โรบาร์|สติ๊กเกอร์|ฟิล์ม|บันได|กันชน|แร็ค|แรค|ฝาครอบ|ไฟ|กล้อง|เซ็นเซอร์|ยาง|ล้อ|แบต|แบตเตอรี่|โช้ค|ยกสูง|ป้าย|เอกสาร|ซ่อม|เปลี่ยน|ขาด|แตก|เสีย|หาย|ต้องสั่ง|ส่งอู่|ทำสี|ตรวจ|เช็ค|ติด|ติดตั้ง|เพิ่ม|ใส่|แปลง|ล้าง|ขัด|เคลือบ|เก็บงาน|ประเมิน|รับงาน|งาน)/i;
+const STRONG_WORK_INTENT_RE =
+  /(กุญแจ|กันสาด|โรบาร์|สติ๊กเกอร์|ฟิล์ม|บันได|กันชน|แร็ค|แรค|ฝาครอบ|ไฟ|กล้อง|เซ็นเซอร์|ยาง|ล้อ|แบต|แบตเตอรี่|โช้ค|ยกสูง|เอกสาร|ซ่อม|เปลี่ยน|ขาด|แตก|เสีย|หาย|ต้องสั่ง|สั่ง|ส่งอู่|ทำสี|ตรวจ|เช็ค|ติด|ติดตั้ง|เพิ่ม|ใส่|แปลง|ล้าง|ขัด|เคลือบ|เก็บงาน|ประเมิน|รับงาน|งาน)/i;
+const CAR_REFERENCE_META_RE =
+  /(ใส่\s*ปี.*(?:chassis|chasis|เลขถัง|ตัวถัง)|(?:chassis|chasis|เลขถัง|ตัวถัง).*(?:ปี|link|ลิงก์|ถูก|ทุกครั้ง|หลายที่)|(?:ปี|link|ลิงก์).*(?:chassis|chasis|เลขถัง|ตัวถัง))/i;
+const REAL_WORK_EXCLUDING_GENERIC_ENTRY_RE =
+  /(กุญแจ|กันสาด|โรบาร์|สติ๊กเกอร์|ฟิล์ม|บันได|กันชน|แร็ค|แรค|ฝาครอบ|ไฟ|กล้อง|เซ็นเซอร์|ยาง|ล้อ|แบต|แบตเตอรี่|โช้ค|ยกสูง|เอกสาร|ซ่อม|เปลี่ยน|ขาด|แตก|เสีย|หาย|ต้องสั่ง|สั่ง|ส่งอู่|ทำสี|ตรวจ|เช็ค|ติดตั้ง|เพิ่ม|แปลง|ล้าง|ขัด|เคลือบ|เก็บงาน|ประเมิน|รับงาน)/i;
+const ROLE_OR_PERSON_NOISE_RE =
+  /^(?:[A-Za-z.'"-]+|\bTH\b|\bChecker\b|\bSale\b|\bSales\b|\bSupport\b|\bStore\b|\bGarage\b|\bAdmin\b|\bTeam\b|\bStaff\b|\bQC\b|\bLoSo\b|\bManbappe\b|\bAof\b|\bFrank\b|\bKik\b|\bNutkun\b|\bJoy\b|\bMint\b|\bPrew\b|\bGwang\b|\bAor\b|\bWan\b|\bMai\b|\bNat\b|\bNoey\b|\bSine\b|\bPloo\b|\bYing\b|\bFairy\b|\bFah\b|\bBam\b|\bKoi\b|\bTarn\b)+$/i;
+const LINE_PERSON_CONTEXT_RE =
+  /(?:\bLoSo\b|\bAekkarach\b|\bTH\b|\bChecker\b|\bManbappe\b|\bAof\b|\bFrank\b|\bKik\b|\bNutkun\b|\bJoy\b|\bMint\b|\bPrew\b|\bGwang\b|\bAor\b|\bWan\b|\bMai\b|\bNat\b|\bNoey\b|\bSine\b|\bPloo\b|\bYing\b|\bFairy\b|\bFah\b|\bBam\b|\bKoi\b|\bTarn\b|กวาง|ออฟ|นัท|แฟรงค์|จอย|มิ้นท์|พริว|เอ๋|เช็คเกอร์)/i;
+const EMOJI_OR_SYMBOL_RE = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}%^*:*]/u;
+const DETAIL_LINE_RE =
+  /(%|เปอร์เซ็น|เปอร์|ประตู|กระจก|บานหน้า|บานหลัง|ด้านหน้า|ด้านหลัง|ซ้าย|ขวา|หน้า|หลัง|ฝั่ง|แถว|ชิ้น|จุด|\b\d+(?:\.\d+)?\s*(?:cm|mm|inch|in|นิ้ว)\b)/i;
+const DETAIL_PARENT_RE =
+  /(ฟิล์ม|สี|paint|ติด|ติดตั้ง|ใส่|เปลี่ยน|ซ่อม|repair|install|แปลง|แต่ง|ยกสูง|โรบาร์|กันชน|บันได|แร็ค|แรค|ฝาครอบ|สติ๊กเกอร์|ขัด|เคลือบ|เก็บงาน)/i;
+
 function sanitizeLine(raw: string): string {
-  return raw.replace(/\s+/g, " ").trim();
+  return raw.replace(/^[\s\-•*]+/, "").replace(/\s+/g, " ").trim();
+}
+
+function addUnique(target: string[], value: string) {
+  const clean = sanitizeLine(value);
+  if (!clean) return;
+  const key = clean.toLowerCase();
+  if (target.some((v) => v.toLowerCase() === key)) return;
+  target.push(clean);
+}
+
+function removeMentions(raw: string): string {
+  return sanitizeLine(raw.replace(MENTION_RE, " "));
+}
+
+function removeCarIdentityFragments(raw: string): string {
+  return sanitizeLine(
+    raw
+      .replace(THAI_PLATE_RE, " ")
+      .replace(/\b[A-HJ-NPR-Z0-9]{17}\b/gi, " ")
+      .replace(/^(?:ช่วย|รบกวน|ฝาก)\s*/i, "")
+  );
+}
+
+function semanticTokens(raw: string): string[] {
+  return raw.match(/[A-Za-zก-ฮ0-9]+/g) ?? [];
+}
+
+function looksLikeMentionOnly(raw: string): boolean {
+  const mentions = raw.match(MENTION_RE) ?? [];
+  if (mentions.length === 0 || WORK_INTENT_RE.test(raw)) return false;
+
+  const withoutMentions = removeMentions(raw);
+  const tokens = semanticTokens(withoutMentions);
+  if (tokens.length === 0) return true;
+
+  const hasThai = /[ก-ฮ]/.test(withoutMentions);
+  if (mentions.length >= 2 && !hasThai) return true;
+
+  const compact = tokens.join("");
+  return ROLE_OR_PERSON_NOISE_RE.test(compact);
+}
+
+function looksLikeLinePersonContext(raw: string): boolean {
+  if (STRONG_WORK_INTENT_RE.test(raw)) return false;
+  if (looksLikeStockSpecContext(raw)) return false;
+
+  const noMentions = removeMentions(raw);
+  const tokens = semanticTokens(noMentions);
+  if (tokens.length === 0) return true;
+  if (tokens.length > 8) return false;
+
+  const compact = tokens.join("");
+  if (ROLE_OR_PERSON_NOISE_RE.test(compact)) return true;
+
+  const hasPersonContext = LINE_PERSON_CONTEXT_RE.test(noMentions);
+  if (!hasPersonContext) return false;
+
+  const hasLineDecoration = EMOJI_OR_SYMBOL_RE.test(raw) || /\.\.\.|["'@]/.test(raw);
+  const latinTokens = tokens.filter((token) => /^[A-Za-z][A-Za-z.'-]*$/.test(token));
+  const thaiTokens = tokens.filter((token) => /[ก-ฮ]/.test(token));
+  return hasLineDecoration || latinTokens.length >= 2 || thaiTokens.length <= 2;
+}
+
+function looksLikeNoiseOnly(raw: string): boolean {
+  if (looksLikeLinePersonContext(raw)) return true;
+  if (WORK_INTENT_RE.test(raw)) return false;
+  const noMentions = removeMentions(raw);
+  const tokens = semanticTokens(noMentions);
+  if (tokens.length === 0) return true;
+  if (/^[a-zA-Z][a-zA-Z0-9 _.'"-]{0,32}$/.test(noMentions) && !VEHICLE_SPEC_RE.test(noMentions)) {
+    return true;
+  }
+  return false;
+}
+
+function looksLikeCarReferenceMeta(raw: string): boolean {
+  if (!CAR_REFERENCE_META_RE.test(raw)) return false;
+  return !REAL_WORK_EXCLUDING_GENERIC_ENTRY_RE.test(raw);
+}
+
+function vehicleSignalScore(raw: string): number {
+  let score = 0;
+  if (STOCK_NUMBER_RE.test(raw)) score += 2;
+  if (VEHICLE_BRAND_MODEL_RE.test(raw)) score += 2;
+  if (VEHICLE_BODY_SPEC_RE.test(raw)) score += 1;
+  if (VEHICLE_SPEC_RE.test(raw)) score += 1;
+  if (VEHICLE_COLOR_YEAR_RE.test(raw)) score += 1;
+  if (THAI_PLATE_RE.test(raw)) score += 2;
+  THAI_PLATE_RE.lastIndex = 0;
+  if (CHASSIS_RE.test(raw)) score += 3;
+  return score;
+}
+
+function looksLikeStockSpecContext(raw: string): boolean {
+  const tokens = semanticTokens(raw);
+  if (tokens.length < 3) return false;
+
+  const score = vehicleSignalScore(raw);
+  if (score < 4) return false;
+
+  // "ป้ายแดง" is vehicle context, not the actionable "ป้าย" task.
+  const withoutRedPlate = raw.replace(/ป้ายแดง/gi, " ");
+  const hasStrongWork = STRONG_WORK_INTENT_RE.test(withoutRedPlate);
+  if (hasStrongWork && score < 6) return false;
+
+  return true;
+}
+
+function looksLikeVehicleContext(raw: string): boolean {
+  if (looksLikeStockSpecContext(raw)) return true;
+  if (STRONG_WORK_INTENT_RE.test(raw)) return false;
+  const hasThaiPlateLike = THAI_PLATE_RE.test(raw);
+  THAI_PLATE_RE.lastIndex = 0;
+  if (hasThaiPlateLike && VEHICLE_SPEC_RE.test(raw)) return true;
+  if (/^[0-9]{0,2}[ก-ฮ]{1,3}[-\s]?[0-9]{2,4}$/i.test(raw)) return true;
+  if (/(chassis|vin|เลขถัง|ตัวถัง)/i.test(raw) || CHASSIS_RE.test(raw)) return true;
+  if (VEHICLE_SPEC_RE.test(raw) && semanticTokens(raw).length <= 8) return true;
+  return false;
+}
+
+function cleanWorkLine(raw: string): string {
+  return removeCarIdentityFragments(removeMentions(raw));
+}
+
+function normalizeWorkItemText(raw: string): string {
+  return sanitizeLine(raw)
+    .replace(/ติด\s*ฟิล์ม\s*รอบคัน/gi, "ติดฟิล์มรอบคัน")
+    .replace(/ฟิล์ม\s*รอบคัน/gi, "ฟิล์มรอบคัน");
+}
+
+function lineKey(raw: string): string {
+  return String(raw ?? "").replace(/\s+/g, "").toLowerCase();
+}
+
+function canAcceptDetail(raw: string): boolean {
+  return DETAIL_PARENT_RE.test(raw);
+}
+
+function looksLikeDetailLine(raw: string): boolean {
+  if (!raw) return false;
+  if (STRONG_WORK_INTENT_RE.test(raw)) return false;
+  if (looksLikeVehicleContext(raw) || looksLikeLinePersonContext(raw) || looksLikeCarReferenceMeta(raw)) return false;
+  if (DETAIL_LINE_RE.test(raw)) return true;
+  return /[0-9]/.test(raw) && /[ก-ฮ]/.test(raw) && semanticTokens(raw).length <= 6;
+}
+
+function addWorkItem(target: Array<{ text: string; note: string }>, value: string) {
+  const clean = normalizeWorkItemText(value);
+  if (!clean) return;
+  const key = lineKey(clean);
+  if (target.some((item) => lineKey(item.text) === key)) return;
+  target.push({ text: clean, note: "" });
+}
+
+function addDetailToLast(target: Array<{ text: string; note: string }>, value: string): boolean {
+  const clean = sanitizeLine(value);
+  if (!clean || target.length === 0) return false;
+  const last = target[target.length - 1];
+  if (!last || !canAcceptDetail(last.text)) return false;
+  const parts = last.note ? last.note.split(/\s*\/\s*/) : [];
+  if (!parts.some((part) => lineKey(part) === lineKey(clean))) parts.push(clean);
+  last.note = parts.join(" / ");
+  return true;
+}
+
+export function splitLineTextForInbox(text: string): SplitLineTextResult {
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => sanitizeLine(l))
+    .filter(Boolean);
+
+  const groupedItems: Array<{ text: string; note: string }> = [];
+  const ignoredVehicle: string[] = [];
+  const ignoredMentions: string[] = [];
+  const ignoredNoise: string[] = [];
+
+  for (const rawLine of lines) {
+    if (looksLikeMentionOnly(rawLine)) {
+      addUnique(ignoredMentions, rawLine);
+      continue;
+    }
+
+    if (looksLikeLinePersonContext(rawLine)) {
+      addUnique(ignoredMentions, rawLine);
+      continue;
+    }
+
+    if (looksLikeCarReferenceMeta(rawLine)) {
+      addUnique(ignoredNoise, rawLine);
+      continue;
+    }
+
+    const line = cleanWorkLine(rawLine);
+    if (!line) {
+      addUnique((rawLine.match(MENTION_RE) ?? []).length > 0 ? ignoredMentions : ignoredNoise, rawLine);
+      continue;
+    }
+
+    if (looksLikeVehicleContext(line) || looksLikeVehicleContext(rawLine)) {
+      addUnique(ignoredVehicle, rawLine);
+      continue;
+    }
+
+    if (looksLikeDetailLine(line)) {
+      if (addDetailToLast(groupedItems, line)) continue;
+      addUnique(ignoredNoise, rawLine);
+      continue;
+    }
+
+    if (looksLikeNoiseOnly(line)) {
+      addUnique((rawLine.match(MENTION_RE) ?? []).length > 0 ? ignoredMentions : ignoredNoise, rawLine);
+      continue;
+    }
+
+    addWorkItem(groupedItems, line);
+  }
+
+  const grouped = groupedItems.slice(0, 60);
+  return {
+    items: grouped.map((item) => item.text),
+    grouped_items: grouped,
+    ignored_vehicle_spec_lines: ignoredVehicle.slice(0, 30),
+    ignored_mention_lines: ignoredMentions.slice(0, 30),
+    ignored_noise_lines: ignoredNoise.slice(0, 30),
+  };
 }
 
 export function splitLineTextToTaskLines(text: string): string[] {
-  const lines = text
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter(Boolean);
-
-  const out: string[] = [];
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line) continue;
-
-    const mentions = line.match(/@\S+/g) ?? [];
-    const wordCount = line.split(/\s+/).filter(Boolean).length;
-    if (mentions.length >= 2 && mentions.length * 2 >= wordCount) continue;
-    if (mentions.length >= 1 && wordCount <= 2) continue;
-
-    const hasThaiPlateLike = /[ก-ฮ]{1,3}[-\s]?\d{1,4}/.test(line);
-    const hasVehicleSpecToken =
-      /(REVO|FORTUNER|HILUX|VIGO|RANGER|D-MAX|2WD|4WD|AT|MT|DOUBLE[_\s-]?CAB|SILVER|BLACK|WHITE|GRAY|GREY|JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)/i.test(
-        line
-      );
-    if (hasThaiPlateLike && hasVehicleSpecToken) continue;
-    if (/^[0-9]{0,2}[ก-ฮ]{1,3}[-\s]?[0-9]{1,4}$/i.test(line)) continue;
-    const hasChassisKeyword = /(chassis|vin|เลขถัง|ตัวถัง)/i.test(line);
-    const hasLongVinToken = /[a-z0-9-]{10,}/i.test(line);
-    if (hasChassisKeyword || hasLongVinToken) continue;
-
-    if (/^[a-zA-Z][a-zA-Z0-9 _-]{0,22}$/.test(line)) continue;
-
-    out.push(line);
-  }
-
-  const uniq = new Set<string>();
-  const dedup: string[] = [];
-  for (const l of out.map(sanitizeLine)) {
-    const key = l.toLowerCase();
-    if (uniq.has(key)) continue;
-    uniq.add(key);
-    dedup.push(l);
-  }
-  return dedup.slice(0, 60);
+  return splitLineTextForInbox(text).items;
 }

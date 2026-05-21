@@ -7,6 +7,7 @@ export type DuplicateStatus = "new" | "duplicate" | "possible_duplicate" | "uncl
 export type LineInboxAnalyzeItem = {
   raw_text: string;
   suggested_item_name: string;
+  suggested_note?: string;
   suggested_category: string;
   suggested_status: string;
   duplicate_status: DuplicateStatus;
@@ -22,13 +23,24 @@ export type LineInboxAnalyzeResponse = {
     chassis: string;
     car_row_id: string;
     confidence: number;
+    spec_text?: string;
+    sale?: string;
   };
+  ignored_vehicle_spec_lines?: string[];
+  ignored_mention_lines?: string[];
+  ignored_noise_lines?: string[];
+  existing_items?: ExistingOrderItemRow[];
   items: LineInboxAnalyzeItem[];
   needs_human_review: boolean;
 };
 
 export type ExistingOrderItemRow = {
   id: string;
+  order_task_id?: string;
   label: string;
   status: string;
+  assignee_staff?: string;
+  note?: string;
+  due_date?: string;
+  updated_at?: string;
 };

@@ -72,6 +72,10 @@ export async function POST(request: Request) {
 
     note: r.note != null ? String(r.note).trim() : "",
 
+    assignee_staff: r.assignee_staff != null ? String(r.assignee_staff).trim() : "",
+
+    due_date: r.due_date != null ? String(r.due_date).trim() : "",
+
   }));
 
 
@@ -129,4 +133,3 @@ export async function POST(request: Request) {
   }
 
 }
-
