@@ -37,6 +37,14 @@ type PendingQueueAttachment = {
   file_name: string | null;
   mime_type: string | null;
   received_at: string;
+  source_label: string;
+  raw_text_preview: string;
+  car_row_id: string;
+  plate_display: string;
+  car_title: string;
+  sale: string;
+  needs_human_review: boolean;
+  status: "not_linked";
 };
 
 type PendingQueueMsg = {
@@ -79,10 +87,16 @@ function isAnalyzePayload(body: unknown): body is LineInboxAnalyzeResponse {
 
 function extractStoredAttachments(
   payload: LineInboxAnalyzeResponse,
-  row: { id?: unknown; received_at?: unknown }
+  row: { id?: unknown; received_at?: unknown; source_type?: unknown; raw_text?: unknown; car_row_id?: unknown }
 ): PendingQueueAttachment[] {
   const inboxId = String(row.id ?? "").trim();
   const receivedAt = String(row.received_at ?? "");
+  const crPayload = String(payload.detected_car?.car_row_id ?? "").trim();
+  const crStored = String(row.car_row_id ?? "").trim();
+  const carRowId = crPayload || crStored;
+  const plateText = String(payload.detected_car?.plate_text ?? "").trim();
+  const specText = String(payload.detected_car?.spec_text ?? "").trim();
+  const carTitle = [plateText, specText].filter(Boolean).join(" ").trim();
   return (payload.line_attachments ?? [])
     .filter((attachment: LineInboxAttachmentMeta) => {
       return attachment.status === "stored" && Boolean(String(attachment.public_url ?? "").trim());
@@ -94,6 +108,14 @@ function extractStoredAttachments(
       file_name: attachment.file_name ?? null,
       mime_type: attachment.mime_type ?? null,
       received_at: receivedAt || attachment.captured_at || "",
+      source_label: sourceLabel(row.source_type),
+      raw_text_preview: String(row.raw_text ?? "").trim().slice(0, 120),
+      car_row_id: carRowId,
+      plate_display: plateText,
+      car_title: carTitle,
+      sale: String(payload.detected_car?.sale ?? "").trim(),
+      needs_human_review: Boolean(payload.needs_human_review),
+      status: "not_linked" as const,
     }))
     .filter((attachment) => attachment.inbox_id && attachment.line_message_id && attachment.url);
 }
@@ -239,7 +261,16 @@ export async function GET() {
       if (!id || !isAnalyzePayload(payloadRaw)) continue;
 
       const payload = payloadRaw;
-      const messageAttachments = extractStoredAttachments(payload, row as { id?: unknown; received_at?: unknown });
+      const messageAttachments = extractStoredAttachments(
+        payload,
+        row as {
+          id?: unknown;
+          received_at?: unknown;
+          source_type?: unknown;
+          raw_text?: unknown;
+          car_row_id?: unknown;
+        }
+      );
       recentAttachments.push(...messageAttachments);
 
       const newEntries: PendingQueueNewLine[] = [];
