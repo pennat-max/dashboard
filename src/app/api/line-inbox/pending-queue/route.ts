@@ -34,6 +34,24 @@ function isAnalyzePayload(body: unknown): body is LineInboxAnalyzeResponse {
   return Array.isArray(items);
 }
 
+function queueItemDisplayName(item: LineInboxAnalyzeItem): string {
+  const suggested = String(item.suggested_item_name ?? "").trim();
+  const raw = String(item.raw_text ?? "").trim();
+  if (!suggested) return raw;
+  if (!raw) return suggested;
+
+  const compactSuggested = suggested.replace(/\s+/g, "").toLowerCase();
+  const compactRaw = raw.replace(/\s+/g, "").toLowerCase();
+  const rawHasDetail =
+    /[\d%]|ตาม\s*(?:รูป|ภาพ)|(?:km|กม\.?|กิโล|เปอร์เซ็น|นิ้ว|cm|mm|inch|วัน|เดือน|ปี)/i.test(
+      raw
+    );
+  if (rawHasDetail && compactRaw.startsWith(compactSuggested) && raw.length > suggested.length) {
+    return raw;
+  }
+  return suggested;
+}
+
 /**
  * GET /api/line-inbox/pending-queue
  * Rows from webhook: workflow pending + analyze ok → new-only suggestions for toolbar chip.
@@ -85,7 +103,7 @@ export async function GET() {
         newEntries.push({
           item_index: idx,
           raw_text: item.raw_text ?? "",
-          suggested_item_name: item.suggested_item_name ?? item.raw_text ?? "",
+          suggested_item_name: queueItemDisplayName(item),
           suggested_status: item.suggested_status ?? "",
           reason: item.reason ?? "",
         });

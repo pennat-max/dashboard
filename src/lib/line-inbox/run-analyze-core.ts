@@ -50,9 +50,18 @@ function areEquivalentWorkLines(left: string, right: string): boolean {
   const b = comparableLineKey(right);
   if (!a || !b) return false;
   if (a === b) return true;
+
   const shorter = a.length <= b.length ? a : b;
   const longer = a.length <= b.length ? b : a;
-  return shorter.length >= 6 && longer.includes(shorter);
+  const shorterText = a.length <= b.length ? left : right;
+  const longerText = a.length <= b.length ? right : left;
+  if (shorter.length < 6 || !longer.startsWith(shorter)) return false;
+
+  return (
+    hasReferencePhotoText(longerText) ||
+    (hasPreservedDetailToken(longerText) && !hasPreservedDetailToken(shorterText)) ||
+    /ให้เรียบร้อย|ได้เลย|ครับ|ค่ะ|คะ|นะครับ|นะคะ/i.test(longerText)
+  );
 }
 
 function workLineScore(line: GuardedLine): number {
@@ -108,10 +117,29 @@ function asAiItemText(item: NonNullable<LineInboxAiAnalyzeDraft["items"]>[number
   reason?: string;
 } {
   if (typeof item === "string") return { text: item.trim() };
-  const text = String(item.suggested_item_name ?? item.raw_text ?? "").trim();
+  const suggested = String(item.suggested_item_name ?? "").trim();
+  const raw = String(item.raw_text ?? "").trim();
+  let text = suggested || raw;
+  if (
+    suggested &&
+    raw &&
+    areEquivalentWorkLines(suggested, raw) &&
+    workLineScore({ text: raw }) > workLineScore({ text: suggested })
+  ) {
+    text = raw;
+  }
+  const note = String(item.suggested_note ?? "").trim();
+  if (
+    /กรอไมล์|เลขไมล์/i.test(text) &&
+    note &&
+    hasPreservedDetailToken(note) &&
+    !lineKey(text).includes(lineKey(note))
+  ) {
+    text = `${text} ${note}`.replace(/\s+/g, " ").trim();
+  }
   return {
     text,
-    note: String(item.suggested_note ?? "").trim() || undefined,
+    note: note || undefined,
     confidence: typeof item.confidence === "number" ? item.confidence : undefined,
     reason: String(item.reason ?? "").trim() || undefined,
   };

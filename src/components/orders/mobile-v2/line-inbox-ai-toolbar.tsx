@@ -561,7 +561,8 @@ export function LineInboxAiToolbar({
       String(detected?.car_row_id ?? "").trim() ||
         ignoredVehicleLines.length ||
         ignoredMentionLines.length ||
-        ignoredNoiseLines.length
+        ignoredNoiseLines.length ||
+        rows.some((row) => String(row.reason ?? "").trim())
     );
 
   const effectiveCarRowId = useMemo(() => {
@@ -1134,9 +1135,6 @@ export function LineInboxAiToolbar({
                                   {line.suggested_item_name || line.raw_text}
                                 </span>
                               </label>
-                              {line.reason ? (
-                                <p className="ml-7 mt-0.5 text-[10px] text-slate-500">{line.reason}</p>
-                              ) : null}
                             </li>
                           );
                         })}
@@ -1361,6 +1359,24 @@ export function LineInboxAiToolbar({
                   </ul>
                 </div>
               ) : null}
+              {rows.some((row) => String(row.reason ?? "").trim()) ? (
+                <div className="mt-2">
+                  <p className="font-semibold text-slate-700">
+                    {uiLang === "en" ? "AI / duplicate reasons" : "เหตุผล AI / duplicate"}
+                  </p>
+                  <ul className="mt-1 space-y-0.5">
+                    {rows
+                      .map((row) => String(row.reason ?? "").trim())
+                      .filter(Boolean)
+                      .slice(0, 8)
+                      .map((reason, index) => (
+                        <li key={`line-inbox-reason-${index}`} className="line-clamp-2">
+                          {reason}
+                        </li>
+                      ))}
+                  </ul>
+                </div>
+              ) : null}
             </details>
           ) : null}
 
@@ -1561,7 +1577,6 @@ export function LineInboxAiToolbar({
                         </p>
                       ) : null}
 
-                      {row.reason ? <p className="text-[11px] text-slate-500">{row.reason}</p> : null}
                         </>
                       ) : null}
                     </li>
