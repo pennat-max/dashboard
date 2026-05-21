@@ -261,8 +261,8 @@ Purpose: ingest LINE-side messages into an ops flow that suggests **order_items*
 | `POST /api/line-inbox/analyze` | **No** — returns JSON suggestions only |
 | `POST /api/line-inbox/confirm` | **Yes** — after explicit user confirm (`order_items` create/merge + `order_task_updates` audit; optional `line_inbox_message_id` logged only) |
 | `POST /api/line/webhook` | **Yes** — LINE Messaging API webhook → **`line_inbox_messages`** + snapshot **`analyze_payload`** (signature + allowlist; see `.env.example`) |
-| `GET /api/line-inbox/pending-queue` | **No** — mobile chip: pending rows + **new-only** lines from `analyze_payload` |
-| `POST /api/line-inbox/pending-save` | **Yes** — save selected indices → **`order_items`** + **`workflow_status=confirmed`** on inbox row |
+| `GET /api/line-inbox/pending-queue` | **No** — `/m/orders` action queue: pending analyzed rows grouped by detected car, existing items, stored LINE attachments, and AI-suggested `create` / `merge` / `skip` actions from `analyze_payload` |
+| `POST /api/line-inbox/pending-save` | **Yes** — after staff approval only; saves selected queue actions to **`order_items`** or marks the inbox message skipped via existing `line_inbox_messages.workflow_status` |
 
 ### Planned payload keys (analyze)
 

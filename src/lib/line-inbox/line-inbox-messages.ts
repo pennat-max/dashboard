@@ -105,3 +105,18 @@ export async function markLineInboxMessageWorkflowConfirmed(
 
   if (error) throw new Error(error.message);
 }
+
+export async function markLineInboxMessageWorkflowSkipped(
+  supabase: SupabaseClient,
+  id: string
+): Promise<void> {
+  const { error } = await supabase
+    .from(LINE_INBOX_MESSAGES_TABLE)
+    .update({
+      workflow_status: "skipped",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", id);
+
+  if (error) throw new Error(error.message);
+}

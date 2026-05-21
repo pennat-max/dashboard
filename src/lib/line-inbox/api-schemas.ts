@@ -95,10 +95,52 @@ export type LineInboxConfirmBody = z.infer<typeof lineInboxConfirmBodySchema>;
 export const lineInboxPendingSaveBodySchema = z.object({
   saves: z
     .array(
-      z.object({
-        inbox_message_id: z.string().uuid(),
-        item_indices: z.array(z.number().int().nonnegative()).min(1).max(200),
-      })
+      z
+        .object({
+          inbox_message_id: z.string().uuid(),
+          item_indices: z.array(z.number().int().nonnegative()).min(1).max(200).optional(),
+          skip_all: z.boolean().optional(),
+          actions: z
+            .array(
+              z.object({
+                item_index: z.number().int().nonnegative(),
+                action: z.enum(["skip", "create", "merge"]),
+                order_item_id: z.union([z.string(), z.null(), z.undefined()]).optional(),
+                item_name: z.preprocess(
+                  (v) => (v === null || v === undefined ? undefined : String(v)),
+                  z.string().max(2000).optional()
+                ),
+                item_status: z.preprocess(
+                  (v) => (v === null || v === undefined ? undefined : String(v)),
+                  z.string().max(500).optional()
+                ),
+                note: z.preprocess(
+                  (v) => (v === null || v === undefined ? undefined : String(v)),
+                  z.string().max(4000).optional()
+                ),
+                assignee_staff: z.preprocess(
+                  (v) => (v === null || v === undefined ? undefined : String(v)),
+                  z.string().max(500).optional()
+                ),
+                due_date: z.preprocess(
+                  (v) => (v === null || v === undefined ? undefined : String(v)),
+                  z.string().max(100).optional()
+                ),
+              })
+            )
+            .max(200)
+            .optional(),
+        })
+        .superRefine((block, ctx) => {
+          if (block.skip_all) return;
+          if ((block.item_indices?.length ?? 0) > 0) return;
+          if ((block.actions?.length ?? 0) > 0) return;
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "item_indices, actions, or skip_all required",
+            path: ["actions"],
+          });
+        })
     )
     .min(1)
     .max(50),
