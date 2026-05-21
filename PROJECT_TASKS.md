@@ -76,9 +76,10 @@
 - [x] **Issue #32 Phase 2 webhook text capture:** `POST /api/line/webhook` verifies LINE signatures and stores text message events in `line_inbox_messages` as `workflow_status = pending` / `analyze_status = pending`, de-duped by `line_message_id`. Capture-only: no auto reply, no AI analyze inline, no `order_items` write, no LIFF/schema/public.cars change.
 - [x] **Issue #34 Sprint 2 pending analyze:** `POST /api/line-inbox/analyze-pending` processes pending captured LINE text rows in small batches outside the webhook request and updates analyze fields for human review. No auto reply, no `order_items` write, no image capture, no LIFF/schema/public.cars change.
 - [x] **Analyze quality bugfix:** same-message LINE Inbox suggestions are de-duplicated after AI + deterministic guards; short/long duplicates keep the fuller line, `ตามรูป` / `ตามภาพ` versions are preferred, and numeric/unit details such as `77,000 km.` are preserved in the saveable item row. AI/duplicate reasons are hidden from normal staff UI. Analyze/analyze-pending remain read-only advisory paths and never create `order_items`.
+- [x] **Issue #38 Sprint 3 image capture:** `POST /api/line/webhook` captures LINE image/image-file events after signature verification, downloads content with `LINE_CHANNEL_ACCESS_TOKEN`, stores images in the existing `order-tracking-photos` bucket, and keeps attachment metadata on `line_inbox_messages.analyze_payload.line_attachments`. `/m/orders` LINE Inbox review can choose recent LINE photos for `ตามรูป` / `ตามภาพ` suggested items and attach them only after human approval/save. No auto reply, no auto-save, no LIFF/schema/public.cars change.
 - [ ] LINE Bot automatic reply / push workflow.
 - [ ] Scheduled/background worker for pending `line_inbox_messages` analysis.
-- [ ] LINE image/file attachment ingestion.
+- [ ] Dedicated attachment table / richer attachment management beyond the guarded Sprint 3 metadata path.
 
 ## Future Two-way Sync
 - [ ] Not built.

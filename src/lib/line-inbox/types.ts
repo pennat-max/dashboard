@@ -29,6 +29,8 @@ export type LineInboxAnalyzeResponse = {
   ignored_vehicle_spec_lines?: string[];
   ignored_mention_lines?: string[];
   ignored_noise_lines?: string[];
+  line_attachments?: LineInboxAttachmentMeta[];
+  attachments_meta_count?: number;
   existing_items?: ExistingOrderItemRow[];
   items: LineInboxAnalyzeItem[];
   needs_human_review: boolean;
@@ -43,4 +45,26 @@ export type ExistingOrderItemRow = {
   note?: string;
   due_date?: string;
   updated_at?: string;
+};
+
+export type LineInboxAttachmentStatus =
+  | "pending"
+  | "stored"
+  | "missing_env"
+  | "unsupported"
+  | "error";
+
+export type LineInboxAttachmentMeta = {
+  id: string;
+  line_message_id: string;
+  line_message_type: "image" | "file";
+  file_name?: string | null;
+  mime_type?: string | null;
+  size_bytes?: number | null;
+  storage_bucket?: string | null;
+  storage_path?: string | null;
+  public_url?: string | null;
+  status: LineInboxAttachmentStatus;
+  error?: string | null;
+  captured_at: string;
 };

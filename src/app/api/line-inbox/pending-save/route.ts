@@ -35,7 +35,12 @@ export async function POST(request: Request) {
   }
 
   const supabase = createServiceRoleClient();
-  const results: Array<{ inbox_message_id: string; saved_count: number; order_task_id: string | null }> = [];
+  const results: Array<{
+    inbox_message_id: string;
+    saved_count: number;
+    order_task_id: string | null;
+    saved_items: Array<{ item_index: number; order_item_id: string; label: string; action: string }>;
+  }> = [];
 
   try {
     for (const block of parsed.data.saves) {
@@ -58,7 +63,13 @@ export async function POST(request: Request) {
       }
 
       const items = payloadRaw.items ?? [];
-      const actionable = [];
+      const actionable: Array<{
+        item_index: number;
+        action: "create";
+        item_name: string;
+        item_status?: string | undefined;
+        note?: string | undefined;
+      }> = [];
       for (const idx of block.item_indices) {
         const item = items[idx] as LineInboxAnalyzeItem | undefined;
         if (!item) throw new Error(`Invalid item index ${idx} for inbox ${inboxId}`);
@@ -66,6 +77,7 @@ export async function POST(request: Request) {
           throw new Error(`Only new lines can be saved from queue · index ${idx}`);
         }
         actionable.push({
+          item_index: idx,
           action: "create" as const,
           item_name: String(item.suggested_item_name ?? item.raw_text ?? "").trim() || item.raw_text,
           item_status: item.suggested_status || undefined,
@@ -87,7 +99,12 @@ export async function POST(request: Request) {
       const { order_task_id, saved } = await persistLineInboxConfirmations(supabase, {
         car_row_id,
         car_id: null,
-        actionable,
+        actionable: actionable.map((row) => ({
+          action: row.action,
+          item_name: row.item_name,
+          item_status: row.item_status,
+          note: row.note,
+        })),
         line_inbox_msg_ref_for_audit: inboxId,
       });
 
@@ -99,6 +116,12 @@ export async function POST(request: Request) {
         inbox_message_id: inboxId,
         saved_count: saved.length,
         order_task_id,
+        saved_items: saved.map((item, index) => ({
+          item_index: actionable[index]?.item_index ?? -1,
+          order_item_id: item.order_item_id,
+          label: item.label,
+          action: item.action,
+        })),
       });
     }
 

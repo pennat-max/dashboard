@@ -23,6 +23,12 @@ export async function insertLineInboxMessage(
     raw_text: string;
     reply_token?: string | null;
     received_at?: string;
+    analyze_status?: "pending" | "ok" | "error";
+    analyze_error?: string | null;
+    analyze_payload?: unknown;
+    needs_human_review?: boolean | null;
+    workflow_status?: "pending" | "confirmed" | "skipped";
+    car_row_id?: string | null;
   }
 ): Promise<{ id: string | null; duplicate: boolean }> {
   const { data, error } = await supabase
@@ -36,8 +42,12 @@ export async function insertLineInboxMessage(
       raw_text: row.raw_text,
       reply_token: row.reply_token ?? null,
       received_at: row.received_at ?? new Date().toISOString(),
-      analyze_status: "pending",
-      workflow_status: "pending",
+      analyze_status: row.analyze_status ?? "pending",
+      analyze_error: row.analyze_error ?? null,
+      analyze_payload: row.analyze_payload ?? null,
+      needs_human_review: row.needs_human_review ?? null,
+      workflow_status: row.workflow_status ?? "pending",
+      car_row_id: row.car_row_id ?? null,
     })
     .select("id")
     .maybeSingle();
