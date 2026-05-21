@@ -2,7 +2,12 @@ import { NextResponse } from "next/server";
 import { requireMutateRole } from "@/lib/auth/mutation-guard";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { LINE_INBOX_MESSAGES_TABLE } from "@/lib/line-inbox/line-inbox-messages";
-import type { DuplicateStatus, LineInboxAnalyzeItem, LineInboxAnalyzeResponse } from "@/lib/line-inbox/types";
+import type {
+  DuplicateStatus,
+  LineInboxAnalyzeItem,
+  LineInboxAnalyzeResponse,
+  LineInboxAttachmentMeta,
+} from "@/lib/line-inbox/types";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +30,15 @@ type PendingQueueMsg = {
   needs_human_review: boolean;
 };
 
+type PendingQueueAttachment = {
+  inbox_id: string;
+  line_message_id: string;
+  url: string;
+  file_name: string | null;
+  mime_type: string | null;
+  received_at: string;
+};
+
 function isAnalyzePayload(body: unknown): body is LineInboxAnalyzeResponse {
   if (!body || typeof body !== "object") return false;
   const o = body as Record<string, unknown>;
@@ -32,6 +46,27 @@ function isAnalyzePayload(body: unknown): body is LineInboxAnalyzeResponse {
   if (!dc || typeof dc !== "object") return false;
   const items = o.items;
   return Array.isArray(items);
+}
+
+function extractStoredAttachments(
+  payload: LineInboxAnalyzeResponse,
+  row: { id?: unknown; received_at?: unknown }
+): PendingQueueAttachment[] {
+  const inboxId = String(row.id ?? "").trim();
+  const receivedAt = String(row.received_at ?? "");
+  return (payload.line_attachments ?? [])
+    .filter((attachment: LineInboxAttachmentMeta) => {
+      return attachment.status === "stored" && Boolean(String(attachment.public_url ?? "").trim());
+    })
+    .map((attachment: LineInboxAttachmentMeta) => ({
+      inbox_id: inboxId,
+      line_message_id: String(attachment.line_message_id ?? attachment.id ?? "").trim(),
+      url: String(attachment.public_url ?? "").trim(),
+      file_name: attachment.file_name ?? null,
+      mime_type: attachment.mime_type ?? null,
+      received_at: receivedAt || attachment.captured_at || "",
+    }))
+    .filter((attachment) => attachment.inbox_id && attachment.line_message_id && attachment.url);
 }
 
 function queueItemDisplayName(item: LineInboxAnalyzeItem): string {
@@ -80,6 +115,7 @@ export async function GET() {
           ok: true,
           total_new_lines: 0,
           messages: [] as Array<{ inbox_id: string; new_lines: unknown[] }>,
+          recent_attachments: [] as PendingQueueAttachment[],
           table_missing_hint: LINE_INBOX_MESSAGES_TABLE,
         });
       }
@@ -87,6 +123,7 @@ export async function GET() {
     }
 
     const messages: PendingQueueMsg[] = [];
+    const recentAttachments: PendingQueueAttachment[] = [];
     let totalNew = 0;
 
     for (const row of data ?? []) {
@@ -95,6 +132,7 @@ export async function GET() {
       if (!id || !isAnalyzePayload(payloadRaw)) continue;
 
       const payload = payloadRaw;
+      recentAttachments.push(...extractStoredAttachments(payload, row as { id?: unknown; received_at?: unknown }));
       const items = payload.items ?? [];
       const newEntries: PendingQueueNewLine[] = [];
       items.forEach((item: LineInboxAnalyzeItem, idx: number) => {
@@ -135,6 +173,7 @@ export async function GET() {
       ok: true,
       total_new_lines: totalNew,
       messages,
+      recent_attachments: recentAttachments.slice(0, 40),
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

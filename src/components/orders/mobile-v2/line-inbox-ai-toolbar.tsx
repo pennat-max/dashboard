@@ -43,6 +43,15 @@ type PendingQueueMessage = {
   needs_human_review: boolean;
 };
 
+type PendingQueueAttachment = {
+  inbox_id: string;
+  line_message_id: string;
+  url: string;
+  file_name: string | null;
+  mime_type: string | null;
+  received_at: string;
+};
+
 type RowDraft = LineInboxAnalyzeItem & {
   action: "skip" | "create" | "merge";
   note: string;
@@ -68,6 +77,7 @@ type LineInboxStagedPhoto = {
 type SuggestionPhotoSheetState = {
   rowKey: string;
   rowIndex: number;
+  itemName?: string;
 };
 
 function defaultAction(item: LineInboxAnalyzeItem): RowDraft["action"] {
@@ -176,6 +186,16 @@ function actionLabelTh(action: RowDraft["action"]): string {
 const LINE_INBOX_PHOTO_REF_SPLIT_REGEX = /(ตามรูป|ตามภาพ|ref\s*pic|as\s+photo|see\s+photo)/gi;
 const LINE_INBOX_PHOTO_REF_EXACT_REGEX = /^(ตามรูป|ตามภาพ|ref\s*pic|as\s+photo|see\s+photo)$/i;
 
+function hasLineInboxPhotoReference(value: string | null | undefined): boolean {
+  const hasRef = LINE_INBOX_PHOTO_REF_SPLIT_REGEX.test(String(value ?? ""));
+  LINE_INBOX_PHOTO_REF_SPLIT_REGEX.lastIndex = 0;
+  return hasRef;
+}
+
+function queueSuggestionRowKey(inboxId: string, itemIndex: number): string {
+  return `queue:${inboxId}:${itemIndex}`;
+}
+
 function revokeStagedPhotoMap(map: Record<string, LineInboxStagedPhoto[]>) {
   Object.values(map).forEach((list) => {
     list.forEach((photo) => URL.revokeObjectURL(photo.previewUrl));
@@ -274,8 +294,7 @@ function LineInboxSuggestedItemNameField({
   const inputRef = useRef<HTMLInputElement | null>(null);
   const text = String(value ?? "");
   const trimmed = text.trim();
-  const hasPhotoReference = LINE_INBOX_PHOTO_REF_SPLIT_REGEX.test(text);
-  LINE_INBOX_PHOTO_REF_SPLIT_REGEX.lastIndex = 0;
+  const hasPhotoReference = hasLineInboxPhotoReference(text);
 
   useEffect(() => {
     if (!editing) return;
@@ -391,12 +410,14 @@ export function LineInboxAiToolbar({
   const [suggestionItemPhotos, setSuggestionItemPhotos] = useState<LineInboxItemPhoto[]>([]);
   const [suggestionPhotosLoading, setSuggestionPhotosLoading] = useState(false);
   const [stagedSuggestionPhotos, setStagedSuggestionPhotos] = useState<Record<string, LineInboxStagedPhoto[]>>({});
+  const [stagedLineAttachments, setStagedLineAttachments] = useState<Record<string, PendingQueueAttachment[]>>({});
   const [photoBusyRowKey, setPhotoBusyRowKey] = useState<string | null>(null);
   const [saveHint, setSaveHint] = useState<string | null>(null);
   const [replyText, setReplyText] = useState("");
   const [replyCopied, setReplyCopied] = useState(false);
 
   const [queueMessages, setQueueMessages] = useState<PendingQueueMessage[]>([]);
+  const [queueAttachments, setQueueAttachments] = useState<PendingQueueAttachment[]>([]);
   const [queueTotalNew, setQueueTotalNew] = useState(0);
   /** Unchecked = not saved when user clicks save (default: all lines selected) */
   const [queueDeselected, setQueueDeselected] = useState<Record<string, Set<number>>>({});
@@ -412,12 +433,15 @@ export function LineInboxAiToolbar({
         ok?: boolean;
         total_new_lines?: number;
         messages?: PendingQueueMessage[];
+        recent_attachments?: PendingQueueAttachment[];
         error?: string;
       };
       if (!res.ok) throw new Error(data.error || res.statusText);
       const list = data.messages ?? [];
+      const attachments = (data.recent_attachments ?? []).filter((attachment) => attachment.url);
       setQueueTotalNew(typeof data.total_new_lines === "number" ? data.total_new_lines : 0);
       setQueueMessages(list);
+      setQueueAttachments(attachments);
 
       const sig = list.map((m) => `${m.inbox_id}:${m.new_lines.map((l) => l.item_index).join(",")}`).join("|");
       if (sig !== queueSigRef.current) {
@@ -430,6 +454,7 @@ export function LineInboxAiToolbar({
       }
     } catch {
       setQueueMessages([]);
+      setQueueAttachments([]);
       setQueueTotalNew(0);
     } finally {
       setQueueLoading(false);
@@ -606,6 +631,7 @@ export function LineInboxAiToolbar({
 
   const suggestionPhotoSheetRow = useMemo(() => {
     if (!suggestionPhotoSheet) return null;
+    if (suggestionPhotoSheet.rowIndex < 0) return null;
     return rows[suggestionPhotoSheet.rowIndex] ?? null;
   }, [rows, suggestionPhotoSheet]);
 
@@ -617,6 +643,9 @@ export function LineInboxAiToolbar({
   );
   const stagedPhotosForOpenSheet = suggestionPhotoSheet
     ? stagedSuggestionPhotos[suggestionPhotoSheet.rowKey] ?? []
+    : [];
+  const stagedLineAttachmentsForOpenSheet = suggestionPhotoSheet
+    ? stagedLineAttachments[suggestionPhotoSheet.rowKey] ?? []
     : [];
 
   const rawBadgeTotal = queueTotalNew + pendingSaveCount;
@@ -641,54 +670,23 @@ export function LineInboxAiToolbar({
     [queueDeselected]
   );
 
-  const saveQueueCard = useCallback(
-    async (m: PendingQueueMessage) => {
-      const indices = selectedIndicesForInbox(m);
-      if (indices.length === 0) return;
-      setSavingInboxId(m.inbox_id);
-      setError(null);
-      setSaveHint(null);
-      setReplyText("");
-      setReplyCopied(false);
-      try {
-        const res = await fetch("/api/line-inbox/pending-save", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "same-origin",
-          body: JSON.stringify({
-            saves: [{ inbox_message_id: m.inbox_id, item_indices: indices }],
-          }),
-        });
-        const data = (await res.json()) as { ok?: boolean; error?: string };
-        if (!res.ok) throw new Error(data.error || res.statusText);
-        setSaveHint(
-          uiLang === "en"
-            ? `Saved ${indices.length} new line(s) from LINE queue.`
-            : `บันทึกจากคิว LINE แล้ว ${indices.length} งาน`
-        );
-        const savedLines = m.new_lines
-          .filter((line) => indices.includes(line.item_index))
-          .map((line) => ({
-            name: line.suggested_item_name || line.raw_text,
-            status: line.suggested_status || "เช็ค",
-          }));
-        setReplyText(
-          buildLineReplyText({
-            plate: m.plate_display || "",
-            lines: savedLines,
-            uiLang,
-          })
-        );
-        await fetchQueue();
-        onSaved?.();
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-      } finally {
-        setSavingInboxId(null);
-      }
-    },
-    [fetchQueue, onSaved, selectedIndicesForInbox, uiLang]
-  );
+  const clearStagedForRowKeys = useCallback((rowKeys: string[]) => {
+    const keySet = new Set(rowKeys);
+    if (keySet.size === 0) return;
+    setStagedSuggestionPhotos((prev) => {
+      const next = { ...prev };
+      keySet.forEach((key) => {
+        (next[key] ?? []).forEach((photo) => URL.revokeObjectURL(photo.previewUrl));
+        delete next[key];
+      });
+      return next;
+    });
+    setStagedLineAttachments((prev) => {
+      const next = { ...prev };
+      keySet.forEach((key) => delete next[key]);
+      return next;
+    });
+  }, []);
 
   const runAnalyze = useCallback(async () => {
     setError(null);
@@ -742,6 +740,7 @@ export function LineInboxAiToolbar({
         revokeStagedPhotoMap(prev);
         return {};
       });
+      setStagedLineAttachments({});
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setRows([]);
@@ -752,6 +751,7 @@ export function LineInboxAiToolbar({
         revokeStagedPhotoMap(prev);
         return {};
       });
+      setStagedLineAttachments({});
       setDetected(null);
       setExistingItems([]);
       setIgnoredVehicleLines([]);
@@ -770,8 +770,8 @@ export function LineInboxAiToolbar({
     setExpandedRows((prev) => ({ ...prev, [rowKey]: !prev[rowKey] }));
   }, []);
 
-  const openSuggestionPhotoSheet = useCallback((rowKey: string, rowIndex: number) => {
-    setSuggestionPhotoSheet({ rowKey, rowIndex });
+  const openSuggestionPhotoSheet = useCallback((rowKey: string, rowIndex: number, itemName?: string) => {
+    setSuggestionPhotoSheet({ rowKey, rowIndex, itemName });
     setSuggestionItemPhotos([]);
   }, []);
 
@@ -785,6 +785,10 @@ export function LineInboxAiToolbar({
       revokeStagedPhotoMap(prev);
       return {};
     });
+  }, []);
+
+  const clearStagedLineAttachments = useCallback(() => {
+    setStagedLineAttachments({});
   }, []);
 
   const stageSuggestionPhotos = useCallback((rowKey: string, files: FileList | null) => {
@@ -809,6 +813,22 @@ export function LineInboxAiToolbar({
       const target = current.find((photo) => photo.id === photoId);
       if (target) URL.revokeObjectURL(target.previewUrl);
       const nextList = current.filter((photo) => photo.id !== photoId);
+      const next = { ...prev };
+      if (nextList.length) next[rowKey] = nextList;
+      else delete next[rowKey];
+      return next;
+    });
+  }, []);
+
+  const toggleStagedLineAttachment = useCallback((rowKey: string, attachment: PendingQueueAttachment) => {
+    const id = String(attachment.line_message_id || attachment.url).trim();
+    if (!id || !attachment.url) return;
+    setStagedLineAttachments((prev) => {
+      const current = prev[rowKey] ?? [];
+      const exists = current.some((item) => String(item.line_message_id || item.url).trim() === id);
+      const nextList = exists
+        ? current.filter((item) => String(item.line_message_id || item.url).trim() !== id)
+        : [...current, attachment];
       const next = { ...prev };
       if (nextList.length) next[rowKey] = nextList;
       else delete next[rowKey];
@@ -852,11 +872,13 @@ export function LineInboxAiToolbar({
       rowKey: string,
       orderItemId: string | null | undefined,
       files: FileList | File[] | null,
-      options: { silent?: boolean } = {}
+      options: { silent?: boolean; carRowId?: string | null; carId?: number | null } = {}
     ) => {
       const itemId = String(orderItemId ?? "").trim();
       if (!itemId || !files?.length) return;
-      if (!effectiveCarRowId && effectiveCarId == null) return;
+      const uploadCarRowId = String(options.carRowId ?? effectiveCarRowId ?? "").trim();
+      const uploadCarId = options.carId !== undefined ? options.carId : effectiveCarId;
+      if (!uploadCarRowId && uploadCarId == null) return;
       setPhotoBusyRowKey(rowKey);
       setError(null);
       if (!options.silent) setSaveHint(null);
@@ -864,8 +886,8 @@ export function LineInboxAiToolbar({
         const form = new FormData();
         form.append("target_type", "item");
         form.append("order_item_id", itemId);
-        if (effectiveCarRowId) form.append("car_row_id", effectiveCarRowId);
-        if (effectiveCarId != null) form.append("car_id", String(effectiveCarId));
+        if (uploadCarRowId) form.append("car_row_id", uploadCarRowId);
+        if (uploadCarId != null) form.append("car_id", String(uploadCarId));
         Array.from(files).forEach((file) => form.append("files", file));
         const res = await fetch("/api/m/order-photos/upload", {
           method: "POST",
@@ -887,6 +909,157 @@ export function LineInboxAiToolbar({
       }
     },
     [effectiveCarId, effectiveCarRowId, loadSuggestionItemPhotos, onSaved, uiLang]
+  );
+
+  const attachSuggestionPhotoUrls = useCallback(
+    async (
+      rowKey: string,
+      orderItemId: string | null | undefined,
+      urls: string[],
+      options: { silent?: boolean; carRowId?: string | null; carId?: number | null } = {}
+    ) => {
+      const itemId = String(orderItemId ?? "").trim();
+      const uniqueUrls = Array.from(new Set(urls.map((url) => String(url ?? "").trim()).filter(Boolean)));
+      if (!itemId || uniqueUrls.length === 0) return;
+      const uploadCarRowId = String(options.carRowId ?? effectiveCarRowId ?? "").trim();
+      const uploadCarId = options.carId !== undefined ? options.carId : effectiveCarId;
+      if (!uploadCarRowId && uploadCarId == null) return;
+      setPhotoBusyRowKey(rowKey);
+      setError(null);
+      if (!options.silent) setSaveHint(null);
+      try {
+        const res = await fetch("/api/m/order-photos/fetch-url", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({
+            target_type: "item",
+            order_item_id: itemId,
+            car_row_id: uploadCarRowId || undefined,
+            car_id: uploadCarId,
+            urls: uniqueUrls,
+          }),
+        });
+        const data = (await res.json()) as { ok?: boolean; error?: string; uploaded?: unknown[] };
+        if (!res.ok) throw new Error(data.error || res.statusText || "attach URL failed");
+        const count = Array.isArray(data.uploaded) ? data.uploaded.length : uniqueUrls.length;
+        if (!options.silent) {
+          setSaveHint(uiLang === "en" ? `Attached ${count} LINE photo(s).` : `แนบรูปจาก LINE แล้ว ${count} รูป`);
+        }
+        await loadSuggestionItemPhotos(itemId);
+        onSaved?.();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setPhotoBusyRowKey((cur) => (cur === rowKey ? null : cur));
+      }
+    },
+    [effectiveCarId, effectiveCarRowId, loadSuggestionItemPhotos, onSaved, uiLang]
+  );
+
+  const saveQueueCard = useCallback(
+    async (m: PendingQueueMessage) => {
+      const indices = selectedIndicesForInbox(m);
+      if (indices.length === 0) return;
+      setSavingInboxId(m.inbox_id);
+      setError(null);
+      setSaveHint(null);
+      setReplyText("");
+      setReplyCopied(false);
+      try {
+        const res = await fetch("/api/line-inbox/pending-save", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({
+            saves: [{ inbox_message_id: m.inbox_id, item_indices: indices }],
+          }),
+        });
+        const data = (await res.json()) as {
+          ok?: boolean;
+          error?: string;
+          results?: Array<{
+            inbox_message_id: string;
+            saved_items?: Array<{ item_index: number; order_item_id: string }>;
+          }>;
+        };
+        if (!res.ok) throw new Error(data.error || res.statusText);
+
+        const savedItems =
+          data.results?.flatMap((result) =>
+            result.inbox_message_id === m.inbox_id ? result.saved_items ?? [] : []
+          ) ?? [];
+        let attachedPhotoCount = 0;
+        const touchedRowKeys: string[] = [];
+
+        for (const saved of savedItems) {
+          const rowKey = queueSuggestionRowKey(m.inbox_id, saved.item_index);
+          const savedItemId = String(saved.order_item_id ?? "").trim();
+          if (!savedItemId) continue;
+          touchedRowKeys.push(rowKey);
+
+          const staged = stagedSuggestionPhotos[rowKey] ?? [];
+          const stagedLineUrls = (stagedLineAttachments[rowKey] ?? [])
+            .map((attachment) => attachment.url)
+            .filter(Boolean);
+
+          if (staged.length > 0) {
+            await uploadSuggestionPhotos(
+              rowKey,
+              savedItemId,
+              staged.map((photo) => photo.file),
+              { silent: true, carRowId: m.car_row_id }
+            );
+            attachedPhotoCount += staged.length;
+          }
+
+          if (stagedLineUrls.length > 0) {
+            await attachSuggestionPhotoUrls(rowKey, savedItemId, stagedLineUrls, {
+              silent: true,
+              carRowId: m.car_row_id,
+            });
+            attachedPhotoCount += stagedLineUrls.length;
+          }
+        }
+
+        clearStagedForRowKeys(touchedRowKeys);
+        setSaveHint(
+          uiLang === "en"
+            ? `Saved ${indices.length} new line(s) from LINE queue${attachedPhotoCount ? ` + attached ${attachedPhotoCount} photo(s)` : ""}.`
+            : `บันทึกจากคิว LINE แล้ว ${indices.length} งาน${attachedPhotoCount ? ` + แนบรูป ${attachedPhotoCount} รูป` : ""}`
+        );
+        const savedLines = m.new_lines
+          .filter((line) => indices.includes(line.item_index))
+          .map((line) => ({
+            name: line.suggested_item_name || line.raw_text,
+            status: line.suggested_status || "เช็ค",
+          }));
+        setReplyText(
+          buildLineReplyText({
+            plate: m.plate_display || "",
+            lines: savedLines,
+            uiLang,
+          })
+        );
+        await fetchQueue();
+        onSaved?.();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setSavingInboxId(null);
+      }
+    },
+    [
+      attachSuggestionPhotoUrls,
+      clearStagedForRowKeys,
+      fetchQueue,
+      onSaved,
+      selectedIndicesForInbox,
+      stagedLineAttachments,
+      stagedSuggestionPhotos,
+      uiLang,
+      uploadSuggestionPhotos,
+    ]
   );
 
   useEffect(() => {
@@ -990,14 +1163,23 @@ export function LineInboxAiToolbar({
         const savedItemId = String(data.saved?.[i]?.order_item_id ?? "").trim();
         const rowKey = actionableRowKeys[i]?.rowKey ?? "";
         const staged = rowKey ? stagedSuggestionPhotos[rowKey] ?? [] : [];
-        if (!savedItemId || staged.length === 0) continue;
-        await uploadSuggestionPhotos(
-          rowKey,
-          savedItemId,
-          staged.map((photo) => photo.file),
-          { silent: true }
-        );
-        attachedPhotoCount += staged.length;
+        const stagedLineUrls = rowKey
+          ? (stagedLineAttachments[rowKey] ?? []).map((attachment) => attachment.url).filter(Boolean)
+          : [];
+        if (!savedItemId) continue;
+        if (staged.length > 0) {
+          await uploadSuggestionPhotos(
+            rowKey,
+            savedItemId,
+            staged.map((photo) => photo.file),
+            { silent: true }
+          );
+          attachedPhotoCount += staged.length;
+        }
+        if (stagedLineUrls.length > 0) {
+          await attachSuggestionPhotoUrls(rowKey, savedItemId, stagedLineUrls, { silent: true });
+          attachedPhotoCount += stagedLineUrls.length;
+        }
       }
       setSaveHint(
         uiLang === "en"
@@ -1019,6 +1201,7 @@ export function LineInboxAiToolbar({
       setSuggestionPhotoSheet(null);
       setSuggestionItemPhotos([]);
       clearStagedSuggestionPhotos();
+      clearStagedLineAttachments();
       setDetected(null);
       setExistingItems([]);
       setIgnoredVehicleLines([]);
@@ -1032,6 +1215,8 @@ export function LineInboxAiToolbar({
       setConfirmLoading(false);
     }
   }, [
+    attachSuggestionPhotoUrls,
+    clearStagedLineAttachments,
     clearStagedSuggestionPhotos,
     detected,
     detectedOrder,
@@ -1040,6 +1225,7 @@ export function LineInboxAiToolbar({
     rows,
     onSaved,
     selected,
+    stagedLineAttachments,
     stagedSuggestionPhotos,
     uiLang,
     uploadSuggestionPhotos,
@@ -1122,19 +1308,43 @@ export function LineInboxAiToolbar({
                         {m.new_lines.map((line) => {
                           const des = queueDeselected[m.inbox_id]?.has(line.item_index) ?? false;
                           const checked = !des;
+                          const lineName = line.suggested_item_name || line.raw_text;
+                          const hasPhotoRef = hasLineInboxPhotoReference(lineName);
+                          const rowKey = queueSuggestionRowKey(m.inbox_id, line.item_index);
+                          const stagedPhotoCount =
+                            (stagedSuggestionPhotos[rowKey]?.length ?? 0) +
+                            (stagedLineAttachments[rowKey]?.length ?? 0);
                           return (
                             <li key={line.item_index}>
-                              <label className="flex cursor-pointer gap-2 rounded-lg bg-white/80 px-2 py-1.5 ring-1 ring-slate-200/80">
-                                <input
-                                  type="checkbox"
-                                  checked={checked}
-                                  onChange={() => toggleQueueLine(m.inbox_id, line.item_index)}
-                                  className="mt-0.5 h-5 w-5 shrink-0 rounded border-slate-400"
-                                />
-                                <span className="min-w-0 flex-1 text-[12px] font-medium leading-snug text-slate-900">
-                                  {line.suggested_item_name || line.raw_text}
-                                </span>
-                              </label>
+                              <div className="flex items-start gap-2 rounded-lg bg-white/80 px-2 py-1.5 ring-1 ring-slate-200/80">
+                                <label className="flex min-w-0 flex-1 cursor-pointer gap-2">
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={() => toggleQueueLine(m.inbox_id, line.item_index)}
+                                    className="mt-0.5 h-5 w-5 shrink-0 rounded border-slate-400"
+                                  />
+                                  <span className="min-w-0 flex-1 text-[12px] font-medium leading-snug text-slate-900">
+                                    {lineName}
+                                  </span>
+                                </label>
+                                {hasPhotoRef ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => openSuggestionPhotoSheet(rowKey, -1, lineName)}
+                                    className={cn(
+                                      "shrink-0 rounded-full px-2 py-1 text-[10px] font-bold ring-1 touch-manipulation",
+                                      stagedPhotoCount > 0
+                                        ? "bg-violet-700 text-white ring-violet-700"
+                                        : "bg-sky-50 text-sky-700 ring-sky-200"
+                                    )}
+                                    title={uiLang === "en" ? "Choose LINE photo" : "เลือกรูปจาก LINE"}
+                                  >
+                                    {uiLang === "en" ? "Photo" : "รูป"}
+                                    {stagedPhotoCount > 0 ? ` ${stagedPhotoCount}` : ""}
+                                  </button>
+                                ) : null}
+                              </div>
                             </li>
                           );
                         })}
@@ -1630,7 +1840,12 @@ export function LineInboxAiToolbar({
                   {uiLang === "en" ? "Item Photos" : "รูปตามรายการ"}
                 </b>
                 <p className="mt-1 line-clamp-2 text-xs font-medium text-slate-600">
-                  {String(suggestionPhotoSheetRow?.itemName || suggestionPhotoSheetRow?.suggested_item_name || "").trim() ||
+                  {String(
+                    suggestionPhotoSheetRow?.itemName ||
+                      suggestionPhotoSheetRow?.suggested_item_name ||
+                      suggestionPhotoSheet.itemName ||
+                      ""
+                  ).trim() ||
                     (uiLang === "en" ? "Suggested item" : "งานที่ AI เสนอ")}
                 </p>
               </div>
@@ -1682,6 +1897,49 @@ export function LineInboxAiToolbar({
               </label>
             </div>
 
+            {queueAttachments.length > 0 ? (
+              <div className="mb-3">
+                <p className="mb-2 text-[11px] font-semibold text-slate-600">
+                  {uiLang === "en" ? "Recent LINE photos" : "รูปจาก LINE ล่าสุด"}
+                </p>
+                <div className="flex gap-2 overflow-x-auto pb-1">
+                  {queueAttachments.slice(0, 20).map((attachment) => {
+                    const selected = stagedLineAttachmentsForOpenSheet.some(
+                      (item) => item.line_message_id === attachment.line_message_id
+                    );
+                    return (
+                      <button
+                        type="button"
+                        key={`${attachment.inbox_id}-${attachment.line_message_id}`}
+                        onClick={() => toggleStagedLineAttachment(suggestionPhotoSheet.rowKey, attachment)}
+                        className={cn(
+                          "relative h-24 w-24 shrink-0 overflow-hidden rounded-xl bg-slate-100 ring-2",
+                          selected ? "ring-violet-500" : "ring-slate-200"
+                        )}
+                        title={uiLang === "en" ? "Use this LINE photo" : "เลือกรูปจาก LINE นี้"}
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={attachment.url}
+                          alt={uiLang === "en" ? "LINE photo" : "รูปจาก LINE"}
+                          className="h-full w-full object-cover"
+                          loading="lazy"
+                        />
+                        <span
+                          className={cn(
+                            "absolute inset-x-1 bottom-1 rounded-full px-1.5 py-0.5 text-[10px] font-bold",
+                            selected ? "bg-violet-700 text-white" : "bg-white/90 text-slate-700"
+                          )}
+                        >
+                          {selected ? (uiLang === "en" ? "Selected" : "เลือกแล้ว") : uiLang === "en" ? "Use" : "เลือก"}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
+
             {stagedPhotosForOpenSheet.length > 0 ? (
               <div className="mb-3">
                 <p className="mb-2 text-[11px] font-semibold text-slate-600">
@@ -1712,6 +1970,14 @@ export function LineInboxAiToolbar({
                   ))}
                 </div>
               </div>
+            ) : null}
+
+            {stagedLineAttachmentsForOpenSheet.length > 0 ? (
+              <p className="mb-3 rounded-lg bg-violet-50 px-2 py-1.5 text-[11px] font-semibold text-violet-900 ring-1 ring-violet-100">
+                {uiLang === "en"
+                  ? `LINE photo(s) selected for this item: ${stagedLineAttachmentsForOpenSheet.length}`
+                  : `เลือกรูปจาก LINE สำหรับรายการนี้แล้ว ${stagedLineAttachmentsForOpenSheet.length} รูป`}
+              </p>
             ) : null}
 
             {canUseSuggestionPhotoSheet ? (
