@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Check, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { resolveSaleStaffForOrder } from "@/lib/orders/sale-assignees-shared";
@@ -120,6 +121,44 @@ function safeDateValue(value: string | null | undefined): string {
   return m?.[0] ?? "";
 }
 
+function normalizeSearchText(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, "");
+}
+
+function buildLineReplyText({
+  plate,
+  lines,
+  uiLang,
+}: {
+  plate: string;
+  lines: Array<{ name: string; status: string }>;
+  uiLang: UiLang;
+}): string {
+  const safePlate = plate.trim() || "-";
+  const itemLines =
+    lines.length > 0
+      ? lines.map((line, index) => `${index + 1}. ${line.name.trim() || "-"} - ${line.status.trim() || "-"}`).join("\n")
+      : "-";
+
+  if (uiLang === "en") {
+    return [
+      "Received the request.",
+      `Car: ${safePlate}`,
+      "Items:",
+      itemLines,
+      "You can follow the status in Order Tracking.",
+    ].join("\n");
+  }
+
+  return [
+    "รับงานแล้วครับ",
+    `รถ: ${safePlate}`,
+    "รายการ:",
+    itemLines,
+    "ติดตามสถานะในระบบ Order Tracking ได้ครับ",
+  ].join("\n");
+}
+
 function addUniqueOption(target: string[], value: string | null | undefined) {
   const clean = String(value ?? "").trim();
   if (!clean) return;
@@ -149,7 +188,7 @@ function stablePillIndex(value: string): number {
   return h;
 }
 
-const LINE_INBOX_ASSIGNEE_PILL_CLASSES = [
+const LINE_INBOX_ASSIGNEE_SURFACE_CLASSES = [
   "bg-emerald-100 text-emerald-950 ring-emerald-300",
   "bg-cyan-100 text-cyan-950 ring-cyan-300",
   "bg-lime-100 text-lime-950 ring-lime-300",
@@ -160,49 +199,131 @@ const LINE_INBOX_ASSIGNEE_PILL_CLASSES = [
   "bg-rose-100 text-rose-950 ring-rose-300",
 ];
 
-function lineInboxAssigneePillClasses(assignee: string | null | undefined): string {
+function lineInboxAssigneeLinkClasses(assignee: string | null | undefined): string {
   const name = String(assignee ?? "").trim();
   if (!name) return "bg-white text-slate-700 ring-slate-200";
-  return LINE_INBOX_ASSIGNEE_PILL_CLASSES[
-    stablePillIndex(name) % LINE_INBOX_ASSIGNEE_PILL_CLASSES.length
+  return LINE_INBOX_ASSIGNEE_SURFACE_CLASSES[
+    stablePillIndex(name) % LINE_INBOX_ASSIGNEE_SURFACE_CLASSES.length
   ]!;
 }
 
-function lineInboxStatusPillClasses(status: string | null | undefined): string {
+function lineInboxStatusLinkClasses(status: string | null | undefined): string {
   const s = String(status ?? "").trim();
   if (!s) return "bg-white text-slate-700 ring-slate-200";
   if (s === "จบ") return "bg-sky-50 text-sky-800 ring-sky-300";
-  if (s === "สั่ง" || s === "เช็ค") return "bg-amber-50 text-amber-900 ring-amber-300";
+  if (s === "สั่ง" || s === "เช็ค") return "bg-white text-amber-900 ring-slate-200";
   return "bg-white text-emerald-900 ring-slate-200";
 }
 
-function LineInboxSuggestedItemNamePreview({
+function lineInboxAssigneePillClasses(assignee: string | null | undefined): string {
+  return lineInboxAssigneeLinkClasses(assignee);
+}
+
+function lineInboxStatusPillClasses(status: string | null | undefined): string {
+  return lineInboxStatusLinkClasses(status);
+}
+
+function LineInboxInlineSelectLink({
+  value,
+  options,
+  onChange,
+  title,
+  emptyLabel,
+  className,
+}: {
+  value: string;
+  options: string[];
+  onChange: (value: string) => void;
+  title: string;
+  emptyLabel: string;
+  className?: string;
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      title={title}
+      aria-label={title}
+      className={cn(
+        "h-10 min-h-[40px] w-[76px] min-w-[4.5rem] shrink-0 touch-manipulation rounded-full border-0 px-2 py-1.5 text-xs font-semibold shadow-sm outline-none ring-1 focus-visible:ring-2 sm:w-[88px]",
+        className
+      )}
+    >
+      <option value="">{emptyLabel}</option>
+      {options.map((option) => (
+        <option key={option} value={option}>
+          {option}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function LineInboxSuggestedItemNameField({
   value,
   uiLang,
-  onEdit,
+  onChange,
   onPhotoReference,
 }: {
   value: string;
   uiLang: UiLang;
-  onEdit: () => void;
+  onChange: (value: string) => void;
   onPhotoReference: () => void;
 }) {
-  const text = String(value ?? "").trim() || "-";
-  const parts = text.split(LINE_INBOX_PHOTO_REF_SPLIT_REGEX).filter(Boolean);
+  const [editing, setEditing] = useState(false);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const text = String(value ?? "");
+  const trimmed = text.trim();
+  const hasPhotoReference = LINE_INBOX_PHOTO_REF_SPLIT_REGEX.test(text);
+  LINE_INBOX_PHOTO_REF_SPLIT_REGEX.lastIndex = 0;
+
+  useEffect(() => {
+    if (!editing) return;
+    const el = inputRef.current;
+    if (!el) return;
+    el.focus();
+    const len = el.value.length;
+    try {
+      el.setSelectionRange(len, len);
+    } catch {
+      /* ignore */
+    }
+  }, [editing]);
+
+  const inputClass =
+    "min-w-0 flex-1 basis-0 rounded-xl bg-transparent px-1.5 py-1.5 text-sm font-semibold text-slate-900 outline-none focus:bg-white focus:ring-2 focus:ring-slate-300/80";
+
+  if (!hasPhotoReference || editing) {
+    return (
+      <input
+        ref={inputRef}
+        value={text}
+        onChange={(event) => onChange(event.target.value)}
+        onBlur={() => setEditing(false)}
+        placeholder={uiLang === "en" ? "Task name" : "ชื่องาน"}
+        className={inputClass}
+      />
+    );
+  }
+
+  const parts = trimmed.split(LINE_INBOX_PHOTO_REF_SPLIT_REGEX).filter(Boolean);
   return (
     <div
       data-line-inbox-item-name-preview=""
       role="button"
       tabIndex={0}
-      onClick={onEdit}
+      onClick={(event) => {
+        if ((event.target as HTMLElement).closest("[data-line-inbox-photo-link]")) return;
+        setEditing(true);
+      }}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          onEdit();
+          setEditing(true);
         }
       }}
-      className="min-w-0 flex-1 cursor-text rounded-xl px-1.5 py-1 text-sm font-semibold leading-snug text-slate-900 ring-1 ring-transparent hover:bg-white/70 focus:outline-none focus:ring-slate-300"
-      title={uiLang === "en" ? "Tap to edit item name" : "แตะเพื่อแก้ชื่องาน"}
+      className="inline-flex max-w-full min-w-0 flex-1 cursor-text flex-nowrap items-baseline gap-0 overflow-x-auto rounded-xl bg-transparent px-1.5 py-1.5 text-sm font-semibold leading-snug text-slate-900 ring-1 ring-transparent hover:bg-slate-50/80 focus:outline-none focus:ring-slate-300"
+      title={uiLang === "en" ? "Tap to edit task name" : "ชื่องาน — แตะเพื่อแก้ไข"}
     >
       {parts.map((part, index) => {
         const isPhotoRef = LINE_INBOX_PHOTO_REF_EXACT_REGEX.test(part.trim());
@@ -214,19 +335,20 @@ function LineInboxSuggestedItemNamePreview({
           );
         }
         return (
-          <a
+          <button
+            type="button"
+            data-line-inbox-photo-link=""
             key={`${part}-${index}`}
-            href="#line-inbox-item-photos"
             onClick={(event) => {
               event.preventDefault();
               event.stopPropagation();
               onPhotoReference();
             }}
-            className="inline cursor-pointer align-baseline font-inherit font-semibold text-sky-600 underline decoration-sky-400 decoration-2 underline-offset-2 hover:text-sky-700 active:text-sky-800"
-            title={uiLang === "en" ? "Photo reference" : "รูปอ้างอิง"}
+            className="inline shrink-0 cursor-pointer border-0 bg-transparent p-0 align-baseline font-inherit font-semibold text-sky-600 underline decoration-sky-400 decoration-2 underline-offset-2 hover:text-sky-700 active:text-sky-800"
+            title={uiLang === "en" ? "Upload/view photos for this item" : "เพิ่มรูปและดูรูปตามรายการนี้"}
           >
             {part}
-          </a>
+          </button>
         );
       })}
     </div>
@@ -252,6 +374,7 @@ export function LineInboxAiToolbar({
 }) {
   const [open, setOpen] = useState(false);
   const [selectedOrderId, setSelectedOrderId] = useState("");
+  const [carSearch, setCarSearch] = useState("");
   const [rawText, setRawText] = useState("");
   const [analyzeLoading, setAnalyzeLoading] = useState(false);
   const [confirmLoading, setConfirmLoading] = useState(false);
@@ -270,6 +393,8 @@ export function LineInboxAiToolbar({
   const [stagedSuggestionPhotos, setStagedSuggestionPhotos] = useState<Record<string, LineInboxStagedPhoto[]>>({});
   const [photoBusyRowKey, setPhotoBusyRowKey] = useState<string | null>(null);
   const [saveHint, setSaveHint] = useState<string | null>(null);
+  const [replyText, setReplyText] = useState("");
+  const [replyCopied, setReplyCopied] = useState(false);
 
   const [queueMessages, setQueueMessages] = useState<PendingQueueMessage[]>([]);
   const [queueTotalNew, setQueueTotalNew] = useState(0);
@@ -341,6 +466,21 @@ export function LineInboxAiToolbar({
     () => orders.find((o) => o.id === selectedOrderId) ?? null,
     [orders, selectedOrderId]
   );
+
+  const visibleOrders = useMemo(() => {
+    const q = normalizeSearchText(carSearch);
+    const filtered = q
+      ? orders.filter((o) =>
+          normalizeSearchText(
+            `${o.fullPlate} ${o.car} ${o.chassis ?? ""} ${o.sale ?? ""} ${o.carRowId ?? ""} ${o.carId ?? ""}`
+          ).includes(q)
+        )
+      : orders;
+    if (selected && !filtered.some((o) => o.id === selected.id)) {
+      return [selected, ...filtered];
+    }
+    return filtered;
+  }, [carSearch, orders, selected]);
 
   const detectedOrder = useMemo(() => {
     if (!detected) return null;
@@ -458,6 +598,10 @@ export function LineInboxAiToolbar({
     () => rows.filter((r) => r.included && r.action !== "skip").length,
     [rows]
   );
+  const selectedRiskCount = useMemo(
+    () => rows.filter((r) => r.included && r.action !== "skip" && r.duplicate_status !== "new").length,
+    [rows]
+  );
 
   const suggestionPhotoSheetRow = useMemo(() => {
     if (!suggestionPhotoSheet) return null;
@@ -503,6 +647,8 @@ export function LineInboxAiToolbar({
       setSavingInboxId(m.inbox_id);
       setError(null);
       setSaveHint(null);
+      setReplyText("");
+      setReplyCopied(false);
       try {
         const res = await fetch("/api/line-inbox/pending-save", {
           method: "POST",
@@ -519,6 +665,19 @@ export function LineInboxAiToolbar({
             ? `Saved ${indices.length} new line(s) from LINE queue.`
             : `บันทึกจากคิว LINE แล้ว ${indices.length} งาน`
         );
+        const savedLines = m.new_lines
+          .filter((line) => indices.includes(line.item_index))
+          .map((line) => ({
+            name: line.suggested_item_name || line.raw_text,
+            status: line.suggested_status || "เช็ค",
+          }));
+        setReplyText(
+          buildLineReplyText({
+            plate: m.plate_display || "",
+            lines: savedLines,
+            uiLang,
+          })
+        );
         await fetchQueue();
         onSaved?.();
       } catch (e) {
@@ -533,6 +692,8 @@ export function LineInboxAiToolbar({
   const runAnalyze = useCallback(async () => {
     setError(null);
     setSaveHint(null);
+    setReplyText("");
+    setReplyCopied(false);
     setAnalyzeLoading(true);
     setExistingItems([]);
     try {
@@ -602,10 +763,6 @@ export function LineInboxAiToolbar({
 
   const updateRow = useCallback((index: number, patch: Partial<RowDraft>) => {
     setRows((prev) => prev.map((r, i) => (i === index ? { ...r, ...patch } : r)));
-  }, []);
-
-  const setRowExpanded = useCallback((rowKey: string, expanded: boolean) => {
-    setExpandedRows((prev) => ({ ...prev, [rowKey]: expanded }));
   }, []);
 
   const toggleRowExpanded = useCallback((rowKey: string) => {
@@ -745,9 +902,23 @@ export function LineInboxAiToolbar({
     suggestionPhotoSheetItemId,
   ]);
 
+  const copyReply = useCallback(async () => {
+    const text = replyText.trim();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setReplyCopied(true);
+      window.setTimeout(() => setReplyCopied(false), 1400);
+    } catch {
+      window.prompt(uiLang === "en" ? "Copy LINE reply" : "คัดลอกข้อความตอบ LINE", text);
+    }
+  }, [replyText, uiLang]);
+
   const runConfirm = useCallback(async () => {
     setError(null);
     setSaveHint(null);
+    setReplyText("");
+    setReplyCopied(false);
     setConfirmLoading(true);
     try {
       if (!effectiveCarRowId && effectiveCarId == null) {
@@ -756,6 +927,16 @@ export function LineInboxAiToolbar({
             ? "Pick a car from the list or run analyze so the car matches."
             : "เลือกรถจากรายการ หรือให้วิเคราะห์จับคู่รถได้ก่อนบันทึก"
         );
+      }
+      const selectedRows = rows.filter((r) => r.included && r.action !== "skip");
+      const riskyRows = selectedRows.filter((r) => r.duplicate_status !== "new");
+      if (riskyRows.length > 0) {
+        const ok = window.confirm(
+          uiLang === "en"
+            ? `${riskyRows.length} selected line(s) may be duplicate or unclear. Continue saving?`
+            : `มี ${riskyRows.length} รายการที่อาจซ้ำหรือไม่ชัด ต้องการบันทึกต่อหรือไม่?`
+        );
+        if (!ok) return;
       }
       const confirmations = rows.map((r) => {
         const itemName = String(r.itemName || r.suggested_item_name || r.raw_text).trim();
@@ -822,6 +1003,16 @@ export function LineInboxAiToolbar({
           ? `Saved ${count} line(s)${attachedPhotoCount ? ` + attached ${attachedPhotoCount} photo(s)` : ""}.`
           : `บันทึกแล้ว ${count} รายการ${attachedPhotoCount ? ` + แนบรูป ${attachedPhotoCount} รูป` : ""}`
       );
+      setReplyText(
+        buildLineReplyText({
+          plate: detectedOrder?.fullPlate || selected?.fullPlate || detected?.plate_text || "",
+          lines: selectedRows.map((row) => ({
+            name: String(row.itemName || row.suggested_item_name || row.raw_text).trim(),
+            status: String(row.status || row.suggested_status || "เช็ค").trim(),
+          })),
+          uiLang,
+        })
+      );
       setRows([]);
       setExpandedRows({});
       setSuggestionPhotoSheet(null);
@@ -841,10 +1032,13 @@ export function LineInboxAiToolbar({
     }
   }, [
     clearStagedSuggestionPhotos,
+    detected,
+    detectedOrder,
     effectiveCarId,
     effectiveCarRowId,
     rows,
     onSaved,
+    selected,
     stagedSuggestionPhotos,
     uiLang,
     uploadSuggestionPhotos,
@@ -985,7 +1179,14 @@ export function LineInboxAiToolbar({
           </p>
 
           <label className="mb-2 block text-[11px] font-medium text-slate-600">
-            {uiLang === "en" ? "Car (all loaded; ignores filters)" : "รถ (ทั้งหมดที่โหลด — ไม่ตามการกรองหน้า)"}
+            {uiLang === "en" ? "Search/select car" : "ค้นหา/เลือกรถ"}
+            <input
+              value={carSearch}
+              onChange={(e) => setCarSearch(e.target.value)}
+              placeholder={uiLang === "en" ? "Plate / chassis / keyword" : "ทะเบียน / เลขถัง / คำค้นรถ"}
+              className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-2 py-2 text-sm font-medium text-slate-900 outline-none ring-violet-400 focus:ring-2"
+              autoComplete="off"
+            />
             <select
               value={selectedOrderId}
               onChange={(e) => setSelectedOrderId(e.target.value)}
@@ -1001,11 +1202,17 @@ export function LineInboxAiToolbar({
                       ? "Let AI match from message / pick if not found"
                       : "ให้ AI จับรถจากข้อความ / เลือกเองถ้าจับไม่ได้"}
                   </option>
-                  {orders.map((o) => (
-                    <option key={o.id} value={o.id}>
-                      {(o.fullPlate || "-").trim()} · {(o.car || "").slice(0, 42)}
+                  {visibleOrders.length === 0 ? (
+                    <option value="" disabled>
+                      {uiLang === "en" ? "No car matches this search" : "ไม่พบรถตามคำค้น"}
                     </option>
-                  ))}
+                  ) : (
+                    visibleOrders.map((o) => (
+                      <option key={o.id} value={o.id}>
+                        {(o.fullPlate || "-").trim()} · {(o.car || "").slice(0, 42)}
+                      </option>
+                    ))
+                  )}
                 </>
               )}
             </select>
@@ -1048,6 +1255,34 @@ export function LineInboxAiToolbar({
           {saveHint ? (
             <div className="mb-2 rounded-xl border border-emerald-200 bg-emerald-50 px-2 py-2 text-xs font-medium text-emerald-900">
               {saveHint}
+            </div>
+          ) : null}
+
+          {replyText ? (
+            <div className="mb-3 rounded-xl border border-sky-200 bg-sky-50 px-2.5 py-2 text-xs text-sky-950">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <p className="font-bold">
+                  {uiLang === "en" ? "Copy-ready LINE reply" : "ข้อความตอบ LINE พร้อมคัดลอก"}
+                </p>
+                <button
+                  type="button"
+                  onPointerDown={(e) => e.preventDefault()}
+                  onClick={() => void copyReply()}
+                  className="inline-flex min-h-8 items-center gap-1 rounded-full bg-slate-950 px-3 py-1 text-[11px] font-bold text-white touch-manipulation"
+                >
+                  {replyCopied ? <Check className="h-3.5 w-3.5" aria-hidden /> : <Copy className="h-3.5 w-3.5" aria-hidden />}
+                  {replyCopied
+                    ? uiLang === "en"
+                      ? "Copied"
+                      : "คัดลอกแล้ว"
+                    : uiLang === "en"
+                      ? "Copy"
+                      : "คัดลอกข้อความตอบ LINE"}
+                </button>
+              </div>
+              <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-lg bg-white/85 p-2 text-[11px] leading-relaxed text-slate-800 ring-1 ring-sky-100">
+                {replyText}
+              </pre>
             </div>
           ) : null}
 
@@ -1223,45 +1458,32 @@ export function LineInboxAiToolbar({
                       </div>
 
                       <div className="flex min-w-0 items-center gap-1.5">
-                        <LineInboxSuggestedItemNamePreview
+                        <LineInboxSuggestedItemNameField
                           value={row.itemName}
                           uiLang={uiLang}
-                          onEdit={() => setRowExpanded(rowKey, true)}
+                          onChange={(value) => updateRow(i, { itemName: value })}
                           onPhotoReference={() => openSuggestionPhotoSheet(rowKey, i)}
                         />
                         <div className="flex shrink-0 items-center gap-1.5">
-                          <select
+                          <LineInboxInlineSelectLink
                             value={row.assignee}
-                            onChange={(e) => updateRow(i, { assignee: e.target.value })}
+                            options={staffChoices}
+                            onChange={(value) => updateRow(i, { assignee: value })}
                             title={uiLang === "en" ? "Owner" : "พนักงาน"}
-                            className={cn(
-                              "h-10 min-h-[40px] w-[76px] shrink-0 touch-manipulation rounded-full border-0 px-2 py-1.5 text-xs font-semibold shadow-sm outline-none ring-1 focus-visible:ring-2 sm:w-[88px]",
-                              lineInboxAssigneePillClasses(row.assignee)
-                            )}
-                          >
-                            <option value="">{uiLang === "en" ? "-" : "—"}</option>
-                            {staffChoices.map((name) => (
-                              <option key={name} value={name}>
-                                {name}
-                              </option>
-                            ))}
-                          </select>
-                          <select
+                            emptyLabel={uiLang === "en" ? "-" : "—"}
+                            className={lineInboxAssigneePillClasses(row.assignee)}
+                          />
+                          <LineInboxInlineSelectLink
                             value={row.status}
-                            onChange={(e) => updateRow(i, { status: e.target.value })}
+                            options={statusChoices}
+                            onChange={(value) => updateRow(i, { status: value })}
                             title={uiLang === "en" ? "Item status" : "สถานะรายการ"}
+                            emptyLabel={uiLang === "en" ? "-" : "—"}
                             className={cn(
-                              "h-10 min-h-[40px] w-[5.5rem] shrink-0 touch-manipulation rounded-full border-0 px-2 py-1.5 text-xs font-medium shadow-sm outline-none ring-1 focus-visible:ring-2 sm:w-[6.25rem]",
+                              "w-[5.5rem] min-w-[5.5rem] font-medium sm:w-[6.25rem]",
                               lineInboxStatusPillClasses(row.status)
                             )}
-                          >
-                            <option value="">{uiLang === "en" ? "-" : "—"}</option>
-                            {statusChoices.map((status) => (
-                              <option key={status} value={status}>
-                                {status}
-                              </option>
-                            ))}
-                          </select>
+                          />
                           <button
                             type="button"
                             onClick={() => toggleRowExpanded(rowKey)}
@@ -1288,16 +1510,7 @@ export function LineInboxAiToolbar({
                         </p>
                       ) : null}
 
-                      <label className="block text-[11px] font-medium text-slate-600">
-                        {uiLang === "en" ? "Item name" : "ชื่องาน"}
-                        <input
-                          value={row.itemName}
-                          onChange={(e) => updateRow(i, { itemName: e.target.value })}
-                          className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-[13px] font-medium text-slate-900 outline-none ring-violet-400 focus:ring-2"
-                        />
-                      </label>
-
-                      <div className="grid gap-2 sm:grid-cols-3">
+                      <div className="grid gap-2 sm:grid-cols-[minmax(0,12rem)]">
                         <label className="block text-[11px] font-medium text-slate-600">
                           {uiLang === "en" ? "Action" : "การทำงาน"}
                           <select
@@ -1316,36 +1529,6 @@ export function LineInboxAiToolbar({
                               {uiLang === "en" ? "Update existing" : "อัปเดตงานเดิม"}
                             </option>
                             <option value="skip">{uiLang === "en" ? "Skip" : "ข้าม"}</option>
-                          </select>
-                        </label>
-                        <label className="block text-[11px] font-medium text-slate-600">
-                          {uiLang === "en" ? "Assignee" : "ผู้รับผิดชอบ"}
-                          <select
-                            value={row.assignee}
-                            onChange={(e) => updateRow(i, { assignee: e.target.value })}
-                            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-[13px] font-semibold text-slate-900"
-                          >
-                            <option value="">{uiLang === "en" ? "Not set" : "ยังไม่ระบุ"}</option>
-                            {staffChoices.map((name) => (
-                              <option key={name} value={name}>
-                                {name}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <label className="block text-[11px] font-medium text-slate-600">
-                          {uiLang === "en" ? "Status" : "สถานะ"}
-                          <select
-                            value={row.status}
-                            onChange={(e) => updateRow(i, { status: e.target.value })}
-                            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-[13px] font-semibold text-slate-900"
-                          >
-                            <option value="">{uiLang === "en" ? "Not set" : "ยังไม่ระบุ"}</option>
-                            {statusChoices.map((status) => (
-                              <option key={status} value={status}>
-                                {status}
-                              </option>
-                            ))}
                           </select>
                         </label>
                       </div>
@@ -1385,6 +1568,14 @@ export function LineInboxAiToolbar({
                   );
                 })}
               </ul>
+
+              {selectedRiskCount > 0 ? (
+                <p className="rounded-lg bg-amber-50 px-2 py-1.5 text-[11px] font-medium text-amber-900 ring-1 ring-amber-200/80">
+                  {uiLang === "en"
+                    ? `${selectedRiskCount} selected line(s) may be duplicate or unclear. You will be asked again before saving.`
+                    : `มี ${selectedRiskCount} รายการที่อาจซ้ำหรือไม่ชัด ระบบจะถามยืนยันอีกครั้งก่อนบันทึก`}
+                </p>
+              ) : null}
 
               <Button
                 type="button"
