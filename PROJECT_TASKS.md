@@ -73,7 +73,11 @@
 - [x] **AI whole-message analyze contract:** LINE Inbox AI now classifies the full pasted message into `car_context`, `people_context`, `actual_work_items`, `notes`, and `ignored_noise`; only guarded `actual_work_items` become saveable rows.
 - [x] **Issue #29 existing-vs-new review:** `/m/orders` manual LINE Inbox analyze now shows existing `order_items` for the detected car separately from AI-suggested new rows. Staff can edit item name, assignee, status, note, due date, and choose create/merge/skip before confirm. New rows default assignee from the existing sale-code owner mapping when the detected car sale is mapped; duplicate suggestions show the matched existing item. No webhook/schema/public.cars change.
 - [x] **Issue #29 detail grouping:** LINE Inbox analyze groups main action + following detail/spec lines into one suggestion with read-only reference text (for example film percentages), so detail rows such as `ประตู 80%` are not saveable standalone items and do not auto-fill the editable note field.
-- [ ] LINE Bot / Messaging API webhook / group message ingestion.
+- [x] **Issue #32 Phase 2 webhook text capture:** `POST /api/line/webhook` verifies LINE signatures and stores text message events in `line_inbox_messages` as `workflow_status = pending` / `analyze_status = pending`, de-duped by `line_message_id`. Capture-only: no auto reply, no AI analyze inline, no `order_items` write, no LIFF/schema/public.cars change.
+- [x] **Issue #34 Sprint 2 pending analyze:** `POST /api/line-inbox/analyze-pending` processes pending captured LINE text rows in small batches outside the webhook request and updates analyze fields for human review. No auto reply, no `order_items` write, no image capture, no LIFF/schema/public.cars change.
+- [ ] LINE Bot automatic reply / push workflow.
+- [ ] Scheduled/background worker for pending `line_inbox_messages` analysis.
+- [ ] LINE image/file attachment ingestion.
 
 ## Future Two-way Sync
 - [ ] Not built.

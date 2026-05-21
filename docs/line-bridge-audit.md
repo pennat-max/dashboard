@@ -12,7 +12,7 @@ The repo already contains a partial LINE Bridge:
 
 - Manual LINE Inbox analysis and human-confirm save flows are built.
 - A text-only LINE Messaging API webhook route exists in code at `POST /api/line/webhook`.
-- The webhook verifies LINE signatures, stores inbound text messages in `line_inbox_messages`, and runs the shared read-only analyze pipeline.
+- The webhook verifies LINE signatures and stores inbound text messages in `line_inbox_messages` as pending capture rows.
 - The webhook does not reply to LINE, does not create `order_items` directly, and does not process images/attachments.
 - Human review remains the safety gate before any write to `order_items`.
 - LIFF Phase 1 exists for `/liff/orders`, and a separate `/liff/line-inbox` manual review UI exists.
@@ -25,7 +25,7 @@ Operationally, the webhook is still partial until the production environment, LI
 | --- | --- | --- |
 | Manual paste analyze | Built | `POST /api/line-inbox/analyze` returns suggestions and never writes `order_items`. |
 | Human confirm save | Built | `POST /api/line-inbox/confirm` writes only after user confirmation. |
-| Pending queue from LINE messages | Built/partial | `GET /api/line-inbox/pending-queue` reads queued webhook messages if the table and env are ready. |
+| Pending queue from LINE messages | Built/partial | Webhook capture leaves rows as `analyze_status = pending`; `POST /api/line-inbox/analyze-pending` can analyze them into review-ready payloads. |
 | Save selected pending queue items | Built/partial | `POST /api/line-inbox/pending-save` saves selected `new` lines and marks the inbox message confirmed. |
 | `/m/orders` LINE Inbox toolbar | Built | `line-inbox-ai-toolbar.tsx` supports manual paste and pending queue review. |
 | `/liff/line-inbox` | Built | Standalone LIFF/manual review UI for analyze then confirm. |
@@ -54,6 +54,7 @@ Operationally, the webhook is still partial until the production environment, LI
 | `supabase/migrations/20260509240000_line_inbox_messages.sql` | Migration for the inbound LINE message queue table. |
 | `src/app/api/line-inbox/analyze/route.ts` | Read-only analyze endpoint. |
 | `src/app/api/line-inbox/confirm/route.ts` | Human-confirm save endpoint. |
+| `src/app/api/line-inbox/analyze-pending/route.ts` | Batch analyzer for pending webhook captures; does not create order items. |
 | `src/app/api/line-inbox/pending-queue/route.ts` | Pending queue reader for analyzed webhook messages. |
 | `src/app/api/line-inbox/pending-save/route.ts` | Save selected queued suggestions after review. |
 | `src/lib/line-inbox/run-analyze-core.ts` | Shared deterministic analyze pipeline. |
@@ -85,7 +86,7 @@ Status: built as deterministic heuristics for LINE Inbox.
 
 The core LINE Inbox analyze path is deterministic:
 
-- Splits pasted or webhook text into candidate work lines.
+- Splits pasted text into candidate work lines. Webhook text capture no longer runs analyze inline.
 - Resolves a car from `car_row_id`, `car_id`, plate text, or chassis text.
 - Loads existing `order_items` for the resolved car.
 - Produces duplicate status: `new`, `duplicate`, `possible_duplicate`, or `unclear`.
@@ -100,7 +101,7 @@ Webhook-ingested messages can appear in the pending queue when:
 
 - `line_inbox_messages` exists.
 - Webhook messages are inserted successfully.
-- Analyze status is `ok`.
+- Analyze status is `ok` after `POST /api/line-inbox/analyze-pending` or a future worker runs.
 - Workflow status remains `pending`.
 - At least one suggested line has `duplicate_status = "new"`.
 
@@ -137,9 +138,16 @@ Built capabilities:
 - Accepts text message events only.
 - Supports group, user DM, and room sources with env gates.
 - Inserts inbound text into `line_inbox_messages`.
-- Runs the same read-only analyze core and stores the analyze payload.
+- Leaves `analyze_status = "pending"` and `workflow_status = "pending"` for later human/analyze workflow.
 - Ignores duplicate LINE message IDs.
 - Returns `OK` after processing.
+
+Pending analyze capabilities:
+
+- `POST /api/line-inbox/analyze-pending` processes a limited batch of pending rows.
+- It uses the shared read-only LINE Inbox analyze core.
+- It updates only analyze fields on `line_inbox_messages`.
+- It does not create `order_items`, confirm workflow rows, or reply to LINE.
 
 Not built:
 
@@ -156,7 +164,7 @@ Operational notes:
 - If `LINE_CHANNEL_SECRET` is missing, the route logs an error and returns `OK` so LINE will not retry.
 - Group messages are skipped unless `LINE_ALLOWED_GROUP_IDS` is configured.
 - `LINE_WEBHOOK_LOG_GROUP_IDS=true` can help discover a group ID, but should be temporary.
-- Analyze runs inline during the webhook request, so a future production hardening pass should consider queue/retry behavior.
+- Analyze no longer runs inline during the webhook request. `POST /api/line-inbox/analyze-pending` can turn pending captures into review-ready suggestions; a scheduled/background worker is still future.
 
 ## Database / Table Status
 
@@ -212,7 +220,7 @@ Future/expected for automatic replies, but no current usage was found in the web
 
 The current safety model is correct for Phase 1:
 
-1. Webhook and analyze paths may store text and generate suggestions.
+1. Webhook may store text; analyze paths may later generate suggestions.
 2. AI/deterministic analysis is advisory only.
 3. `order_items` writes happen only through authenticated/mutation-authorized confirm flows.
 4. Humans choose create, merge, or skip before saving.
@@ -225,7 +233,7 @@ Some handoff/setup docs still say LINE webhook/group ingest is not built. Curren
 
 - Webhook code exists.
 - Real production readiness still depends on env setup, LINE Developers configuration, allowed group IDs, and the `line_inbox_messages` table.
-- The webhook is capture/analyze only, not a full bot.
+- The webhook is capture-only, not a full bot.
 
 ## Missing Pieces For Real LINE Group Capture
 
@@ -235,16 +243,16 @@ Before this can be called fully production-ready, verify or build:
 2. `LINE_CHANNEL_SECRET` is set in production.
 3. Allowed group IDs are discovered and stored in `LINE_ALLOWED_GROUP_IDS`.
 4. `line_inbox_messages` exists in the production Supabase database.
-5. A test group message appears in `/m/orders` pending queue.
+5. A test group message appears in `line_inbox_messages` with pending workflow/analyze status.
 6. Webhook errors are observable without exposing message contents or secrets.
-7. Background retry or dead-letter handling is defined for failed analyze/save steps.
+7. A scheduled/background analyzer is defined for pending captures, with retry or dead-letter handling for failed analyze/save steps.
 8. Attachment/image strategy is designed separately.
 9. Reply/push strategy is designed separately and gated by human review.
 
 ## Recommended Phased Next Steps
 
 1. **Ops verification only:** confirm production env, LINE Developers webhook URL, allowed group IDs, and table readiness using a test LINE group.
-2. **Queue hardening:** move webhook analyze work out of the synchronous request path or add retry/error visibility for failed analyze rows.
+2. **Queue/analyze worker:** optionally schedule `line_inbox_messages` pending analysis outside manual/API invocation, with retry/error visibility.
 3. **Pending queue UX:** add clearer admin indicators for table missing, env missing, no allowed group, and analyze errors.
 4. **Reply draft phase:** generate copy-ready replies from saved suggestions, still requiring human copy/send.
 5. **Automatic reply phase:** only after review, add reply/push behavior using `LINE_CHANNEL_ACCESS_TOKEN`; never auto-create order items from bot text.
@@ -257,8 +265,8 @@ Built:
 
 - Manual LINE Inbox analysis.
 - Human-confirm create/merge flow.
-- Pending queue APIs.
-- Text-only webhook capture/analyze code.
+- Pending queue APIs, including pending capture analyze.
+- Text-only webhook capture code.
 - LIFF wrappers and manual review UI.
 - Duplicate detection and audit logging.
 
