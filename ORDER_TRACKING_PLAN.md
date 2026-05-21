@@ -51,6 +51,7 @@ Sales creates request -> Store checks stock -> Store orders/receives parts -> Ga
 - **LINE Inbox AI context contract:** AI should read the whole message first, then classify `car_context`, `people_context`, `actual_work_items`, `notes`, and `ignored_noise`; deterministic post-processing still decides what can appear as a saveable item.
 - **LINE Inbox existing-vs-new review:** after analyze detects a car, `/m/orders` shows compact existing `order_items` for that car before AI suggestions. Staff still approves manually and can edit item name, assignee, status, note, due date, and choose create/merge/skip before saving. New suggestion assignee defaults from the existing sale-code owner mapping when available; no mapping means unassigned.
 - **LINE Inbox detail grouping:** main action lines plus following detail/spec lines should become one proposed `order_item`; detail rows are displayed as read-only reference text, not auto-filled into the editable note. Example: `ติดฟิล์ม รอบคัน` with `ประตู 80%` / `กระจกบานหน้า 60%` becomes one item `ติดฟิล์มรอบคัน` with those details shown separately for staff to copy/type if needed.
+- **LINE webhook text capture (Issue #32):** `POST /api/line/webhook` is the first safe Messaging API bridge. It verifies `X-Line-Signature`, captures text message events into `line_inbox_messages` as pending, and de-duplicates by `line_message_id`. It does not reply, does not analyze inline, does not create `order_items`, and does not change LIFF/schema/public.cars.
 
 ## Implementation status (as of last repo inspection)
 

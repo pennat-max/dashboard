@@ -1,10 +1,6 @@
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { verifyLineWebhookSignature } from "@/lib/line/verify-line-signature";
-import {
-  insertLineInboxMessage,
-  updateLineInboxMessageAnalyze,
-} from "@/lib/line-inbox/line-inbox-messages";
-import { runLineInboxAnalyzeCore } from "@/lib/line-inbox/run-analyze-core";
+import { insertLineInboxMessage } from "@/lib/line-inbox/line-inbox-messages";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -17,12 +13,19 @@ function parseAllowedGroupIds(): Set<string> {
 type LineEvent = {
   type?: string;
   mode?: string;
+  timestamp?: number;
   message?: { type?: string; id?: string; text?: string };
   source?: { type?: string; groupId?: string; userId?: string; roomId?: string };
   replyToken?: string;
 };
 
-async function ingestAndAnalyzeText(params: {
+function receivedAtFromLineTimestamp(timestamp: number | undefined): string | undefined {
+  if (!Number.isFinite(timestamp)) return undefined;
+  const date = new Date(Number(timestamp));
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
+async function captureTextMessage(params: {
   destination: string | undefined;
   lineMessageId: string;
   sourceType: "group" | "user" | "room";
@@ -30,10 +33,11 @@ async function ingestAndAnalyzeText(params: {
   userId: string | null;
   rawText: string;
   replyToken: string | undefined;
+  receivedAt?: string | undefined;
 }): Promise<void> {
   const supabase = createServiceRoleClient();
 
-  const inserted = await insertLineInboxMessage(supabase, {
+  await insertLineInboxMessage(supabase, {
     line_message_id: params.lineMessageId,
     destination: params.destination ?? null,
     source_type: params.sourceType,
@@ -41,42 +45,15 @@ async function ingestAndAnalyzeText(params: {
     user_id: params.userId,
     raw_text: params.rawText,
     reply_token: params.replyToken ?? null,
+    received_at: params.receivedAt,
   });
-
-  if (inserted.duplicate || !inserted.id) {
-    return;
-  }
-
-  const rowId = inserted.id;
-
-  try {
-    const payload = await runLineInboxAnalyzeCore(supabase, {
-      raw_text: params.rawText,
-      attachmentsCount: 0,
-    });
-    const carRow = String(payload.detected_car.car_row_id ?? "").trim();
-    await updateLineInboxMessageAnalyze(supabase, rowId, {
-      analyze_status: "ok",
-      analyze_error: null,
-      analyze_payload: payload as unknown,
-      needs_human_review: payload.needs_human_review,
-      car_row_id: carRow || null,
-    });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    await updateLineInboxMessageAnalyze(supabase, rowId, {
-      analyze_status: "error",
-      analyze_error: msg,
-      analyze_payload: null,
-      needs_human_review: null,
-      car_row_id: null,
-    });
-  }
 }
 
 /**
- * LINE Messaging API webhook — verifies signature, stores text messages, runs inbox analyze.
- * Configure URL in LINE Developers → Messaging API → Webhook URL.
+ * LINE Messaging API webhook - verifies signature and stores text messages only.
+ * Configure URL in LINE Developers -> Messaging API -> Webhook URL.
+ *
+ * Phase 2 is capture-only: no auto reply, no AI analyze, no order_items writes.
  */
 export async function POST(request: Request) {
   const rawBody = await request.text();
@@ -84,7 +61,7 @@ export async function POST(request: Request) {
   const secret = process.env.LINE_CHANNEL_SECRET?.trim();
 
   if (!secret) {
-    console.error("[line-webhook] LINE_CHANNEL_SECRET is not set — configure env and redeploy");
+    console.error("[line-webhook] LINE_CHANNEL_SECRET is not set - configure env and redeploy");
     return new Response("OK", { status: 200 });
   }
 
@@ -117,32 +94,32 @@ export async function POST(request: Request) {
     if (!src?.type) continue;
 
     const replyToken = typeof ev.replyToken === "string" ? ev.replyToken : undefined;
+    const receivedAt = receivedAtFromLineTimestamp(ev.timestamp);
 
     if (src.type === "group") {
       const gid = String(src.groupId ?? "").trim();
-      /** Set LINE_WEBHOOK_LOG_GROUP_IDS=true temporarily — send any text in the group, read server logs, copy the `groupId` into LINE_ALLOWED_GROUP_IDS */
       const logGroupDiscovery = process.env.LINE_WEBHOOK_LOG_GROUP_IDS === "true";
       if (logGroupDiscovery && gid) {
         console.info(
-          `[line-webhook] groupId=${gid} — add to env · LINE_ALLOWED_GROUP_IDS=${gid} (then turn LINE_WEBHOOK_LOG_GROUP_IDS off)`
+          `[line-webhook] groupId=${gid} - add to env LINE_ALLOWED_GROUP_IDS, then turn LINE_WEBHOOK_LOG_GROUP_IDS off`
         );
       }
 
       if (allowedGroups.size === 0) {
         console.warn(
-          "[line-webhook] skipped group message — set LINE_ALLOWED_GROUP_IDS (see LINE_WEBHOOK_LOG_GROUP_IDS in .env.example)"
+          "[line-webhook] skipped group message - set LINE_ALLOWED_GROUP_IDS (see LINE_WEBHOOK_LOG_GROUP_IDS in .env.example)"
         );
         continue;
       }
       if (!gid || !allowedGroups.has(gid)) {
         if (gid && !logGroupDiscovery) {
-          console.warn(`[line-webhook] skipped group ${gid} — not in LINE_ALLOWED_GROUP_IDS`);
+          console.warn(`[line-webhook] skipped group ${gid} - not in LINE_ALLOWED_GROUP_IDS`);
         }
         continue;
       }
 
       try {
-        await ingestAndAnalyzeText({
+        await captureTextMessage({
           destination,
           lineMessageId: mid,
           sourceType: "group",
@@ -150,16 +127,17 @@ export async function POST(request: Request) {
           userId: src.userId ? String(src.userId) : null,
           rawText: text,
           replyToken,
+          receivedAt,
         });
       } catch (e) {
-        console.error("[line-webhook] ingest failed:", e instanceof Error ? e.message : e);
+        console.error("[line-webhook] capture failed:", e instanceof Error ? e.message : e);
       }
       continue;
     }
 
     if (src.type === "user" && acceptDm) {
       try {
-        await ingestAndAnalyzeText({
+        await captureTextMessage({
           destination,
           lineMessageId: mid,
           sourceType: "user",
@@ -167,9 +145,10 @@ export async function POST(request: Request) {
           userId: src.userId ? String(src.userId) : null,
           rawText: text,
           replyToken,
+          receivedAt,
         });
       } catch (e) {
-        console.error("[line-webhook] ingest DM failed:", e instanceof Error ? e.message : e);
+        console.error("[line-webhook] capture DM failed:", e instanceof Error ? e.message : e);
       }
       continue;
     }
@@ -177,7 +156,7 @@ export async function POST(request: Request) {
     if (src.type === "room") {
       if (process.env.LINE_ACCEPT_ROOM !== "true") continue;
       try {
-        await ingestAndAnalyzeText({
+        await captureTextMessage({
           destination,
           lineMessageId: mid,
           sourceType: "room",
@@ -185,9 +164,10 @@ export async function POST(request: Request) {
           userId: src.userId ? String(src.userId) : null,
           rawText: text,
           replyToken,
+          receivedAt,
         });
       } catch (e) {
-        console.error("[line-webhook] ingest room failed:", e instanceof Error ? e.message : e);
+        console.error("[line-webhook] capture room failed:", e instanceof Error ? e.message : e);
       }
     }
   }
@@ -196,5 +176,5 @@ export async function POST(request: Request) {
 }
 
 export async function GET() {
-  return new Response("LINE webhook endpoint — POST only", { status: 405 });
+  return new Response("LINE webhook endpoint - POST only", { status: 405 });
 }

@@ -36,6 +36,8 @@ export async function insertLineInboxMessage(
       raw_text: row.raw_text,
       reply_token: row.reply_token ?? null,
       received_at: row.received_at ?? new Date().toISOString(),
+      analyze_status: "pending",
+      workflow_status: "pending",
     })
     .select("id")
     .maybeSingle();
