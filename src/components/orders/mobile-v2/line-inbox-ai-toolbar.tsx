@@ -32,14 +32,31 @@ type PendingQueueNewLine = {
   reason: string;
 };
 
+type PendingQueueActionLine = PendingQueueNewLine & {
+  suggested_note: string;
+  duplicate_status: DuplicateStatus;
+  matched_order_item_id: string;
+  matched_item_name: string;
+  confidence: number;
+  default_action: "create" | "merge" | "skip";
+  included_by_default: boolean;
+};
+
 type PendingQueueMessage = {
   inbox_id: string;
   received_at: string;
+  source_label?: string;
   plate_display: string;
+  car_title?: string;
   car_row_id: string;
+  sale?: string;
   raw_text_preview: string;
   new_lines: PendingQueueNewLine[];
   new_line_count: number;
+  action_lines?: PendingQueueActionLine[];
+  action_line_count?: number;
+  existing_items?: ExistingOrderItemRow[];
+  attachments?: PendingQueueAttachment[];
   needs_human_review: boolean;
 };
 
@@ -50,6 +67,31 @@ type PendingQueueAttachment = {
   file_name: string | null;
   mime_type: string | null;
   received_at: string;
+};
+
+type PendingQueueGroup = {
+  group_key: string;
+  car_row_id: string;
+  plate_display: string;
+  car_title: string;
+  sale: string;
+  is_unresolved: boolean;
+  total_action_lines: number;
+  total_new_lines: number;
+  existing_items: ExistingOrderItemRow[];
+  attachments: PendingQueueAttachment[];
+  messages: PendingQueueMessage[];
+};
+
+type QueueActionDraft = {
+  included: boolean;
+  action: "create" | "merge" | "skip";
+  itemName: string;
+  assignee: string;
+  status: string;
+  note: string;
+  dueDate: string;
+  orderItemId: string;
 };
 
 type RowDraft = LineInboxAnalyzeItem & {
@@ -194,6 +236,27 @@ function hasLineInboxPhotoReference(value: string | null | undefined): boolean {
 
 function queueSuggestionRowKey(inboxId: string, itemIndex: number): string {
   return `queue:${inboxId}:${itemIndex}`;
+}
+
+function queueActionDraftForLine(
+  line: PendingQueueActionLine,
+  fallbackAssignee: string
+): QueueActionDraft {
+  return {
+    included: Boolean(line.included_by_default) && line.default_action !== "skip",
+    action: line.default_action,
+    itemName: String(line.suggested_item_name || line.raw_text || "").trim(),
+    assignee: fallbackAssignee,
+    status: String(line.suggested_status ?? "").trim(),
+    note: "",
+    dueDate: "",
+    orderItemId: String(line.matched_order_item_id ?? "").trim(),
+  };
+}
+
+function safeQueueAction(action: string): QueueActionDraft["action"] {
+  if (action === "merge" || action === "skip") return action;
+  return "create";
 }
 
 function revokeStagedPhotoMap(map: Record<string, LineInboxStagedPhoto[]>) {
@@ -417,8 +480,12 @@ export function LineInboxAiToolbar({
   const [replyCopied, setReplyCopied] = useState(false);
 
   const [queueMessages, setQueueMessages] = useState<PendingQueueMessage[]>([]);
+  const [queueGroups, setQueueGroups] = useState<PendingQueueGroup[]>([]);
   const [queueAttachments, setQueueAttachments] = useState<PendingQueueAttachment[]>([]);
   const [queueTotalNew, setQueueTotalNew] = useState(0);
+  const [queueTotalAction, setQueueTotalAction] = useState(0);
+  const [queueTab, setQueueTab] = useState<"actions" | "messages" | "photos">("actions");
+  const [queueDrafts, setQueueDrafts] = useState<Record<string, QueueActionDraft>>({});
   /** Unchecked = not saved when user clicks save (default: all lines selected) */
   const [queueDeselected, setQueueDeselected] = useState<Record<string, Set<number>>>({});
   const [queueLoading, setQueueLoading] = useState(false);
@@ -432,18 +499,25 @@ export function LineInboxAiToolbar({
       const data = (await res.json()) as {
         ok?: boolean;
         total_new_lines?: number;
+        total_action_lines?: number;
         messages?: PendingQueueMessage[];
+        groups?: PendingQueueGroup[];
         recent_attachments?: PendingQueueAttachment[];
         error?: string;
       };
       if (!res.ok) throw new Error(data.error || res.statusText);
       const list = data.messages ?? [];
+      const groups = data.groups ?? [];
       const attachments = (data.recent_attachments ?? []).filter((attachment) => attachment.url);
       setQueueTotalNew(typeof data.total_new_lines === "number" ? data.total_new_lines : 0);
+      setQueueTotalAction(typeof data.total_action_lines === "number" ? data.total_action_lines : 0);
       setQueueMessages(list);
+      setQueueGroups(groups);
       setQueueAttachments(attachments);
 
-      const sig = list.map((m) => `${m.inbox_id}:${m.new_lines.map((l) => l.item_index).join(",")}`).join("|");
+      const sig = list
+        .map((m) => `${m.inbox_id}:${(m.action_lines ?? m.new_lines).map((l) => l.item_index).join(",")}`)
+        .join("|");
       if (sig !== queueSigRef.current) {
         queueSigRef.current = sig;
         const nextDes: Record<string, Set<number>> = {};
@@ -451,15 +525,31 @@ export function LineInboxAiToolbar({
           nextDes[m.inbox_id] = new Set();
         }
         setQueueDeselected(nextDes);
+        const nextDrafts: Record<string, QueueActionDraft> = {};
+        for (const group of groups) {
+          const fallbackAssignee = resolveSaleStaffForOrder(group.sale, saleAssigneesBySale);
+          for (const message of group.messages) {
+            for (const line of message.action_lines ?? []) {
+              nextDrafts[queueSuggestionRowKey(message.inbox_id, line.item_index)] = queueActionDraftForLine(
+                line,
+                fallbackAssignee
+              );
+            }
+          }
+        }
+        setQueueDrafts(nextDrafts);
       }
     } catch {
       setQueueMessages([]);
+      setQueueGroups([]);
       setQueueAttachments([]);
       setQueueTotalNew(0);
+      setQueueTotalAction(0);
+      setQueueDrafts({});
     } finally {
       setQueueLoading(false);
     }
-  }, []);
+  }, [saleAssigneesBySale]);
 
   useEffect(() => {
     void fetchQueue();
@@ -606,8 +696,9 @@ export function LineInboxAiToolbar({
     for (const name of staffOptions) addUniqueOption(out, name);
     for (const item of existingItems) addUniqueOption(out, item.assignee_staff);
     for (const row of rows) addUniqueOption(out, row.assignee);
+    for (const draft of Object.values(queueDrafts)) addUniqueOption(out, draft.assignee);
     return out;
-  }, [existingItems, rows, staffOptions]);
+  }, [existingItems, queueDrafts, rows, staffOptions]);
 
   const statusChoices = useMemo(() => {
     const out: string[] = [];
@@ -617,8 +708,9 @@ export function LineInboxAiToolbar({
     }
     for (const item of existingItems) addUniqueOption(out, item.status);
     for (const row of rows) addUniqueOption(out, row.status);
+    for (const draft of Object.values(queueDrafts)) addUniqueOption(out, draft.status);
     return out;
-  }, [existingItems, rows, statusOptions]);
+  }, [existingItems, queueDrafts, rows, statusOptions]);
 
   const pendingSaveCount = useMemo(
     () => rows.filter((r) => r.included && r.action !== "skip").length,
@@ -648,7 +740,7 @@ export function LineInboxAiToolbar({
     ? stagedLineAttachments[suggestionPhotoSheet.rowKey] ?? []
     : [];
 
-  const rawBadgeTotal = queueTotalNew + pendingSaveCount;
+  const rawBadgeTotal = (queueTotalAction || queueTotalNew) + pendingSaveCount;
   const showBadgeDot = rawBadgeTotal > 0;
 
   const toggleQueueLine = useCallback((inboxId: string, itemIndex: number) => {
@@ -662,12 +754,54 @@ export function LineInboxAiToolbar({
     });
   }, []);
 
+  const updateQueueDraft = useCallback((rowKey: string, patch: Partial<QueueActionDraft>) => {
+    setQueueDrafts((prev) => ({
+      ...prev,
+      [rowKey]: {
+        ...(prev[rowKey] ?? {
+          included: false,
+          action: "create",
+          itemName: "",
+          assignee: "",
+          status: "",
+          note: "",
+          dueDate: "",
+          orderItemId: "",
+        }),
+        ...patch,
+      },
+    }));
+  }, []);
+
   const selectedIndicesForInbox = useCallback(
     (m: PendingQueueMessage) => {
       const des = queueDeselected[m.inbox_id] ?? new Set();
       return m.new_lines.map((l) => l.item_index).filter((idx) => !des.has(idx));
     },
     [queueDeselected]
+  );
+
+  const selectedQueueActionsForInbox = useCallback(
+    (m: PendingQueueMessage) => {
+      return (m.action_lines ?? []).flatMap((line) => {
+        const rowKey = queueSuggestionRowKey(m.inbox_id, line.item_index);
+        const draft = queueDrafts[rowKey] ?? queueActionDraftForLine(line, "");
+        if (!draft.included || draft.action === "skip") return [];
+        return [
+          {
+            item_index: line.item_index,
+            action: draft.action,
+            order_item_id: draft.action === "merge" ? draft.orderItemId || line.matched_order_item_id : undefined,
+            item_name: draft.itemName || line.suggested_item_name || line.raw_text,
+            item_status: draft.status || line.suggested_status || undefined,
+            note: draft.note || undefined,
+            assignee_staff: draft.assignee || undefined,
+            due_date: safeDateValue(draft.dueDate) || undefined,
+          },
+        ];
+      });
+    },
+    [queueDrafts]
   );
 
   const clearStagedForRowKeys = useCallback((rowKeys: string[]) => {
@@ -959,8 +1093,19 @@ export function LineInboxAiToolbar({
 
   const saveQueueCard = useCallback(
     async (m: PendingQueueMessage) => {
-      const indices = selectedIndicesForInbox(m);
-      if (indices.length === 0) return;
+      const actions = selectedQueueActionsForInbox(m);
+      const indices = actions.length > 0 ? [] : selectedIndicesForInbox(m);
+      const selectedCount = actions.length || indices.length;
+      if (selectedCount === 0) return;
+      const riskyCount = (m.action_lines ?? []).filter((line) => {
+        const rowKey = queueSuggestionRowKey(m.inbox_id, line.item_index);
+        const draft = queueDrafts[rowKey] ?? queueActionDraftForLine(line, "");
+        return draft.included && draft.action !== "skip" && line.duplicate_status !== "new";
+      }).length;
+      if (riskyCount > 0) {
+        const ok = window.confirm(`${riskyCount} selected queue item(s) may be duplicate or unclear. Continue?`);
+        if (!ok) return;
+      }
       setSavingInboxId(m.inbox_id);
       setError(null);
       setSaveHint(null);
@@ -972,7 +1117,11 @@ export function LineInboxAiToolbar({
           headers: { "Content-Type": "application/json" },
           credentials: "same-origin",
           body: JSON.stringify({
-            saves: [{ inbox_message_id: m.inbox_id, item_indices: indices }],
+            saves: [
+              actions.length > 0
+                ? { inbox_message_id: m.inbox_id, actions }
+                : { inbox_message_id: m.inbox_id, item_indices: indices },
+            ],
           }),
         });
         const data = (await res.json()) as {
@@ -1025,15 +1174,21 @@ export function LineInboxAiToolbar({
         clearStagedForRowKeys(touchedRowKeys);
         setSaveHint(
           uiLang === "en"
-            ? `Saved ${indices.length} new line(s) from LINE queue${attachedPhotoCount ? ` + attached ${attachedPhotoCount} photo(s)` : ""}.`
-            : `บันทึกจากคิว LINE แล้ว ${indices.length} งาน${attachedPhotoCount ? ` + แนบรูป ${attachedPhotoCount} รูป` : ""}`
+            ? `Saved ${selectedCount} item(s) from LINE queue${attachedPhotoCount ? ` + attached ${attachedPhotoCount} photo(s)` : ""}.`
+            : `บันทึกจากคิว LINE แล้ว ${selectedCount} งาน${attachedPhotoCount ? ` + แนบรูป ${attachedPhotoCount} รูป` : ""}`
         );
-        const savedLines = m.new_lines
-          .filter((line) => indices.includes(line.item_index))
-          .map((line) => ({
-            name: line.suggested_item_name || line.raw_text,
-            status: line.suggested_status || "เช็ค",
-          }));
+        const savedLines =
+          actions.length > 0
+            ? actions.map((line) => ({
+                name: String(line.item_name ?? "").trim(),
+                status: String(line.item_status ?? "").trim() || "เช็ค",
+              }))
+            : m.new_lines
+                .filter((line) => indices.includes(line.item_index))
+                .map((line) => ({
+                  name: line.suggested_item_name || line.raw_text,
+                  status: line.suggested_status || "เช็ค",
+                }));
         setReplyText(
           buildLineReplyText({
             plate: m.plate_display || "",
@@ -1054,12 +1209,46 @@ export function LineInboxAiToolbar({
       clearStagedForRowKeys,
       fetchQueue,
       onSaved,
+      queueDrafts,
+      selectedQueueActionsForInbox,
       selectedIndicesForInbox,
       stagedLineAttachments,
       stagedSuggestionPhotos,
       uiLang,
       uploadSuggestionPhotos,
     ]
+  );
+
+  const skipQueueCard = useCallback(
+    async (m: PendingQueueMessage) => {
+      setSavingInboxId(m.inbox_id);
+      setError(null);
+      setSaveHint(null);
+      try {
+        const res = await fetch("/api/line-inbox/pending-save", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({
+            saves: [{ inbox_message_id: m.inbox_id, skip_all: true }],
+          }),
+        });
+        const data = (await res.json()) as { ok?: boolean; error?: string };
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        const rowKeys = (m.action_lines ?? m.new_lines).map((line) =>
+          queueSuggestionRowKey(m.inbox_id, line.item_index)
+        );
+        clearStagedForRowKeys(rowKeys);
+        setSaveHint(uiLang === "en" ? "Skipped this LINE queue message." : "ข้ามข้อความ LINE นี้แล้ว");
+        await fetchQueue();
+        onSaved?.();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setSavingInboxId(null);
+      }
+    },
+    [clearStagedForRowKeys, fetchQueue, onSaved, uiLang]
   );
 
   useEffect(() => {
@@ -1269,10 +1458,295 @@ export function LineInboxAiToolbar({
             </p>
             <p className="mb-2 text-[10px] leading-snug text-slate-600">
               {uiLang === "en"
-                ? `New non-duplicate lines only · ${queueTotalNew} total · auto-refresh ~45s`
-                : `เฉพาะงานใหม่ (ไม่ซ้ำ) · รวม ${queueTotalNew} งาน · รีเฟรชอัตโนมัติ ~45 วินาที`}
+                ? `Action queue · ${queueTotalAction || queueTotalNew} pending action(s) · auto-refresh ~45s`
+                : `รอจัดการ · ${queueTotalAction || queueTotalNew} รายการ · รีเฟรชอัตโนมัติ ~45 วินาที`}
             </p>
-            {queueLoading ? (
+            <div className="mb-3 flex gap-1 overflow-x-auto pb-1">
+              {[
+                { key: "actions" as const, label: uiLang === "en" ? "Action queue" : "รอจัดการ" },
+                { key: "messages" as const, label: uiLang === "en" ? "Messages" : "ข้อความเข้าใหม่" },
+                { key: "photos" as const, label: uiLang === "en" ? "LINE photos" : "รูปจาก LINE" },
+              ].map((tab) => (
+                <button
+                  key={tab.key}
+                  type="button"
+                  onClick={() => setQueueTab(tab.key)}
+                  className={cn(
+                    "shrink-0 rounded-full px-3 py-1.5 text-[11px] font-bold ring-1 touch-manipulation",
+                    queueTab === tab.key
+                      ? "bg-slate-950 text-white ring-slate-950"
+                      : "bg-slate-50 text-slate-700 ring-slate-200"
+                  )}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+            {queueTab === "actions" ? (
+              queueLoading ? (
+                <p className="text-[11px] text-slate-500">{uiLang === "en" ? "Loading…" : "กำลังโหลด…"}</p>
+              ) : queueGroups.length === 0 ? (
+                <p className="text-[11px] text-slate-500">
+                  {uiLang === "en" ? "No analyzed LINE actions are waiting." : "ยังไม่มีรายการ LINE ที่รอจัดการ"}
+                </p>
+              ) : (
+                <ul className="max-h-[min(58vh,520px)] space-y-3 overflow-y-auto overscroll-contain pr-1">
+                  {queueGroups.map((group) => (
+                    <li
+                      key={group.group_key}
+                      className="rounded-2xl border border-slate-200 bg-slate-50/90 p-2.5 ring-1 ring-slate-100"
+                    >
+                      <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <p className="line-clamp-2 text-sm font-bold leading-snug text-violet-950">
+                            {group.car_title || group.plate_display || (uiLang === "en" ? "Unmatched car" : "ยังไม่จับรถ")}
+                          </p>
+                          <div className="mt-1 flex flex-wrap gap-1.5 text-[10px] font-semibold text-slate-500">
+                            {group.sale ? <span>Sale: {group.sale}</span> : null}
+                            <span>{group.messages.length} msg</span>
+                            <span>{group.total_action_lines} action</span>
+                          </div>
+                        </div>
+                        {group.is_unresolved ? (
+                          <span className="rounded-full bg-rose-50 px-2 py-0.5 text-[10px] font-bold text-rose-700 ring-1 ring-rose-200">
+                            {uiLang === "en" ? "Needs car" : "ต้องเลือกรถ"}
+                          </span>
+                        ) : null}
+                      </div>
+
+                      {group.attachments.length > 0 ? (
+                        <div className="mb-2 flex gap-1.5 overflow-x-auto pb-1">
+                          {group.attachments.slice(0, 8).map((attachment) => (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              key={`${attachment.line_message_id}-${attachment.url}`}
+                              src={attachment.url}
+                              alt=""
+                              className="h-12 w-12 shrink-0 rounded-lg object-cover ring-1 ring-slate-200"
+                              loading="lazy"
+                            />
+                          ))}
+                        </div>
+                      ) : null}
+
+                      <details className="mb-2 rounded-xl bg-white px-2 py-1.5 text-[11px] ring-1 ring-slate-200/80">
+                        <summary className="cursor-pointer select-none font-bold text-slate-700">
+                          {uiLang === "en" ? "Existing tasks" : "งานเดิมของรถคันนี้"} ({group.existing_items.length})
+                        </summary>
+                        {group.existing_items.length === 0 ? (
+                          <p className="mt-1 text-slate-500">{uiLang === "en" ? "No existing items found." : "ยังไม่พบงานเดิม"}</p>
+                        ) : (
+                          <ul className="mt-2 space-y-1">
+                            {group.existing_items.slice(0, 12).map((item) => (
+                              <li key={item.id} className="flex flex-wrap items-center gap-1.5 rounded-lg bg-slate-50 px-2 py-1">
+                                <span className="min-w-0 flex-1 font-semibold text-slate-900">{item.label || "-"}</span>
+                                {item.assignee_staff ? <span className="rounded-full bg-white px-2 py-0.5 ring-1 ring-slate-200">{item.assignee_staff}</span> : null}
+                                {item.status ? <span className="rounded-full bg-white px-2 py-0.5 ring-1 ring-slate-200">{item.status}</span> : null}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </details>
+
+                      <div className="space-y-3">
+                        {group.messages.map((m) => {
+                          const selectedActions = selectedQueueActionsForInbox(m);
+                          return (
+                            <div key={m.inbox_id} className="rounded-xl bg-white px-2 py-2 ring-1 ring-slate-200/80">
+                              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                                <span className="text-[10px] font-bold text-slate-500">
+                                  {m.source_label || "LINE"} · {m.received_at ? new Date(m.received_at).toLocaleString() : ""}
+                                </span>
+                                {m.needs_human_review ? (
+                                  <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-800 ring-1 ring-amber-200">
+                                    review
+                                  </span>
+                                ) : null}
+                              </div>
+                              {m.raw_text_preview ? (
+                                <details className="mb-2 text-[11px] text-slate-500">
+                                  <summary className="cursor-pointer select-none font-semibold">
+                                    {uiLang === "en" ? "Source message" : "ข้อความต้นทาง"}
+                                  </summary>
+                                  <p className="mt-1 whitespace-pre-wrap rounded-lg bg-slate-50 px-2 py-1.5">{m.raw_text_preview}</p>
+                                </details>
+                              ) : null}
+
+                              <ul className="space-y-2">
+                                {(m.action_lines ?? []).map((line) => {
+                                  const rowKey = queueSuggestionRowKey(m.inbox_id, line.item_index);
+                                  const draft = queueDrafts[rowKey] ?? queueActionDraftForLine(line, "");
+                                  const lineName = draft.itemName || line.suggested_item_name || line.raw_text;
+                                  const hasPhotoRef = hasLineInboxPhotoReference(lineName);
+                                  const stagedPhotoCount =
+                                    (stagedSuggestionPhotos[rowKey]?.length ?? 0) +
+                                    (stagedLineAttachments[rowKey]?.length ?? 0);
+                                  const canMerge = Boolean(line.matched_order_item_id || draft.orderItemId);
+                                  return (
+                                    <li
+                                      key={line.item_index}
+                                      className={cn(
+                                        "space-y-2 rounded-xl border p-2",
+                                        draft.included ? "border-slate-200 bg-slate-100" : "border-slate-200 bg-slate-50 opacity-80",
+                                        line.duplicate_status === "duplicate" ? "bg-amber-50" : "",
+                                        line.duplicate_status === "possible_duplicate" ? "bg-orange-50" : ""
+                                      )}
+                                    >
+                                      <div className="flex min-w-0 items-center gap-2">
+                                        <input
+                                          type="checkbox"
+                                          checked={draft.included}
+                                          onChange={(event) =>
+                                            updateQueueDraft(rowKey, {
+                                              included: event.target.checked,
+                                              action:
+                                                event.target.checked && draft.action === "skip" ? "create" : draft.action,
+                                            })
+                                          }
+                                          className="h-5 w-5 shrink-0 rounded border-slate-400"
+                                        />
+                                        <LineInboxSuggestedItemNameField
+                                          value={lineName}
+                                          uiLang={uiLang}
+                                          onChange={(value) => updateQueueDraft(rowKey, { itemName: value })}
+                                          onPhotoReference={() => openSuggestionPhotoSheet(rowKey, -1, lineName)}
+                                        />
+                                      </div>
+                                      <div className="flex flex-wrap items-center gap-1.5">
+                                        <LineInboxInlineSelectLink
+                                          value={draft.assignee}
+                                          options={staffChoices}
+                                          onChange={(value) => updateQueueDraft(rowKey, { assignee: value })}
+                                          title={uiLang === "en" ? "Owner" : "พนักงาน"}
+                                          emptyLabel="-"
+                                          className={lineInboxAssigneePillClasses(draft.assignee)}
+                                        />
+                                        <LineInboxInlineSelectLink
+                                          value={draft.status}
+                                          options={statusChoices}
+                                          onChange={(value) => updateQueueDraft(rowKey, { status: value })}
+                                          title={uiLang === "en" ? "Item status" : "สถานะรายการ"}
+                                          emptyLabel="-"
+                                          className={cn("w-[5.5rem] min-w-[5.5rem]", lineInboxStatusPillClasses(draft.status))}
+                                        />
+                                        <select
+                                          value={draft.action}
+                                          onChange={(event) => {
+                                            const action = safeQueueAction(event.target.value);
+                                            updateQueueDraft(rowKey, {
+                                              action,
+                                              included: action === "skip" ? false : true,
+                                              orderItemId:
+                                                action === "merge" ? draft.orderItemId || line.matched_order_item_id : draft.orderItemId,
+                                            });
+                                          }}
+                                          className="h-10 min-h-[40px] rounded-full bg-white px-2 text-[11px] font-bold text-slate-700 shadow-sm ring-1 ring-slate-200"
+                                        >
+                                          <option value="create">{uiLang === "en" ? "Add new" : "เพิ่มงานใหม่"}</option>
+                                          <option value="merge" disabled={!canMerge}>
+                                            {uiLang === "en" ? "Merge" : "อัปเดตงานเดิม"}
+                                          </option>
+                                          <option value="skip">{uiLang === "en" ? "Skip" : "ข้าม"}</option>
+                                        </select>
+                                        {hasPhotoRef ? (
+                                          <button
+                                            type="button"
+                                            onClick={() => openSuggestionPhotoSheet(rowKey, -1, lineName)}
+                                            className={cn(
+                                              "h-10 min-h-[40px] rounded-full px-3 text-[11px] font-bold ring-1 touch-manipulation",
+                                              stagedPhotoCount > 0
+                                                ? "bg-violet-700 text-white ring-violet-700"
+                                                : "bg-sky-50 text-sky-700 ring-sky-200"
+                                            )}
+                                          >
+                                            {uiLang === "en" ? "Photo" : "รูป"}
+                                            {stagedPhotoCount > 0 ? ` ${stagedPhotoCount}` : ""}
+                                          </button>
+                                        ) : null}
+                                      </div>
+                                      {line.matched_item_name ? (
+                                        <p className="text-[10px] font-medium text-amber-800">
+                                          {uiLang === "en" ? "Similar existing" : "คล้ายงานเดิม"}: {line.matched_item_name}
+                                        </p>
+                                      ) : null}
+                                      <div className="grid gap-2 sm:grid-cols-[10rem_1fr]">
+                                        <input
+                                          type="date"
+                                          value={draft.dueDate}
+                                          onChange={(event) => updateQueueDraft(rowKey, { dueDate: event.target.value })}
+                                          className="rounded-lg border border-slate-200 bg-white px-2 py-2 text-[12px] font-semibold text-slate-900"
+                                        />
+                                        <input
+                                          value={draft.note}
+                                          onChange={(event) => updateQueueDraft(rowKey, { note: event.target.value })}
+                                          placeholder={uiLang === "en" ? "Note (optional)" : "หมายเหตุ (ถ้ามี)"}
+                                          className="rounded-lg border border-slate-200 bg-white px-2 py-2 text-[12px] text-slate-900 outline-none ring-violet-400 focus:ring-2"
+                                        />
+                                      </div>
+                                    </li>
+                                  );
+                                })}
+                              </ul>
+                              {!m.car_row_id ? (
+                                <p className="mt-2 text-[11px] font-medium text-rose-700">
+                                  {uiLang === "en" ? "Car is not matched yet; save is disabled." : "ยังจับรถไม่ได้ จึงยังบันทึกไม่ได้"}
+                                </p>
+                              ) : null}
+                              <div className="mt-2 grid grid-cols-2 gap-2">
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  disabled={savingInboxId === m.inbox_id || selectedActions.length === 0 || !m.car_row_id}
+                                  onClick={() => void saveQueueCard(m)}
+                                  className="touch-manipulation bg-slate-950 hover:bg-slate-900"
+                                >
+                                  {savingInboxId === m.inbox_id
+                                    ? uiLang === "en"
+                                      ? "Saving…"
+                                      : "กำลังบันทึก…"
+                                    : uiLang === "en"
+                                      ? `Approve (${selectedActions.length})`
+                                      : `อนุมัติ (${selectedActions.length})`}
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={savingInboxId === m.inbox_id}
+                                  onClick={() => void skipQueueCard(m)}
+                                  className="touch-manipulation"
+                                >
+                                  {uiLang === "en" ? "Skip all" : "ข้ามทั้งหมด"}
+                                </Button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )
+            ) : queueTab === "photos" ? (
+              queueAttachments.length === 0 ? (
+                <p className="text-[11px] text-slate-500">{uiLang === "en" ? "No captured LINE photos yet." : "ยังไม่มีรูปจาก LINE"}</p>
+              ) : (
+                <div className="grid max-h-[min(45vh,320px)] grid-cols-4 gap-2 overflow-y-auto pr-1">
+                  {queueAttachments.slice(0, 40).map((attachment) => (
+                    <a
+                      key={`${attachment.line_message_id}-${attachment.url}`}
+                      href={attachment.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block overflow-hidden rounded-xl bg-slate-100 ring-1 ring-slate-200"
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={attachment.url} alt="" className="aspect-square w-full object-cover" loading="lazy" />
+                    </a>
+                  ))}
+                </div>
+              )
+            ) : queueLoading ? (
               <p className="text-[11px] text-slate-500">{uiLang === "en" ? "Loading…" : "กำลังโหลด…"}</p>
             ) : queueMessages.length === 0 ? (
               <p className="text-[11px] text-slate-500">
