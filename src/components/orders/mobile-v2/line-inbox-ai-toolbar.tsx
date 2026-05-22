@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { Check, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -523,6 +530,24 @@ function LineInboxSuggestedItemNameField({
   );
 }
 
+export type LineInboxAiToolbarParts = {
+  chip: ReactNode;
+  panel: ReactNode | null;
+  overlays: ReactNode | null;
+};
+
+export type LineInboxAiToolbarProps = {
+  orders: LineInboxAiOrderPick[];
+  uiLang: UiLang;
+  preferredOrderId?: string | null;
+  staffOptions?: string[];
+  saleAssigneesBySale?: Record<string, string>;
+  statusOptions?: string[];
+  onSaved?: () => void;
+  /** Place chip in the status row and render the queue panel in a full-width row below. */
+  render?: (parts: LineInboxAiToolbarParts) => ReactNode;
+};
+
 export function LineInboxAiToolbar({
   orders,
   uiLang,
@@ -531,15 +556,8 @@ export function LineInboxAiToolbar({
   saleAssigneesBySale = {},
   statusOptions = [],
   onSaved,
-}: {
-  orders: LineInboxAiOrderPick[];
-  uiLang: UiLang;
-  preferredOrderId?: string | null;
-  staffOptions?: string[];
-  saleAssigneesBySale?: Record<string, string>;
-  statusOptions?: string[];
-  onSaved?: () => void;
-}) {
+  render,
+}: LineInboxAiToolbarProps) {
   const [open, setOpen] = useState(false);
   const [selectedOrderId, setSelectedOrderId] = useState("");
   const [carSearch, setCarSearch] = useState("");
@@ -577,6 +595,7 @@ export function LineInboxAiToolbar({
   const [queueLoading, setQueueLoading] = useState(false);
   const [savingInboxId, setSavingInboxId] = useState<string | null>(null);
   const queueSigRef = useRef<string>("");
+  const panelAnchorRef = useRef<HTMLDivElement | null>(null);
 
   const fetchQueue = useCallback(async () => {
     setQueueLoading(true);
@@ -646,6 +665,16 @@ export function LineInboxAiToolbar({
   useEffect(() => {
     if (open) void fetchQueue();
   }, [open, fetchQueue]);
+
+  useEffect(() => {
+    if (!open || !render) return;
+    const node = panelAnchorRef.current;
+    if (!node) return;
+    const id = window.requestAnimationFrame(() => {
+      node.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [open, render]);
 
   useEffect(() => {
     if (orders.length === 0) {
@@ -1572,8 +1601,7 @@ export function LineInboxAiToolbar({
     uploadSuggestionPhotos,
   ]);
 
-  return (
-    <>
+  const lineInboxChip = (
       <button
         type="button"
         onPointerDown={(e) => e.preventDefault()}
@@ -1613,9 +1641,14 @@ export function LineInboxAiToolbar({
           </span>
         ) : null}
       </button>
+  );
 
-      {open ? (
-        <div className="w-full basis-full rounded-2xl border border-violet-200 bg-white p-3 shadow-sm ring-1 ring-violet-100">
+  const lineInboxPanel = open ? (
+        <div
+          ref={panelAnchorRef}
+          id="line-inbox-assistant-panel"
+          className="w-full rounded-2xl border border-violet-200 bg-white p-3 shadow-sm ring-1 ring-violet-100"
+        >
           <div className="mb-3 border-b border-violet-100 pb-3">
             <p className="mb-1 text-[11px] font-bold uppercase tracking-wide text-violet-800">
               {uiLang === "en" ? "From LINE group (queue)" : "จากกลุ่ม LINE (คิว)"}
@@ -2652,9 +2685,9 @@ export function LineInboxAiToolbar({
             </div>
           ) : null}
         </div>
-      ) : null}
+      ) : null;
 
-      {suggestionPhotoSheet ? (
+  const lineInboxOverlays = suggestionPhotoSheet ? (
         <div
           role="presentation"
           className="fixed inset-0 z-[80] flex items-end justify-center bg-black/45 p-2 outline-none sm:p-3"
@@ -2842,7 +2875,17 @@ export function LineInboxAiToolbar({
             ) : null}
           </div>
         </div>
-      ) : null}
+      ) : null;
+
+  if (render) {
+    return <>{render({ chip: lineInboxChip, panel: lineInboxPanel, overlays: lineInboxOverlays })}</>;
+  }
+
+  return (
+    <>
+      {lineInboxChip}
+      {lineInboxPanel}
+      {lineInboxOverlays}
     </>
   );
 }

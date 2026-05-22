@@ -7795,53 +7795,68 @@ export function MobileOrderTrackingHome({
                       </div>
                     </div>
                   ) : null}
-                  <div className="mt-1.5 flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onPointerDown={(e) => e.preventDefault()}
-                      onClick={clearItemStatusFiltersStable}
-                      className={cn(
-                        "flex min-h-[52px] min-w-[5rem] shrink-0 flex-col items-center justify-center gap-1 rounded-xl px-2 py-2 text-center touch-manipulation transition-colors",
-                        itemStatusFilters.size === 0 ? "bg-slate-950 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200/70"
-                      )}
-                    >
-                      <div className="text-xs font-medium leading-snug">{uiLang === "en" ? "Show all" : "แสดงทั้งหมด"}</div>
-                      <div className="text-base font-semibold tabular-nums">{itemStatusTotalCount}</div>
-                    </button>
-                    <LineInboxAiToolbar
-                      orders={lineInboxAiOrderPicks}
-                      uiLang={uiLang}
-                      preferredOrderId={initialFocusedOrderId}
-                      staffOptions={staffRoster}
-                      saleAssigneesBySale={saleAssignees}
-                      statusOptions={itemStatusRoster}
-                      onSaved={() => router.refresh()}
-                    />
-                    {itemStatusFilterOptionsForToolbar.map((s) => (
-                      <button
-                        key={s}
-                        type="button"
-                        onPointerDown={(e) => e.preventDefault()}
-                        onClick={() => toggleItemStatusChipStable(s)}
-                        title={
-                          s === ITEM_STATUS_DUE_TODAY
-                            ? uiLang === "en"
-                              ? `Matches due-day rule: statuses ${itemStatusPoliciesNormalized.dueToday.statuses.join(", ")} · daysUntilBangkok=${itemStatusPoliciesNormalized.dueToday.matchDaysUntilDueBangkok}`
-                              : `ชิปมาวันนี้: สถานะ ${itemStatusPoliciesNormalized.dueToday.statuses.join(" · ")} · daysUntilBangkok=${itemStatusPoliciesNormalized.dueToday.matchDaysUntilDueBangkok}`
-                            : undefined
-                        }
-                        className={cn(
-                          "flex min-h-[52px] min-w-[4.25rem] max-w-[7rem] shrink-0 flex-col items-center justify-center gap-1 rounded-xl px-2 py-2 text-center transition-colors touch-manipulation",
-                          toolbarItemStatusFilterChipClasses(s, itemStatusFilters.has(s))
-                        )}
-                      >
-                        <span className="line-clamp-3 max-w-full text-xs font-medium leading-snug">{statusLabel(s)}</span>
-                        <span className="text-base font-semibold tabular-nums">
-                          {s === ITEM_STATUS_DUE_TODAY ? dueTodayItemCount : itemStatusCounts.get(s) ?? 0}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
+                  <LineInboxAiToolbar
+                    orders={lineInboxAiOrderPicks}
+                    uiLang={uiLang}
+                    preferredOrderId={initialFocusedOrderId}
+                    staffOptions={staffRoster}
+                    saleAssigneesBySale={saleAssignees}
+                    statusOptions={itemStatusRoster}
+                    onSaved={() => router.refresh()}
+                    render={({ chip, panel, overlays }) => (
+                      <>
+                        <div className="mt-1.5 flex w-full flex-col gap-2">
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onPointerDown={(e) => e.preventDefault()}
+                              onClick={clearItemStatusFiltersStable}
+                              className={cn(
+                                "flex min-h-[52px] min-w-[5rem] shrink-0 flex-col items-center justify-center gap-1 rounded-xl px-2 py-2 text-center touch-manipulation transition-colors",
+                                itemStatusFilters.size === 0
+                                  ? "bg-slate-950 text-white"
+                                  : "bg-slate-100 text-slate-700 hover:bg-slate-200/70"
+                              )}
+                            >
+                              <div className="text-xs font-medium leading-snug">
+                                {uiLang === "en" ? "Show all" : "แสดงทั้งหมด"}
+                              </div>
+                              <div className="text-base font-semibold tabular-nums">{itemStatusTotalCount}</div>
+                            </button>
+                            {chip}
+                            {itemStatusFilterOptionsForToolbar.map((s) => (
+                              <button
+                                key={s}
+                                type="button"
+                                onPointerDown={(e) => e.preventDefault()}
+                                onClick={() => toggleItemStatusChipStable(s)}
+                                title={
+                                  s === ITEM_STATUS_DUE_TODAY
+                                    ? uiLang === "en"
+                                      ? `Matches due-day rule: statuses ${itemStatusPoliciesNormalized.dueToday.statuses.join(", ")} · daysUntilBangkok=${itemStatusPoliciesNormalized.dueToday.matchDaysUntilDueBangkok}`
+                                      : `ชิปมาวันนี้: สถานะ ${itemStatusPoliciesNormalized.dueToday.statuses.join(" · ")} · daysUntilBangkok=${itemStatusPoliciesNormalized.dueToday.matchDaysUntilDueBangkok}`
+                                    : undefined
+                                }
+                                className={cn(
+                                  "flex min-h-[52px] min-w-[4.25rem] max-w-[7rem] shrink-0 flex-col items-center justify-center gap-1 rounded-xl px-2 py-2 text-center transition-colors touch-manipulation",
+                                  toolbarItemStatusFilterChipClasses(s, itemStatusFilters.has(s))
+                                )}
+                              >
+                                <span className="line-clamp-3 max-w-full text-xs font-medium leading-snug">
+                                  {statusLabel(s)}
+                                </span>
+                                <span className="text-base font-semibold tabular-nums">
+                                  {s === ITEM_STATUS_DUE_TODAY ? dueTodayItemCount : itemStatusCounts.get(s) ?? 0}
+                                </span>
+                              </button>
+                            ))}
+                          </div>
+                          {panel}
+                        </div>
+                        {overlays}
+                      </>
+                    )}
+                  />
                 </div>
               </div>
           </>
