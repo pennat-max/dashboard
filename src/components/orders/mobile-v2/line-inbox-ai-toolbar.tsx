@@ -1752,11 +1752,18 @@ function useLineInboxBridgeState({
         <li key={row.groupKey}>
           <button
             type="button"
+            disabled={!row.orderId}
             onClick={() => {
+              if (!row.orderId) return;
               setOpen(false);
               onPickCar?.({ orderId: row.orderId, carRowId: row.carRowId, plate: row.plate });
             }}
-            className="w-full rounded-2xl bg-slate-50 px-3 py-3 text-left ring-1 ring-slate-200/80 touch-manipulation active:bg-violet-50"
+            className={cn(
+              "w-full rounded-2xl px-3 py-3 text-left ring-1 touch-manipulation",
+              row.orderId
+                ? "bg-slate-50 ring-slate-200/80 active:bg-violet-50"
+                : "cursor-not-allowed bg-slate-100/80 ring-slate-200/60 opacity-70"
+            )}
           >
             <div className="flex items-start justify-between gap-2">
               <p className="min-w-0 flex-1 truncate text-base font-bold text-slate-950">{row.plate}</p>
@@ -1779,6 +1786,11 @@ function useLineInboxBridgeState({
               {row.photoCount > 0 ? (
                 <span className="rounded-full bg-violet-50 px-1.5 py-0.5 text-violet-800 ring-1 ring-violet-200">
                   {uiLang === "en" ? `${row.photoCount} LINE photos` : `รูป LINE ${row.photoCount}`}
+                </span>
+              ) : null}
+              {row.isUnresolved ? (
+                <span className="rounded-full bg-rose-50 px-1.5 py-0.5 text-rose-800 ring-1 ring-rose-200">
+                  {uiLang === "en" ? "Needs car match" : "ยังจับรถไม่ได้"}
                 </span>
               ) : null}
             </div>

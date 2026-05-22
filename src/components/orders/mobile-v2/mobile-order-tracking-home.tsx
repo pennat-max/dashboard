@@ -7913,7 +7913,7 @@ export function MobileOrderTrackingHome({
               </div>
           </>
         </header>
-        <main className="px-0 pb-3 pt-0 sm:px-3">
+        <main className="px-0 pb-[calc(4.75rem+env(safe-area-inset-bottom,0px))] pt-0 sm:px-3">
             <div className="space-y-3 pb-4">
               {visiblePagedForRender.map((order) => (
                 <OrderCard
