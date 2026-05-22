@@ -42,16 +42,19 @@ Sales creates request -> Store checks stock -> Store orders/receives parts -> Ga
 - Every order should have a mobile order link.
 - Staff can continue chatting in LINE.
 - Real status should live in Supabase.
-- Do not implement LINE Bot or LIFF until the manual bridge is validated with users.
+- **LIFF Phase 1 (May 2026):** `/liff/orders` opens the same Order Tracking experience as `/m/orders` inside LINE (LIFF SDK + `NEXT_PUBLIC_LINE_LIFF_ID`). No Bot / webhook in this phase — see `LINE_LIFF_SETUP.md`.
+- **LINE Inbox + AI:** **`POST /api/line-inbox/analyze`** (read-only suggestions) + **`POST /api/line-inbox/confirm`** (writes after human confirm) + LIFF **`/liff/line-inbox`**. Spec: **`LINE_INBOX_AI_ANALYSIS_PLAN.md`**. **No** auto-save from analyze; **no** secrets in browser.
 
 ## Implementation status (as of last repo inspection)
 
 ### UX reference (documentation only)
 - **`docs/mockups/order-tracking-mobile-mockup.tsx`**: intentional **fake-data** shell to mirror ChatGPT/card layout (**do not import** into App Router). Use when comparing chips, COST panel layout, row structure, filters, collapse behavior. Production **`/m/orders`** stays on **`mobile-order-tracking-home.tsx`** only with Supabase-backed data (plus existing empty-list `ORDERS` fallback).
 
-### Canonical mobile list — `/m/orders`
-- **Route:** `src/app/(app)/m/orders/page.tsx` (dynamic).
+### Canonical mobile list — `/m/orders` and LIFF — `/liff/orders`
+- **Routes:** `src/app/(app)/m/orders/page.tsx` and `src/app/(app)/liff/orders/page.tsx` (dynamic).
+- **Shared server loader:** `src/lib/order-tracking/load-order-tracking-page.ts` (same props for both routes).
 - **Component:** `src/components/orders/mobile-v2/mobile-order-tracking-home.tsx`.
+- **LIFF:** `src/components/liff/liff-orders-shell.tsx` wraps only the `/liff/orders` route (status strip + SDK init).
 - **Reads:** `fetchCarsForOrderTracking()` + `fetchOrderItemsByCars()` merge `order_items` onto each car card (keys `row:{row_id}` and `id:{id}`).
 - **Fallback:** if no cars returned, UI uses in-file `ORDERS` mock array for demo.
 - **Filters:** sale **status** (ทั้งหมด / จอง / รอส่ง / ส่งแล้ว / ว่าง), staff (from data + defaults), item status + counts (**computed from `order.items`**, including demo `ORDERS` when fallback), storage-only toggle, plate keypad + search across plate / full plate / chassis / spec string. **Per-sale name chips (ALL/AOR/…) are not on this screen anymore.**

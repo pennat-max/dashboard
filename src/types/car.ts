@@ -58,6 +58,8 @@ export type Car = {
   doc_fee?: string | number | null;
   /** ต้นทุนรวม / ราคาขาย USD / ค่าซ่อม (ชีต) */
   total_cost?: string | number | null;
+  /** ราคาเว็บ (USD) — ใช้แสดงแทนต้นทุนในโหมด guest บน order tracking */
+  web_price_usd?: string | number | null;
   sale_price_usd?: string | number | null;
   repair_cost?: string | number | null;
   repair_details?: string | null;

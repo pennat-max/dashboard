@@ -18,6 +18,7 @@ import { carPriceNumber, carTitleLine } from "@/lib/car-fields";
 import { excludeCancelledCars, fetchCarsForDashboard } from "@/lib/data/cars";
 import { formatThb } from "@/lib/format";
 import { getLocale, numberFormatLocale } from "@/lib/locale";
+import { bangkokCalendarTodayYmd } from "@/lib/time/bangkok-calendar";
 import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -33,10 +34,7 @@ export default async function IncomeSchedulePage() {
 
   const { cars, error } = await fetchCarsForDashboard();
   const rows = excludeCancelledCars(cars);
-  const now = new Date();
-  const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(
-    now.getDate()
-  ).padStart(2, "0")}`;
+  const todayKey = bangkokCalendarTodayYmd();
   const map = new Map<string, { count: number; totalValueThb: number }>();
   const skipStatuses = new Set(["comming", "coming"]);
   const toChartDateLabel = (isoDate: string) => {

@@ -23,9 +23,7 @@ export default async function WebsitePendingBeForwardPage() {
   const c = dict.common;
 
   const { cars, error } = await fetchCarsForDashboard();
-  const rows = excludeCancelledCars(cars).filter(
-    (car) => isWebsitePendingBeForward(car) && !(car.buyer ?? "").trim()
-  );
+  const rows = excludeCancelledCars(cars).filter(isWebsitePendingBeForward);
   const sortedRows = [...rows].sort((a, b) => {
     const ai = (a.income_date ?? "").trim();
     const bi = (b.income_date ?? "").trim();

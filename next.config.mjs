@@ -20,6 +20,16 @@ const nextConfig = {
         hostname: "*.supabase.co",
         pathname: "/storage/v1/object/public/**",
       },
+      {
+        protocol: "https",
+        hostname: "vigoasia.com",
+        pathname: "/assets/product_photos/**",
+      },
+      {
+        protocol: "https",
+        hostname: "www.vigoasia.com",
+        pathname: "/assets/product_photos/**",
+      },
     ],
   },
 };

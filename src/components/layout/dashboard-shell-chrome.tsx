@@ -1,37 +1,59 @@
 "use client";
 
-import { LocaleSwitcher } from "@/components/i18n/locale-switcher";
-import type { Dictionary } from "@/i18n/dictionaries";
-import type { Locale } from "@/lib/locale-constants";
+import Link from "next/link";
+import { AuthLoginLink } from "@/components/auth/auth-login-link";
+import { AuthSignOutButton } from "@/components/auth/auth-sign-out-button";
+import type { UserRole } from "@/lib/auth/user-role";
 import { cn } from "@/lib/utils";
+import { Users } from "lucide-react";
 import { usePathname } from "next/navigation";
 
 type Props = {
   children: React.ReactNode;
-  locale: Locale;
-  dict: Dictionary;
+  userEmail?: string | null;
+  userRole?: UserRole | null;
 };
 
-/** เส้นทาง `/m/*` — เต็มความกว้าง/ความสูงจอ + safe-area (ทุกรุ่นมือถือ) */
-export function DashboardShellChrome({ children, locale, dict }: Props) {
+/** `/m/*` — full-bleed mobile layout + safe-area */
+export function DashboardShellChrome({ children, userEmail = null, userRole = null }: Props) {
   const pathname = usePathname() ?? "";
-  const mobileStandalone = pathname.startsWith("/m");
+  const mobileStandalone = pathname.startsWith("/m") || pathname.startsWith("/liff");
 
   return (
     <>
-      <div
-        className={cn(
-          "flex justify-end pt-4",
-          mobileStandalone ? "hidden md:flex md:px-8 lg:px-10" : "px-4 md:px-8 lg:px-10"
-        )}
-      >
-        <LocaleSwitcher locale={locale} label={dict.common.language} thLabel={dict.common.thShort} enLabel={dict.common.enShort} />
-      </div>
+      {mobileStandalone && userEmail ? (
+        <div className="flex justify-end border-b border-slate-200/80 bg-slate-100 px-3 py-2 md:hidden">
+          <AuthSignOutButton email={userEmail} />
+        </div>
+      ) : null}
+      {!mobileStandalone ? (
+        <div className="flex flex-wrap items-start justify-end gap-3 px-4 pt-4 md:px-8 lg:px-10">
+          {userEmail ? (
+            <>
+              {userRole === 4 ? (
+                <Link
+                  href="/dashboard/users"
+                  className={cn(
+                    "inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-background px-3 text-sm font-medium text-foreground shadow-sm",
+                    "transition-colors hover:bg-muted/80"
+                  )}
+                >
+                  <Users className="size-4 opacity-80" aria-hidden />
+                  Users
+                </Link>
+              ) : null}
+              <AuthSignOutButton email={userEmail} />
+            </>
+          ) : (
+            <AuthLoginLink />
+          )}
+        </div>
+      ) : null}
       <main
         data-mobile-fullscreen={mobileStandalone ? "" : undefined}
         className={cn(
           mobileStandalone
-            ? "max-md:m-0 max-md:max-w-none max-md:min-h-[100dvh] max-md:min-h-[100svh] max-md:w-full max-md:overflow-x-hidden max-md:p-0 md:px-8 md:py-8 lg:px-10"
+            ? "max-md:m-0 max-md:max-w-none max-md:min-h-[100dvh] max-md:min-h-[100svh] max-md:w-full max-md:overflow-x-clip max-md:p-0 md:px-8 md:py-8 lg:px-10"
             : "px-4 py-6 md:px-8 md:py-8 lg:px-10"
         )}
       >

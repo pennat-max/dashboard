@@ -1,22 +1,31 @@
 import { MobileOrderTrackingHome } from "@/components/orders/mobile-v2/mobile-order-tracking-home";
-import { fetchCarsForOrderTracking } from "@/lib/data/cars";
-import { fetchOrderItemsByCars, fetchOrderUpdatesByCars } from "@/lib/data/orders";
+import { loadOrderTrackingPageData } from "@/lib/order-tracking/load-order-tracking-page";
 
 export const dynamic = "force-dynamic";
 
-export default async function MobileOrdersPage() {
-  const { cars, error: carsError } = await fetchCarsForOrderTracking();
-  const { byCarKey, error: itemsError } = await fetchOrderItemsByCars(cars);
-  const { byCarKey: updatesByCarKey, error: updatesError } = await fetchOrderUpdatesByCars(cars);
-  const dataWarnings = [carsError, itemsError, updatesError].filter(
-    (v): v is string => typeof v === "string" && v.length > 0
-  );
+type PageProps = {
+  searchParams: { order?: string | string[]; load?: string | string[] };
+};
+
+export default async function MobileOrdersPage({ searchParams }: PageProps) {
+  const loadRaw = searchParams?.load;
+  const loadMode = typeof loadRaw === "string" ? loadRaw : Array.isArray(loadRaw) ? String(loadRaw[0] ?? "") : "";
+  const isFullLoad = loadMode.trim().toLowerCase() === "full";
+  const props = await loadOrderTrackingPageData(searchParams ?? {}, { summaryOnly: !isFullLoad });
   return (
     <MobileOrderTrackingHome
-      carsData={cars}
-      orderItemsByCar={byCarKey}
-      orderUpdatesByCar={updatesByCarKey}
-      dataWarnings={dataWarnings}
+      carsData={props.carsData}
+      orderItemsByCar={props.orderItemsByCar}
+      orderUpdatesByCar={props.orderUpdatesByCar}
+      saleStatusSummaryAllCars={props.saleStatusSummaryAllCars}
+      summarySnapshotAllCars={props.summarySnapshotAllCars}
+      disableDemoFallback
+      deferCarsHydration={!isFullLoad}
+      dataWarnings={props.dataWarnings}
+      initialFocusedOrderId={props.initialFocusedOrderId}
+      shareBaseUrl={props.shareBaseUrl}
+      guestVacantOnly={props.guestVacantOnly}
+      initialUiLang="th"
     />
   );
 }

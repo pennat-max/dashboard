@@ -88,12 +88,8 @@ export default async function ExportedByBuyerPage() {
             {p.title}
           </h1>
           <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-            {p.introBefore}{" "}
-            <code className="rounded border border-border bg-muted px-1 font-mono text-xs">shipped</code>{" "}
-            {p.introMid}{" "}
-            <code className="rounded border border-border bg-muted px-1 font-mono text-xs">
-              booked_shipping
-            </code>{" "}
+            {p.introBefore}
+            <code className="rounded border border-border bg-muted px-1 font-mono text-xs">shipped</code>
             {p.introAfter}
           </p>
         </header>

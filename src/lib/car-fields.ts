@@ -62,12 +62,14 @@ export function modelYearFieldLabel(car: Car, unknownLabel: string): string {
   return my || unknownLabel;
 }
 
-/** ส่งออกแล้ว — shipped หรือ booked_shipping มีค่า (อย่างใดอย่างหนึ่ง) */
+/** ส่งออกแล้ว — มีค่าใน `shipped` เท่านั้น (สอดคล้องชิป «ส่งแล้ว» ใน Order Tracking) */
 export function isCarExported(car: Car): boolean {
-  return (
-    Boolean((car.shipped ?? "").trim()) ||
-    Boolean((car.booked_shipping ?? "").trim())
-  );
+  return Boolean((car.shipped ?? "").trim());
+}
+
+/** รอส่ง — จองเรือ/รอบขนส่งแล้ว (`booked_shipping`) แต่ยังไม่มี `shipped` */
+export function isAwaitingShipExport(car: Car): boolean {
+  return Boolean((car.booked_shipping ?? "").trim()) && !Boolean((car.shipped ?? "").trim());
 }
 
 /** พร้อมขายในสต็อก — buyer, shipped, booked_shipping ว่างทั้งสาม (หลัง trim) */
@@ -79,25 +81,47 @@ export function isReadyForSaleStock(car: Car): boolean {
   );
 }
 
-/**
- * ยังไม่ลงเว็บ: พร้อมขาย + สถานะ P.Office + picture ว่าง
- */
-export function isWebsitePending(car: Car): boolean {
-  if (!isReadyForSaleStock(car)) return false;
-  const status = (car.status ?? "").trim().toLowerCase();
-  const isPOffice = /^p\.?\s*office$/i.test(status);
-  if (!isPOffice) return false;
-  return !(car.picture ?? "").trim();
+/** พร้อมขาย + ยังไม่มี sale support (ใช้กับ KPI ยังไม่ลงเว็บ) */
+export function isVacantForWebsiteListing(car: Car): boolean {
+  return isReadyForSaleStock(car) && !(car.sale_support ?? "").trim();
+}
+
+/** สถานะอยู่ช่วง Check doc หรือ P.Office — status ต้องไม่ว่าง */
+function statusIsCheckDocOrPOffice(car: Car): boolean {
+  const raw = (car.status ?? "").trim();
+  if (!raw) return false;
+  if (/^p\.?\s*office$/i.test(raw)) return true;
+  if (/check[\s_-]*doc/i.test(raw)) return true;
+  if (/เช็ค\s*doc/i.test(raw)) return true;
+  if (raw.includes("เช็ค") && /doc|เอกสาร/i.test(raw)) return true;
+  return false;
+}
+
+/** คอลัมน์ picture ว่าง (หรือ placeholder) = ยังไม่ถือว่ามีรูปลงเว็บ — ใช้เฉพาะ picture ตามนิยามทีม */
+function isPictureEmptyForWebListing(car: Car): boolean {
+  const p = String(car.picture ?? "").trim();
+  if (!p) return true;
+  if (p === "#" || p === "-" || p === "—") return true;
+  const low = p.toLowerCase();
+  return low === "n/a" || low === "none" || low === "null";
 }
 
 /**
- * ยังไม่ลงเว็บ beforward: หลักเดียวกับ vigoasia แต่ดูจากคอลัมน์ BF on web มีคำว่า "Not"
+ * ยังไม่ลงเว็บ vigoasia: buyer / sale_support / booked_shipping / shipped ว่าง,
+ * status เป็น Check doc หรือ P.Office, และ picture ว่าง
+ */
+export function isWebsitePending(car: Car): boolean {
+  if (!isVacantForWebsiteListing(car)) return false;
+  if (!statusIsCheckDocOrPOffice(car)) return false;
+  return isPictureEmptyForWebListing(car);
+}
+
+/**
+ * ยังไม่ลงเว็บ beforward: ฐานเดียวกับ vigo + status Check doc / P.Office + BF on web มีคำว่า "Not"
  */
 export function isWebsitePendingBeForward(car: Car): boolean {
-  if (!isReadyForSaleStock(car)) return false;
-  const status = (car.status ?? "").trim().toLowerCase();
-  const isPOffice = /^p\.?\s*office$/i.test(status);
-  if (!isPOffice) return false;
+  if (!isVacantForWebsiteListing(car)) return false;
+  if (!statusIsCheckDocOrPOffice(car)) return false;
   const bfOnWeb = (car.bf_on_web ?? "").trim().toLowerCase();
   return bfOnWeb.includes("not");
 }

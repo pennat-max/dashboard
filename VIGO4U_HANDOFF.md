@@ -62,11 +62,14 @@
 - `/dashboard` and sub-routes (statuses, booked, exported, etc.)
 - `/cars`, `/cars/[id]`
 - **`/m/orders`** — main Order Tracking mobile UI (real reads + mock fallback).
+- **`/liff/orders`** — Order Tracking for LINE in-app browser (LIFF Phase 1 wrapper; same UI/data loader as `/m/orders`).
+- **`/liff/line-inbox`** — LINE Inbox paste/analyze (read-only) → human confirm → **`POST /api/line-inbox/confirm`** writes `order_items` (`src/components/liff/line-inbox-client.tsx`).
 - **`/m/orders/receive-line`** — separate mock receive flow (not wired to Supabase).
 - `/m/orders/[id]` → redirect to `/m/orders`
 
 ## Existing Functions / API Routes
 - **API routes:** `POST /api/m/order-intake/save` (`src/app/api/m/order-intake/save/route.ts`).
+- **LINE Inbox:** `POST /api/line-inbox/analyze` (no DB writes), `POST /api/line-inbox/confirm` (writes after confirm) — see `LINE_INBOX_AI_ANALYSIS_PLAN.md`, `src/lib/line-inbox/*`.
 - **Read functions:** `fetchCarsForOrderTracking`, `fetchOrderItemsByCars`, `fetchMobileOrders`, `fetchMobileOrderDetail`, dashboard car helpers in `cars.ts`.
 
 ## Current Problems / Caveats
@@ -83,8 +86,9 @@
 - Inline expand: “งานเดิมของรถคันนี้” = **real** `order_items` for that car; paste/split/compare; **เพิ่มรายการ** + **บันทึก** (API). Inline LINE block titled **รับงานจาก LINE · รถคันนี้เท่านั้น** (no mock data wired here).
 
 ## Not Yet Built / Partial
+- **LINE Inbox:** analyze uses deterministic heuristics (split, car resolve, duplicate hints); optional AI/env-gated refinement not wired. **`line_inbox_messages`** table / **`order_attachments`** on confirm not required yet (audit via **`order_task_updates`**).
 - `/m/orders/receive-line` not connected to real cars or DB.
-- No LINE Bot / LIFF; no real LINE webhook bridge.
+- **LIFF Phase 1:** `/liff/orders` — same `MobileOrderTrackingHome` + shared `loadOrderTrackingPageData` as `/m/orders`; LIFF SDK wrapper (`LiffOrdersShell`) + `NEXT_PUBLIC_LINE_LIFF_ID`. **No** Bot / webhook / group ingest (see `LINE_LIFF_SETUP.md`).
 - No Google Sheet sync in repo.
 - Structured `order_task_updates` columns (draft SQL only); runtime still message-encoded.
 
@@ -99,6 +103,9 @@
 - Either deprecate `/m/orders/receive-line` mock in favor of inline flow, or rewire it to the same API + real car lookup.
 
 ## Latest Update
+- **[LINEBridge — LINE Inbox — implementation May 2026]** Added **`POST /api/line-inbox/analyze`**, **`POST /api/line-inbox/confirm`**, LIFF **`/liff/line-inbox`**, helpers **`src/lib/line-inbox/`**. Analyze is read-only; confirm creates/merges **`order_items`** + **`order_task_updates`**. Docs updated: **`LINE_INBOX_AI_ANALYSIS_PLAN.md`**, **`ORDER_TRACKING_DB_MAPPING.md`** §H, **`ORDER_TRACKING_PLAN.md`**, **`PROJECT_TASKS.md`**. **`npm run build`** OK.
+- **[LINEBridge — LINE Inbox AI — planning May 2026]** Added **`LINE_INBOX_AI_ANALYSIS_PLAN.md`** (spec). Earlier doc-only pass updated mapping/plan/tasks without routes.
+- **[LIFF Phase 1 — May 2026]** Added `/liff/orders`, `@line/liff` (dynamic import), `src/lib/line/liff-config.ts`, `LiffOrdersShell`, shared `src/lib/order-tracking/load-order-tracking-page.ts` used by `/m/orders` and `/liff/orders`. Middleware allows `/liff/*` without Supabase session. Shell chrome treats `/liff` like `/m` for mobile full-bleed. Docs: `LINE_LIFF_SETUP.md`. No Bot/webhook.
 - **[OrderTracking filters — May 2026]** Removed hardcoded **`STATUS_COUNTS`** from **`mobile-order-tracking-home.tsx`**. Item-status chip counts always use **`itemStatusCounts`** derived from **`mappedOrders.items`** (Supabase path or demo **`ORDERS`** fallback). Same filter dimensions as before (sale, sale-status, vehicle search, storage-only, staff). No API/schema change.
 - **[OrderTracking UX — pass 2 — May 2026]** `/m/orders` only: **COST** header matches mock (always **ค่าอะไหล่/ของแต่ง** control; sub-panels ต้นทุนรวม/ซ่อม/เอกสาร); **แชร์** in card toolbar only when `storage.length > 0`; removed **Copy สรุป**; item row: date chip only for **สั่ง**; **ฝาก** chip uses `depositStorageChipLabel` from DB `storage_type` + `expire_date`; larger touch targets on assignee/status `<select>`; **ดูทั้งหมด** stronger dashed style. No API/schema/dashboard/cars changes. **`npm run build`** OK.
 - **[OrderTracking UX — May 2026]** Added **`docs/mockups/order-tracking-mobile-mockup.tsx`** as a **standalone reference** (not routed). Earlier iteration: item row `flex-col`/`sm:flex-row`; filter label **สถานะรายการ**; inline LINE caption; **ดูทั้งหมด** collapsed style. (Pass 2 refines date chip to **สั่ง** only — see bullet above.)

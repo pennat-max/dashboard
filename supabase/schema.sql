@@ -18,7 +18,7 @@ create table if not exists public.cars (
   status text default 'available',
   destination_country text,
   vin text,
-  image_url text,
+  -- image_url text,  -- optional: บางฐานข้อมูลจริงไม่มีคอลัมน์นี้ — โค้ดดึงรูปจาก `picture` เท่านั้นใน CARS_SELECT_LEAN
   notes text,
   created_at timestamptz not null default now(),
   updated_at timestamptz default now()

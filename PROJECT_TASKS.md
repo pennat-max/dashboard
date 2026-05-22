@@ -1,6 +1,7 @@
 # PROJECT_TASKS
 
 ## Current Focus
+- **[LINEBridge]** LINE Inbox: **`POST /api/line-inbox/analyze`**, **`POST /api/line-inbox/confirm`**, LIFF **`/liff/line-inbox`** — spec **`LINE_INBOX_AI_ANALYSIS_PLAN.md`**, helpers under **`src/lib/line-inbox/`**. Optional tables (`line_inbox_messages`, `order_attachments` on confirm) still future.
 - **[OrderTracking]** Mobile UX reference: **`docs/mockups/order-tracking-mobile-mockup.tsx`** (standalone; **REFERENCE ONLY**, not imported by app routes). Implementations stay in **`mobile-order-tracking-home.tsx`** with real Supabase data paths unchanged.
 - **[OrderTracking]** Mobile Order Tracking at `/m/orders` — **real reads** (`cars` + `order_tasks` / `order_items`) with **mock fallback** when no cars; **inline intake save** to DB via **`POST /api/m/order-intake/save`** (requires `SUPABASE_SERVICE_ROLE_KEY`). Separate **`/m/orders/receive-line`** page remains **mock-only**.
 - **[OrderTracking]** Card header/cost mapping aligned with `ORDER_TRACKING_DB_MAPPING.md`: ship badge = `booked_shipping` only; document panel includes `doc_fee`; cost headline prefers `total_cost`; title line includes model year when present.
@@ -48,7 +49,7 @@
 - [ ] Structured audit columns on `order_task_updates` (`action_type`, `old_value`, `new_value`, etc.) still require DB-side schema update (draft only in repo).
 - [x] Added QA artifact: `ORDER_TRACKING_QA_CHECKLIST.md` with mobile end-to-end test matrix.
 - [ ] Storage QA cases (ฝาก Store 1 เดือน / ฝากไปกับรถ / filter ของฝาก) are blocked until `order_storage_items` is queryable in runtime schema cache.
-- [ ] No LINE Bot / LIFF.
+- [x] LIFF wrapper route only (`/liff/orders`) — no Bot.
 - [ ] No Google Sheet sync in repo.
 
 ## Mobile Operations
@@ -61,7 +62,10 @@
 
 ## LINE Bridge
 - [x] Copy-ready LINE URL/text patterns on cards (storage summary) where data exists.
-- [ ] Real LINE Bot / LIFF / webhook ingestion.
+- [x] **LIFF Phase 1:** `/liff/orders` — same Order Tracking UI + data loader as `/m/orders`; `@line/liff` + `NEXT_PUBLIC_LINE_LIFF_ID`; see `LINE_LIFF_SETUP.md`. Middleware exempts `/liff/*` from forced Supabase login.
+- [x] **Planning doc:** `LINE_INBOX_AI_ANALYSIS_PLAN.md` — AI-assisted LINE Inbox analysis (human confirmation, duplicate rules vs `order_items`).
+- [x] **Implement:** `POST /api/line-inbox/analyze` + `POST /api/line-inbox/confirm` + LIFF `/liff/line-inbox` (`src/app/api/line-inbox/*`, `src/components/liff/line-inbox-client.tsx`).
+- [ ] LINE Bot / Messaging API webhook / group message ingestion.
 
 ## Future Two-way Sync
 - [ ] Not built.

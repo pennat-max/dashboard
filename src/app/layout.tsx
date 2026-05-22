@@ -38,7 +38,7 @@ function metadataBaseUrl(): URL {
 export const metadata: Metadata = {
   metadataBase: metadataBaseUrl(),
   title: "Export Cars Dashboard",
-  description: "แดชบอร์ดจัดการรถมือสองส่งออก — Supabase + Next.js",
+  description: "Used export car stock dashboard — Supabase + Next.js",
 };
 
 export const viewport: Viewport = {
@@ -61,9 +61,10 @@ export default async function RootLayout({
 }>) {
   const locale = await getLocale();
   return (
-    <html lang={locale === "en" ? "en" : "th"} className={cn("font-sans", inter.variable)}>
+    <html lang={locale} className={cn("font-sans", inter.variable)}>
       <body
         data-app-root
+        data-ui-lang={locale}
         className={cn(
           `${geistSans.variable} ${geistMono.variable} antialiased`,
           "min-h-screen bg-background text-foreground"

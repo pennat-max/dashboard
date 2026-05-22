@@ -6,15 +6,34 @@ import { formatThb } from "@/lib/format";
 import type { Locale } from "@/lib/locale-constants";
 import { numberFormatLocale } from "@/lib/locale";
 import { cn } from "@/lib/utils";
-import { Bookmark, CarFront, CalendarDays, Globe, Package, Ship } from "lucide-react";
+import { Bookmark, Anchor, CarFront, CalendarDays, Globe, Package, Ship } from "lucide-react";
+
+const SUBSET_HREFS = new Set<string>([
+  "/cars",
+  "/dashboard/exported",
+  "/dashboard/awaiting-ship",
+  "/dashboard/booked",
+  "/dashboard/available",
+]);
+
+export type KpiLinkMode = "none" | "subset" | "full";
 
 type Props = {
   kpi: DashboardKpi;
   locale: Locale;
   kpiDict: Dictionary["kpi"];
+  /**
+   * `none` = ตัวเลขอย่างเดียว (แขก หรือระดับ 2)
+   * `subset` = ลิงก์เฉพาะรถ / exported / booked / available (ระดับ 1)
+   * `full` = ลิงก์ครบ (ระดับ 3+)
+   */
+  kpiLinkMode?: KpiLinkMode;
+  /** @deprecated ใช้ kpiLinkMode แทน */
+  clickable?: boolean;
 };
 
-export function KpiCards({ kpi, locale, kpiDict }: Props) {
+export function KpiCards({ kpi, locale, kpiDict, kpiLinkMode, clickable = true }: Props) {
+  const mode: KpiLinkMode = kpiLinkMode ?? (clickable ? "full" : "none");
   const nf = numberFormatLocale(locale);
   const fmt = (n: number) => new Intl.NumberFormat(nf).format(n);
 
@@ -38,6 +57,16 @@ export function KpiCards({ kpi, locale, kpiDict }: Props) {
       toneClass: "before:from-tone-emerald/45 before:via-tone-emerald/10 before:to-transparent",
       iconTone: "border-chart-2/30 bg-chart-2/12 text-chart-2",
       valueTone: "text-chart-2",
+    },
+    {
+      title: kpiDict.awaitingShip,
+      value: fmt(kpi.awaitingShipCount),
+      icon: Anchor,
+      href: "/dashboard/awaiting-ship",
+      linkLabel: kpiDict.awaitingShip,
+      toneClass: "before:from-cyan-500/45 before:via-cyan-500/10 before:to-transparent",
+      iconTone: "border-cyan-600/30 bg-cyan-50 text-cyan-800",
+      valueTone: "text-cyan-800",
     },
     {
       title: kpiDict.booked,
@@ -92,8 +121,14 @@ export function KpiCards({ kpi, locale, kpiDict }: Props) {
   ] as const;
 
   return (
-    <div className="kpi-grid grid gap-3 sm:grid-cols-2 lg:grid-cols-7">
+    <div className="kpi-grid grid gap-3 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-4">
       {items.map(({ title, value, icon: Icon, href, linkLabel, toneClass, iconTone, valueTone }) => {
+        const targetHref =
+          mode === "full" && href
+            ? href
+            : mode === "subset" && href && SUBSET_HREFS.has(href)
+              ? href
+              : undefined;
         const card = (
           <Card
             size="sm"
@@ -101,9 +136,9 @@ export function KpiCards({ kpi, locale, kpiDict }: Props) {
               "relative overflow-hidden border border-border/80 bg-card shadow-sm transition-all duration-200",
               "before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-1.5 before:bg-gradient-to-r",
               toneClass,
-              href
+              targetHref
                 ? "h-full cursor-pointer group-hover:border-primary/45 group-hover:-translate-y-0.5 group-hover:shadow-md"
-                : "hover:-translate-y-0.5 hover:shadow-md"
+                : "h-full cursor-default"
             )}
           >
             <CardHeader className="flex flex-row items-start justify-between gap-2 pb-2 pt-4">
@@ -127,11 +162,11 @@ export function KpiCards({ kpi, locale, kpiDict }: Props) {
           </Card>
         );
 
-        if (href) {
+        if (targetHref) {
           return (
             <Link
               key={title}
-              href={href}
+              href={targetHref}
               className="group block rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
               aria-label={linkLabel ?? title}
             >
@@ -141,7 +176,7 @@ export function KpiCards({ kpi, locale, kpiDict }: Props) {
         }
 
         return (
-          <div key={title} className="rounded-xl">
+          <div key={title} className="rounded-xl" aria-label={linkLabel ?? title}>
             {card}
           </div>
         );

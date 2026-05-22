@@ -1,6 +1,8 @@
 import { createAnonClient } from "@/lib/supabase/anon";
+import { addCalendarDaysToYmd, bangkokCalendarTodayYmd } from "@/lib/time/bangkok-calendar";
 import {
   carPriceNumber,
+  isAwaitingShipExport,
   isBookedNotExported,
   isCarExported,
   isReadyForSaleStock,
@@ -137,6 +139,7 @@ export const CARS_SELECT_ORDER_TRACKING = [
   "sale_support",
   "buyer",
   "sale_price_usd",
+  "web_price_usd",
   "total_cost",
   "buy_price",
   "model_year",
@@ -154,6 +157,32 @@ export const CARS_SELECT_ORDER_TRACKING = [
   "initial_document",
   "doc_fee",
 ].join(",");
+
+/** เลือกเฉพาะคอลัมน์ที่ใช้คำนวณชิปสถานะขาย (ครบทุกคัน แต่ payload เล็กมาก) */
+const CARS_SELECT_ORDER_TRACKING_SUMMARY = [
+  "id",
+  "buyer",
+  "booked_shipping",
+  "shipped",
+].join(",");
+
+export type OrderTrackingSaleStatusSummary = {
+  ทั้งหมด: number;
+  จอง: number;
+  รอส่ง: number;
+  ส่งแล้ว: number;
+  ว่าง: number;
+};
+
+export type OrderTrackingSummarySnapshot = {
+  saleStatusCounts: OrderTrackingSaleStatusSummary;
+  saleCodeCounts: Record<string, number>;
+  staffItemCounts: Record<string, number>;
+  itemStatusCounts: Record<string, number>;
+  totalOrders: number;
+  totalItems: number;
+  computedAt: string | null;
+};
 
 function rowsAsCars(data: unknown): Car[] {
   return (data ?? []) as Car[];
@@ -233,7 +262,44 @@ export async function fetchCarsForDashboard(): Promise<CarsQueryResult> {
   }
 }
 
+/** จำกัดจำนวนรถที่โหลดในหน้า Order Tracking — ลดเวลาโหลดครั้งแรก (ไม่ตั้ง = ดึงทั้งหมด) */
+const DEFAULT_ORDER_TRACKING_MAX_CARS = 0;
+
+/** จำกัดค่าในขอบเขตที่ใช้งานได้จริง (กัน config ผิดจนช้า/พัง) */
+function clampOrderTrackingMaxCars(n: number): number {
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_ORDER_TRACKING_MAX_CARS;
+  return Math.max(50, Math.min(2000, Math.floor(n)));
+}
+
+function parseOrderTrackingMaxCars(): number {
+  const raw = process.env.ORDER_TRACKING_MAX_CARS?.trim();
+  if (!raw) return DEFAULT_ORDER_TRACKING_MAX_CARS;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? clampOrderTrackingMaxCars(n) : 0;
+}
+
+async function fetchCarsOrderTrackingCapped(
+  supabase: ReturnType<typeof createAnonClient>,
+  maxRows: number
+): Promise<CarsQueryResult> {
+  const all: Car[] = [];
+  for (let from = 0; from < maxRows; from += PAGE_SIZE) {
+    const to = Math.min(from + PAGE_SIZE - 1, maxRows - 1);
+    const { data, error } = await supabase
+      .from(TABLE)
+      .select(CARS_SELECT_ORDER_TRACKING)
+      .order("updated_at", { ascending: false })
+      .range(from, to);
+    if (error) return { cars: [], error: error.message };
+    const batch = rowsAsCars(data);
+    all.push(...batch);
+    if (batch.length === 0 || batch.length < PAGE_SIZE || all.length >= maxRows) break;
+  }
+  return { cars: all.slice(0, maxRows), error: null };
+}
+
 export async function fetchCarsForOrderTracking(): Promise<CarsQueryResult> {
+  const maxCars = parseOrderTrackingMaxCars();
   try {
     const supabase = createAnonClient();
     const { count, error: countError } = await supabase
@@ -241,6 +307,7 @@ export async function fetchCarsForOrderTracking(): Promise<CarsQueryResult> {
       .select("*", { count: "planned", head: true });
 
     if (countError) {
+      if (maxCars > 0) return fetchCarsOrderTrackingCapped(supabase, maxCars);
       return fetchAllRowsSequential(async (from, to) =>
         supabase
           .from(TABLE)
@@ -251,6 +318,9 @@ export async function fetchCarsForOrderTracking(): Promise<CarsQueryResult> {
     }
 
     const total = count ?? 0;
+    if (maxCars > 0 && total > maxCars) {
+      return fetchCarsOrderTrackingCapped(supabase, maxCars);
+    }
     return fetchAllRowsInParallel(total, async (from, to) =>
       supabase
         .from(TABLE)
@@ -261,6 +331,143 @@ export async function fetchCarsForOrderTracking(): Promise<CarsQueryResult> {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return { cars: [], error: msg };
+  }
+}
+
+function computeOrderTrackingSaleStatusSummary(cars: Car[]): OrderTrackingSaleStatusSummary {
+  let booked = 0;
+  let waitingShip = 0;
+  let shipped = 0;
+  let vacant = 0;
+  for (const car of cars) {
+    const hasShipped = Boolean(String(car.shipped ?? "").trim());
+    const hasBookedShipping = Boolean(String(car.booked_shipping ?? "").trim());
+    const hasBuyer = Boolean(String(car.buyer ?? "").trim());
+    if (hasShipped) shipped += 1;
+    else if (hasBookedShipping) waitingShip += 1;
+    else if (hasBuyer) booked += 1;
+    else vacant += 1;
+  }
+  return {
+    ทั้งหมด: cars.length,
+    จอง: booked,
+    รอส่ง: waitingShip,
+    ส่งแล้ว: shipped,
+    ว่าง: vacant,
+  };
+}
+
+/** สรุปชิปสถานะขายจาก "รถทั้งหมด" (ไม่โดน cap ของรายการ) */
+export async function fetchOrderTrackingSaleStatusSummary(): Promise<{
+  summary: OrderTrackingSaleStatusSummary;
+  error: string | null;
+}> {
+  const empty: OrderTrackingSaleStatusSummary = { ทั้งหมด: 0, จอง: 0, รอส่ง: 0, ส่งแล้ว: 0, ว่าง: 0 };
+  try {
+    const supabase = createAnonClient();
+    const cached = await supabase
+      .from("order_tracking_summary_cache")
+      .select("sale_status_counts")
+      .eq("id", 1)
+      .maybeSingle();
+    if (!cached.error && cached.data) {
+      const raw = (cached.data as { sale_status_counts?: unknown }).sale_status_counts as
+        | Record<string, unknown>
+        | null
+        | undefined;
+      if (raw && typeof raw === "object") {
+        return {
+          summary: {
+            ทั้งหมด: Number(raw["ทั้งหมด"] ?? 0),
+            จอง: Number(raw["จอง"] ?? 0),
+            รอส่ง: Number(raw["รอส่ง"] ?? 0),
+            ส่งแล้ว: Number(raw["ส่งแล้ว"] ?? 0),
+            ว่าง: Number(raw["ว่าง"] ?? 0),
+          },
+          error: null,
+        };
+      }
+    }
+
+    const { count, error: countError } = await supabase
+      .from(TABLE)
+      .select("*", { count: "planned", head: true });
+
+    if (countError) {
+      const r = await fetchAllRowsSequential(async (from, to) =>
+        supabase
+          .from(TABLE)
+          .select(CARS_SELECT_ORDER_TRACKING_SUMMARY)
+          .order("updated_at", { ascending: false })
+          .range(from, to)
+      );
+      if (r.error) return { summary: empty, error: r.error };
+      return { summary: computeOrderTrackingSaleStatusSummary(r.cars), error: null };
+    }
+
+    const total = count ?? 0;
+    const r = await fetchAllRowsInParallel(total, async (from, to) =>
+      supabase
+        .from(TABLE)
+        .select(CARS_SELECT_ORDER_TRACKING_SUMMARY)
+        .order("updated_at", { ascending: false })
+        .range(from, to)
+    );
+    if (r.error) return { summary: empty, error: r.error };
+    return { summary: computeOrderTrackingSaleStatusSummary(r.cars), error: null };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { summary: empty, error: msg };
+  }
+}
+
+/** ดึง snapshot สรุปทุกกล่องจาก cache table เดียว */
+export async function fetchOrderTrackingSummarySnapshot(): Promise<{
+  snapshot: OrderTrackingSummarySnapshot | null;
+  error: string | null;
+}> {
+  try {
+    const supabase = createAnonClient();
+    const res = await supabase
+      .from("order_tracking_summary_cache")
+      .select(
+        "sale_status_counts,sale_code_counts,staff_item_counts,item_status_counts,total_orders,total_items,computed_at"
+      )
+      .eq("id", 1)
+      .maybeSingle();
+    if (res.error) return { snapshot: null, error: res.error.message };
+    if (!res.data) return { snapshot: null, error: null };
+    const row = res.data as {
+      sale_status_counts?: unknown;
+      sale_code_counts?: unknown;
+      staff_item_counts?: unknown;
+      item_status_counts?: unknown;
+      total_orders?: unknown;
+      total_items?: unknown;
+      computed_at?: unknown;
+    };
+    const sale = (row.sale_status_counts ?? {}) as Record<string, unknown>;
+    return {
+      snapshot: {
+        saleStatusCounts: {
+          ทั้งหมด: Number(sale["ทั้งหมด"] ?? 0),
+          จอง: Number(sale["จอง"] ?? 0),
+          รอส่ง: Number(sale["รอส่ง"] ?? 0),
+          ส่งแล้ว: Number(sale["ส่งแล้ว"] ?? 0),
+          ว่าง: Number(sale["ว่าง"] ?? 0),
+        },
+        saleCodeCounts: ((row.sale_code_counts ?? {}) as Record<string, unknown>) as Record<string, number>,
+        staffItemCounts: ((row.staff_item_counts ?? {}) as Record<string, unknown>) as Record<string, number>,
+        itemStatusCounts: ((row.item_status_counts ?? {}) as Record<string, unknown>) as Record<string, number>,
+        totalOrders: Number(row.total_orders ?? 0),
+        totalItems: Number(row.total_items ?? 0),
+        computedAt: String(row.computed_at ?? "").trim() || null,
+      },
+      error: null,
+    };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { snapshot: null, error: msg };
   }
 }
 
@@ -467,8 +674,10 @@ export type DashboardKpi = {
   totalValueThb: number;
   /** มี buyer แต่ยังไม่ส่งออก — จองแล้ว ค้างส่ง */
   bookedNotExportedCount: number;
-  /** ส่งออกแล้ว — shipped หรือ booked_shipping ไม่ว่าง */
+  /** ส่งออกแล้ว — มีค่าใน `shipped` เท่านั้น (ชิป «ส่งแล้ว») */
   exportedCount: number;
+  /** รอส่ง — `booked_shipping` มีค่า และ `shipped` ว่าง (ชิป «รอส่ง») */
+  awaitingShipCount: number;
   /** พร้อมขาย — buyer / shipped / booked_shipping ว่างทั้งหมด */
   availableCount: number;
   /** พร้อมขาย + สถานะ P.Office + picture ว่าง = ยังไม่ลงเว็บ vigoasia */
@@ -494,14 +703,8 @@ export function excludeCancelledCars(cars: Car[]): Car[] {
 
 export function computeDashboardKpi(cars: Car[]): DashboardKpi {
   const rows = excludeCancelledCars(cars);
-  const now = new Date();
-  const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
-  const todayLocal = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(
-    now.getDate()
-  ).padStart(2, "0")}`;
-  const tomorrowLocal = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, "0")}-${String(
-    tomorrow.getDate()
-  ).padStart(2, "0")}`;
+  const todayBangkok = bangkokCalendarTodayYmd();
+  const tomorrowBangkok = addCalendarDaysToYmd(todayBangkok, 1);
   const skipStatuses = new Set(["comming", "coming"]);
   const totalCars = rows.length;
   const totalValueThb = rows.reduce(
@@ -509,6 +712,7 @@ export function computeDashboardKpi(cars: Car[]): DashboardKpi {
     0
   );
   const exportedCount = rows.filter((c) => isCarExported(c)).length;
+  const awaitingShipCount = rows.filter((c) => isAwaitingShipExport(c)).length;
   const bookedNotExportedCount = rows.filter((c) => isBookedNotExported(c)).length;
   const availableCount = rows.filter((c) => isReadyForSaleStock(c)).length;
   const websitePendingCount = rows.filter(isWebsitePending).length;
@@ -516,8 +720,8 @@ export function computeDashboardKpi(cars: Car[]): DashboardKpi {
   const incomeTomorrowRows = rows.filter((c) => {
     const incomeDate = (c.income_date ?? "").trim().slice(0, 10);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(incomeDate)) return false;
-    if (incomeDate <= todayLocal) return false;
-    if (incomeDate !== tomorrowLocal) return false;
+    if (incomeDate <= todayBangkok) return false;
+    if (incomeDate !== tomorrowBangkok) return false;
     const normalizedStatus = (c.status ?? "").trim().toLowerCase();
     return !skipStatuses.has(normalizedStatus);
   });
@@ -529,6 +733,7 @@ export function computeDashboardKpi(cars: Car[]): DashboardKpi {
     totalValueThb,
     bookedNotExportedCount,
     exportedCount,
+    awaitingShipCount,
     availableCount,
     websitePendingCount,
     websitePendingBeForwardCount,

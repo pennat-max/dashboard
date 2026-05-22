@@ -12,13 +12,15 @@ import {
 import { getDictionary } from "@/i18n/dictionaries";
 import { carTitleLine, isWebsitePending } from "@/lib/car-fields";
 import { excludeCancelledCars, fetchCarsForDashboard } from "@/lib/data/cars";
-import { getLocale } from "@/lib/locale";
+import { getLocale, numberFormatLocale } from "@/lib/locale";
 
 export const dynamic = "force-dynamic";
 
 export default async function WebsitePendingPage() {
   const locale = await getLocale();
   const dict = getDictionary(locale);
+  const nf = numberFormatLocale(locale);
+  const fmt = (n: number) => new Intl.NumberFormat(nf).format(n);
   const p = dict.websitePendingPage;
   const c = dict.common;
 
@@ -46,6 +48,7 @@ export default async function WebsitePendingPage() {
           </p>
           <h1 className="mt-2 font-heading text-2xl font-semibold tracking-tight text-foreground">{p.title}</h1>
           <p className="mt-2 max-w-3xl text-sm leading-relaxed text-muted-foreground">{p.intro}</p>
+          <p className="mt-2 max-w-3xl text-xs leading-relaxed text-muted-foreground/90">{p.formulaNote}</p>
         </header>
       </div>
 
@@ -82,7 +85,9 @@ export default async function WebsitePendingPage() {
                     <TableCell className="text-muted-foreground">
                       {(car.income_date ?? "").trim() ? (car.income_date ?? "").trim().slice(0, 10) : c.dash}
                     </TableCell>
-                    <TableCell className="text-muted-foreground">{(car.picture ?? "").trim() || c.dash}</TableCell>
+                    <TableCell className="max-w-[min(28rem,55vw)] truncate text-muted-foreground" title={(car.picture ?? "").trim() || undefined}>
+                      {(car.picture ?? "").trim() || c.dash}
+                    </TableCell>
                   </TableRow>
                 );
               })
@@ -90,6 +95,10 @@ export default async function WebsitePendingPage() {
           </TableBody>
         </Table>
       </div>
+
+      <p className="text-sm font-medium text-foreground">
+        {p.footerTotal.replace(/\{\{count\}\}/g, fmt(sortedRows.length))}
+      </p>
     </div>
   );
 }

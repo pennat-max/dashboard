@@ -59,7 +59,8 @@ async function main(): Promise<void> {
   console.log("แถวที่ใช้คำนวณ KPI:", rows.length);
   console.log("");
   console.log("จอง (ยังไม่ส่งออก) — buyer ไม่ว่าง, shipped ว่าง, booked_shipping ว่าง:", kpi.bookedNotExportedCount);
-  console.log("ส่งออกแล้ว:", kpi.exportedCount);
+  console.log("ส่งออกแล้ว (shipped ไม่ว่าง):", kpi.exportedCount);
+  console.log("รอส่ง / จองเรือ (booked_shipping ไม่ว่าง และ shipped ว่าง):", kpi.awaitingShipCount);
   console.log("พร้อมขาย:", kpi.availableCount);
   console.log("มูลค่ารวม (บาท, จาก buy_price/price_thb):", kpi.totalValueThb);
   console.log("");

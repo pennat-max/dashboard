@@ -167,7 +167,7 @@ function cmpNullsLast(
   if (typeof a === "number" && typeof b === "number") {
     return mult * (a - b);
   }
-  return mult * String(a).localeCompare(String(b), "th");
+  return mult * String(a).localeCompare(String(b), "en");
 }
 
 function parseIsoTime(s: string | null | undefined): number | null {
@@ -200,7 +200,7 @@ export function sortCarsForInventory(
         if (Number.isFinite(na) && Number.isFinite(nb)) {
           return mult * (na - nb);
         }
-        return mult * String(ai).localeCompare(String(bi), "th");
+        return mult * String(ai).localeCompare(String(bi), "en");
       }
       case "brand":
         return cmpNullsLast(strOrEmpty(a.brand), strOrEmpty(b.brand), mult);

@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
+import { requireMutateRole } from "@/lib/auth/mutation-guard";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
+import { deleteAllPhotosForOrderItem } from "@/lib/orders/order-item-photos-cleanup";
 import { createOrderTaskUpdate } from "@/lib/orders/task-update-log";
 
 const ORDER_ITEMS_TABLE = "order_items";
@@ -14,6 +16,9 @@ type Body = {
 };
 
 export async function POST(request: Request) {
+  const gate = await requireMutateRole();
+  if (!gate.ok) return gate.response;
+
   let body: Body;
   try {
     body = await request.json();
@@ -62,6 +67,12 @@ export async function POST(request: Request) {
 
     const { error: delErr } = await supabase.from(ORDER_ITEMS_TABLE).delete().eq("id", orderItemId);
     if (delErr) throw new Error(delErr.message);
+
+    try {
+      await deleteAllPhotosForOrderItem(supabase, orderItemId);
+    } catch (e) {
+      console.warn("[order-items/delete] order item photos:", e instanceof Error ? e.message : e);
+    }
 
     const log = await createOrderTaskUpdate(supabase, {
       order_task_id: itemTaskId,

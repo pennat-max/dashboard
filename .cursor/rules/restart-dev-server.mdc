@@ -1,0 +1,15 @@
+---
+description: Restart Next dev server after shell commands in this repo
+alwaysApply: true
+---
+
+# Dev server restart (used-car-export-dashboard)
+
+After **any** terminal/shell commands you run in this project as part of fulfilling the user’s request (including installs, builds, scripts, git, or file operations that accompany a task), **restart the Next.js dev server** before finishing:
+
+1. Stop the process listening on **port 3000** (Windows PowerShell): get `OwningProcess` from `Get-NetTCPConnection -LocalPort 3000 -State Listen`, then `Stop-Process -Force` on those PIDs. In `foreach`, use a variable name other than `$pid` — in PowerShell **`$PID` is automatic/read-only** and will break the loop.
+2. From the project root, start **`npm run dev`** in the **background** (`block_until_ms: 0`).
+
+**Skip** a restart only if: the user explicitly says not to, or you ran **only** read-only inspection (`git status`, `git diff`, `ls`, single `grep`/`head` with no writes).
+
+If port 3000 is free, still run `npm run dev` in the background so the app is ready.

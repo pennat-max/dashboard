@@ -105,7 +105,7 @@ export type BuyerCount = {
 };
 
 /**
- * แยกตามผู้ซื้อ — ใช้กับแถวที่ส่งออกแล้ว (shipped หรือ booked_shipping ไม่ว่าง) เท่านั้น
+ * แยกตามผู้ซื้อ — ใช้กับแถวที่ส่งออกแล้ว (มีค่าใน shipped) เท่านั้น
  * แถวไม่มี buyer จะรวมเป็น "(ไม่ระบุผู้ซื้อ)"
  */
 /** ค่าในแผนที่ aggregate — แสดงภาษาใน UI ผ่าน i18n */
@@ -147,7 +147,7 @@ export function aggregateByBuyerAmongShipped(shippedCars: Car[]): BuyerCount[] {
   }
   return Array.from(map.entries())
     .map(([buyer, v]) => ({ buyer, count: v.count, totalValueThb: v.totalValueThb }))
-    .sort((a, b) => b.count - a.count || a.buyer.localeCompare(b.buyer, "th"));
+    .sort((a, b) => b.count - a.count || a.buyer.localeCompare(b.buyer, "en"));
 }
 
 /** นับเฉพาะแถวที่มี buyer ไม่ว่าง — เรียงจำนวนมากสุดก่อน */
@@ -163,7 +163,7 @@ export function aggregateByBuyer(cars: Car[], limit = 25): BuyerCount[] {
   }
   return Array.from(map.entries())
     .map(([buyer, v]) => ({ buyer, count: v.count, totalValueThb: v.totalValueThb }))
-    .sort((a, b) => b.count - a.count || a.buyer.localeCompare(b.buyer, "th"))
+    .sort((a, b) => b.count - a.count || a.buyer.localeCompare(b.buyer, "en"))
     .slice(0, limit);
 }
 
@@ -220,7 +220,7 @@ export function aggregateByAgent(
   }
   const groupedRows = Array.from(map.entries())
     .map(([buyer, v]) => ({ buyer, count: v.count, totalValueThb: v.totalValueThb }))
-    .sort((x, y) => y.count - x.count || x.buyer.localeCompare(y.buyer, "th"));
+    .sort((x, y) => y.count - x.count || x.buyer.localeCompare(y.buyer, "en"));
   if (typeof limit === "number" && limit > 0) {
     return groupedRows.slice(0, limit);
   }
@@ -258,7 +258,7 @@ export function aggregateBySaleSupport(cars: Car[], limit = 80): BuyerCount[] {
       totalValueThb: v.totalValueThb,
       countBookedOver7Days: v.countBookedOver7Days,
     }))
-    .sort((a, b) => b.count - a.count || a.buyer.localeCompare(b.buyer, "th"))
+    .sort((a, b) => b.count - a.count || a.buyer.localeCompare(b.buyer, "en"))
     .slice(0, limit);
 }
 
@@ -285,7 +285,7 @@ export function computeModelYearInsight(cars: Car[]): ModelYearInsight | null {
 
   const sorted = Array.from(map.entries()).sort((a, b) => {
     if (b[1] !== a[1]) return b[1] - a[1];
-    return a[0].localeCompare(b[0], "th");
+    return a[0].localeCompare(b[0], "en");
   });
   const first = sorted[0];
   if (!first) return null;
