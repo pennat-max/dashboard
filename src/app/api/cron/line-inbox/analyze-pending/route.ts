@@ -94,7 +94,7 @@ async function handleCronAnalyzePending(request: Request) {
       ...result,
       cron: {
         path: "/api/cron/line-inbox/analyze-pending",
-        schedule: "*/5 * * * *",
+        schedule: "0 1 * * *",
       },
     },
     { status: result.ok ? 200 : 500 }
