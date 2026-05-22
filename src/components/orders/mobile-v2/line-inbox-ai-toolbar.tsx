@@ -1458,14 +1458,21 @@ function useLineInboxBridgeState({
           results?: Array<{
             inbox_message_id: string;
             saved_items?: Array<{ item_index: number; order_item_id: string }>;
+            reply_text?: string;
+            auto_reply?: {
+              enabled?: boolean;
+              attempted?: boolean;
+              sent?: boolean;
+              skipped_reason?: string;
+              error?: string;
+            };
           }>;
         };
         if (!res.ok) throw new Error(data.error || res.statusText);
 
+        const resultForMessage = data.results?.find((result) => result.inbox_message_id === m.inbox_id);
         const savedItems =
-          data.results?.flatMap((result) =>
-            result.inbox_message_id === m.inbox_id ? result.saved_items ?? [] : []
-          ) ?? [];
+          resultForMessage?.saved_items ?? [];
         let attachedPhotoCount = 0;
         const touchedRowKeys: string[] = [];
 
@@ -1500,10 +1507,21 @@ function useLineInboxBridgeState({
         }
 
         clearStagedForRowKeys(touchedRowKeys);
+        const autoReply = resultForMessage?.auto_reply;
+        const autoReplyHint =
+          autoReply?.sent
+            ? uiLang === "en"
+              ? " + sent LINE acknowledgement"
+              : " + ส่ง LINE รับทราบแล้ว"
+            : autoReply?.enabled && autoReply.skipped_reason && autoReply.skipped_reason !== "disabled"
+              ? uiLang === "en"
+                ? " + LINE auto-send skipped; copy-ready fallback is below"
+                : " + ส่ง LINE อัตโนมัติไม่สำเร็จ/ข้ามไว้ ใช้ข้อความคัดลอกด้านล่างแทน"
+              : "";
         setSaveHint(
           uiLang === "en"
-            ? `Saved ${selectedCount} item(s) from LINE queue${attachedPhotoCount ? ` + attached ${attachedPhotoCount} photo(s)` : ""}.`
-            : `บันทึกจากคิว LINE แล้ว ${selectedCount} งาน${attachedPhotoCount ? ` + แนบรูป ${attachedPhotoCount} รูป` : ""}`
+            ? `Saved ${selectedCount} item(s) from LINE queue${attachedPhotoCount ? ` + attached ${attachedPhotoCount} photo(s)` : ""}${autoReplyHint}.`
+            : `บันทึกจากคิว LINE แล้ว ${selectedCount} งาน${attachedPhotoCount ? ` + แนบรูป ${attachedPhotoCount} รูป` : ""}${autoReplyHint}`
         );
         const savedLines =
           actions.length > 0
@@ -1518,11 +1536,12 @@ function useLineInboxBridgeState({
                   status: line.suggested_status || "เช็ค",
                 }));
         setReplyText(
-          buildLineReplyText({
-            plate: m.plate_display || "",
-            lines: savedLines,
-            uiLang,
-          })
+          String(resultForMessage?.reply_text ?? "").trim() ||
+            buildLineReplyText({
+              plate: m.plate_display || "",
+              lines: savedLines,
+              uiLang,
+            })
         );
         await fetchQueue();
         onSaved?.();

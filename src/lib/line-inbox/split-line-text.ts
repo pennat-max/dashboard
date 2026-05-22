@@ -2,6 +2,7 @@
  * Heuristic LINE text -> task lines (aligned with order-intake ai-split guardrails).
  * Mentions/tags and conversation noise are returned as ignored context, not order items.
  */
+import { isLineInboxSystemAcknowledgementText } from "@/lib/line-inbox/acknowledgement";
 
 export type SplitLineTextResult = {
   items: string[];
@@ -220,6 +221,16 @@ export function splitLineTextForInbox(text: string): SplitLineTextResult {
   const ignoredVehicle: string[] = [];
   const ignoredMentions: string[] = [];
   const ignoredNoise: string[] = [];
+
+  if (isLineInboxSystemAcknowledgementText(text)) {
+    return {
+      items: [],
+      grouped_items: [],
+      ignored_vehicle_spec_lines: [],
+      ignored_mention_lines: [],
+      ignored_noise_lines: lines.slice(0, 30),
+    };
+  }
 
   for (const rawLine of lines) {
     if (looksLikeMentionOnly(rawLine)) {
