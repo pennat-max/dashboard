@@ -2128,6 +2128,33 @@ function useLineInboxBridgeState({
           {uiLang === "en" ? "New from LINE (AI)" : "AI เพิ่มมาใหม่จาก LINE"}
         </h3>
         {renderQueueGroupContent(group)}
+        {replyText ? (
+          <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-2.5 py-2 text-[11px] text-emerald-950">
+            <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+              <p className="font-bold">
+                {uiLang === "en" ? "Copy-ready LINE reply" : "ข้อความตอบ LINE หลังบันทึก พร้อมคัดลอก"}
+              </p>
+              <button
+                type="button"
+                onPointerDown={(e) => e.preventDefault()}
+                onClick={() => void copyReply()}
+                className="inline-flex min-h-8 items-center gap-1 rounded-full bg-slate-950 px-3 py-1 text-[11px] font-bold text-white touch-manipulation"
+              >
+                {replyCopied ? <Check className="h-3.5 w-3.5" aria-hidden /> : <Copy className="h-3.5 w-3.5" aria-hidden />}
+                {replyCopied
+                  ? uiLang === "en"
+                    ? "Copied"
+                    : "คัดลอกแล้ว"
+                  : uiLang === "en"
+                    ? "Copy"
+                    : "คัดลอก"}
+              </button>
+            </div>
+            <pre className="max-h-28 overflow-auto whitespace-pre-wrap rounded-lg bg-white/85 p-2 text-[11px] leading-relaxed text-slate-800 ring-1 ring-emerald-100">
+              {replyText}
+            </pre>
+          </div>
+        ) : null}
       </section>
     );
   };
