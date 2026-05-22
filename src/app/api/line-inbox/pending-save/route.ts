@@ -6,11 +6,22 @@ import {
   markLineInboxMessageWorkflowConfirmed,
   markLineInboxMessageWorkflowSkipped,
 } from "@/lib/line-inbox/line-inbox-messages";
+import { pushLineTextMessage } from "@/lib/line/push-message";
+import { buildLineApprovalAcknowledgementText } from "@/lib/line-inbox/acknowledgement";
 import type { DuplicateStatus, LineInboxAnalyzeItem, LineInboxAnalyzeResponse } from "@/lib/line-inbox/types";
 import { formatZodIssues, lineInboxPendingSaveBodySchema } from "@/lib/line-inbox/api-schemas";
 import { persistLineInboxConfirmations, type PersistConfirmRow } from "@/lib/line-inbox/persist-line-inbox-confirm";
 
 export const dynamic = "force-dynamic";
+
+type AutoReplyResult = {
+  enabled: boolean;
+  attempted: boolean;
+  sent: boolean;
+  target_type?: "group" | "user";
+  skipped_reason?: "disabled" | "missing_token" | "missing_target" | "unsupported_source" | "no_saved_items" | "line_error";
+  error?: string;
+};
 
 function isAnalyzePayload(body: unknown): body is LineInboxAnalyzeResponse {
   if (!body || typeof body !== "object") return false;
@@ -20,6 +31,117 @@ function isAnalyzePayload(body: unknown): body is LineInboxAnalyzeResponse {
 
 function displayNameForItem(item: LineInboxAnalyzeItem): string {
   return String(item.suggested_item_name ?? item.raw_text ?? "").trim() || String(item.raw_text ?? "").trim();
+}
+
+function isAutoReplyAfterApproveEnabled(): boolean {
+  return /^(1|true|yes|on|enabled)$/i.test(process.env.LINE_AUTO_REPLY_AFTER_APPROVE_ENABLED?.trim() ?? "");
+}
+
+function cleanLine(value: unknown): string {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function cleanErrorForLog(value: unknown): string {
+  const raw = value instanceof Error ? value.message : String(value ?? "");
+  return raw.replace(/\s+/g, " ").trim().slice(0, 300) || "LINE acknowledgement failed";
+}
+
+function detectedCarTitle(payload: LineInboxAnalyzeResponse): string {
+  const plate = cleanLine(payload.detected_car?.plate_text);
+  const spec = cleanLine(payload.detected_car?.spec_text);
+  const chassis = cleanLine(payload.detected_car?.chassis);
+  if (plate && spec && !spec.toLowerCase().startsWith(plate.toLowerCase())) return `${plate} ${spec}`;
+  return spec || plate || chassis;
+}
+
+function resolveLinePushTarget(row: {
+  source_type?: unknown;
+  group_id?: unknown;
+  user_id?: unknown;
+}): { target: string; targetType: "group" | "user" } | null {
+  const sourceType = cleanLine(row.source_type).toLowerCase();
+  if (sourceType === "group") {
+    const groupId = cleanLine(row.group_id);
+    return groupId ? { target: groupId, targetType: "group" } : null;
+  }
+
+  if (sourceType === "user" && process.env.LINE_ACCEPT_DM === "true") {
+    const userId = cleanLine(row.user_id);
+    return userId ? { target: userId, targetType: "user" } : null;
+  }
+
+  return null;
+}
+
+async function maybeSendApprovalAcknowledgement(params: {
+  row: { source_type?: unknown; group_id?: unknown; user_id?: unknown };
+  payload: LineInboxAnalyzeResponse;
+  approvedItemLabels: string[];
+}): Promise<{ autoReply: AutoReplyResult; replyText: string }> {
+  const replyText = buildLineApprovalAcknowledgementText({
+    carTitle: detectedCarTitle(params.payload),
+    approvedItems: params.approvedItemLabels,
+  });
+
+  if (!isAutoReplyAfterApproveEnabled()) {
+    return {
+      replyText,
+      autoReply: { enabled: false, attempted: false, sent: false, skipped_reason: "disabled" },
+    };
+  }
+
+  if (params.approvedItemLabels.length === 0) {
+    return {
+      replyText,
+      autoReply: { enabled: true, attempted: false, sent: false, skipped_reason: "no_saved_items" },
+    };
+  }
+
+  const token = process.env.LINE_CHANNEL_ACCESS_TOKEN?.trim() ?? "";
+  if (!token) {
+    return {
+      replyText,
+      autoReply: { enabled: true, attempted: false, sent: false, skipped_reason: "missing_token" },
+    };
+  }
+
+  const target = resolveLinePushTarget(params.row);
+  if (!target) {
+    return {
+      replyText,
+      autoReply: { enabled: true, attempted: false, sent: false, skipped_reason: "missing_target" },
+    };
+  }
+
+  const sent = await pushLineTextMessage({
+    accessToken: token,
+    to: target.target,
+    text: replyText,
+  });
+
+  if (!sent.ok) {
+    return {
+      replyText,
+      autoReply: {
+        enabled: true,
+        attempted: true,
+        sent: false,
+        target_type: target.targetType,
+        skipped_reason: "line_error",
+        error: sent.error,
+      },
+    };
+  }
+
+  return {
+    replyText,
+    autoReply: {
+      enabled: true,
+      attempted: true,
+      sent: true,
+      target_type: target.targetType,
+    },
+  };
 }
 
 /**
@@ -49,6 +171,8 @@ export async function POST(request: Request) {
     skipped: boolean;
     order_task_id: string | null;
     saved_items: Array<{ item_index: number; order_item_id: string; label: string; action: string }>;
+    reply_text?: string;
+    auto_reply?: AutoReplyResult;
   }> = [];
 
   try {
@@ -56,7 +180,7 @@ export async function POST(request: Request) {
       const inboxId = block.inbox_message_id;
       const { data: row, error: selErr } = await supabase
         .from(LINE_INBOX_MESSAGES_TABLE)
-        .select("id,workflow_status,analyze_payload,car_row_id")
+        .select("id,workflow_status,analyze_payload,car_row_id,source_type,group_id,user_id")
         .eq("id", inboxId)
         .maybeSingle();
 
@@ -165,8 +289,51 @@ export async function POST(request: Request) {
         line_inbox_msg_ref_for_audit: inboxId,
       });
 
+      const approvedItemLabels = saved.map((item) => item.label);
+      const autoReplyEnabled = isAutoReplyAfterApproveEnabled();
+      let acknowledged: Awaited<ReturnType<typeof maybeSendApprovalAcknowledgement>> = {
+        replyText: buildLineApprovalAcknowledgementText({
+          carTitle: detectedCarTitle(payloadRaw),
+          approvedItems: approvedItemLabels,
+        }),
+        autoReply: {
+          enabled: autoReplyEnabled,
+          attempted: false,
+          sent: false,
+          skipped_reason: approvedItemLabels.length === 0 ? "no_saved_items" : autoReplyEnabled ? "line_error" : "disabled",
+        },
+      };
+
       if (saved.length > 0) {
+        // Duplicate-send guard: this endpoint rejects non-pending inbox rows above.
+        // Marking confirmed before optional LINE push prevents the same approved
+        // action from being submitted again and sending another acknowledgement,
+        // without adding a schema/table marker.
         await markLineInboxMessageWorkflowConfirmed(supabase, inboxId);
+
+        try {
+          acknowledged = await maybeSendApprovalAcknowledgement({
+            row: row as { source_type?: unknown; group_id?: unknown; user_id?: unknown },
+            payload: payloadRaw,
+            approvedItemLabels,
+          });
+        } catch (error) {
+          const safeError = cleanErrorForLog(error);
+          console.warn("[line-inbox] approval acknowledgement skipped", {
+            inbox_message_id: inboxId,
+            error: safeError,
+          });
+          acknowledged = {
+            replyText: acknowledged.replyText,
+            autoReply: {
+              enabled: autoReplyEnabled,
+              attempted: autoReplyEnabled,
+              sent: false,
+              skipped_reason: "line_error",
+              error: safeError,
+            },
+          };
+        }
       }
 
       results.push({
@@ -180,6 +347,8 @@ export async function POST(request: Request) {
           label: item.label,
           action: item.action,
         })),
+        reply_text: acknowledged.replyText,
+        auto_reply: acknowledged.autoReply,
       });
     }
 

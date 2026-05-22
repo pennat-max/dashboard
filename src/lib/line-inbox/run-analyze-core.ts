@@ -4,6 +4,7 @@ import { resolveCarFromContext } from "@/lib/line-inbox/resolve-car";
 import { classifyDuplicateLine, suggestCategoryAndStatus } from "@/lib/line-inbox/heuristic-suggest";
 import { runLineInboxAiAnalyze, type LineInboxAiAnalyzeDraft } from "@/lib/line-inbox/ai-analyze";
 import { splitLineTextForInbox } from "@/lib/line-inbox/split-line-text";
+import { isLineInboxSystemAcknowledgementText } from "@/lib/line-inbox/acknowledgement";
 import type { ExistingOrderItemRow, LineInboxAnalyzeResponse } from "@/lib/line-inbox/types";
 
 export type RunLineInboxAnalyzeInput = {
@@ -159,6 +160,16 @@ function mergeAiWithRuleGuard(
   const ignoredVehicle = [...fallback.ignored_vehicle_spec_lines];
   const ignoredMention = [...fallback.ignored_mention_lines];
   const ignoredNoise = [...fallback.ignored_noise_lines];
+
+  if (isLineInboxSystemAcknowledgementText(rawText)) {
+    return {
+      lines: [],
+      ignored_vehicle_spec_lines: ignoredVehicle.slice(0, 30),
+      ignored_mention_lines: ignoredMention.slice(0, 30),
+      ignored_noise_lines: ignoredNoise.slice(0, 30),
+      aiNeedsHumanReview: false,
+    };
+  }
 
   for (const line of aiDraft?.ignored_vehicle_spec_lines ?? []) addUnique(ignoredVehicle, line);
   if (aiDraft?.detected_car_text) addUnique(ignoredVehicle, aiDraft.detected_car_text);
