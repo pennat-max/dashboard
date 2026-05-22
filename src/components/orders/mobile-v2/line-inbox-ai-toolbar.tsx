@@ -130,6 +130,8 @@ type SuggestionPhotoSheetState = {
   itemName?: string;
 };
 
+const LINE_ORDER_REVIEW_URL = "https://used-car-export-dashboard.vercel.app/m/orders";
+
 function defaultAction(item: LineInboxAnalyzeItem): RowDraft["action"] {
   if (item.duplicate_status === "duplicate" && String(item.matched_order_item_id ?? "").trim()) {
     return "merge";
@@ -187,36 +189,38 @@ function normalizeSearchText(value: string): string {
 
 function buildLineReplyText({
   plate,
-  lines,
   uiLang,
 }: {
   plate: string;
-  lines: Array<{ name: string; status: string }>;
   uiLang: UiLang;
 }): string {
   const safePlate = plate.trim() || "-";
-  const itemLines =
-    lines.length > 0
-      ? lines.map((line, index) => `${index + 1}. ${line.name.trim() || "-"} - ${line.status.trim() || "-"}`).join("\n")
-      : "-";
 
   if (uiLang === "en") {
     return [
-      "Received the request.",
-      `Car: ${safePlate}`,
-      "Items:",
-      itemLines,
-      "You can follow the status in Order Tracking.",
+      "Received the LINE request.",
+      "",
+      safePlate !== "-" ? `Car: ${safePlate}` : "The system is reading the LINE message.",
+      "Please review the AI result before saving:",
+      LINE_ORDER_REVIEW_URL,
     ].join("\n");
   }
 
   return [
-    "รับงานแล้วครับ",
-    `รถ: ${safePlate}`,
-    "รายการ:",
-    itemLines,
-    "ติดตามสถานะในระบบ Order Tracking ได้ครับ",
+    "รับงานแล้วครับ ✅",
+    "",
+    safePlate !== "-" ? `รถ: ${safePlate}` : "ระบบกำลังอ่านงานจาก LINE",
+    "กรุณาตรวจสอบงานที่ AI จับได้ก่อนบันทึก:",
+    LINE_ORDER_REVIEW_URL,
   ].join("\n");
+}
+
+function buildQueueAcceptedReplyText(group: PendingQueueGroup, uiLang: UiLang): string {
+  const carTitle = queueGroupDisplayTitle(group, uiLang);
+  return buildLineReplyText({
+    plate: group.is_unresolved ? "" : carTitle,
+    uiLang,
+  });
 }
 
 function addUniqueOption(target: string[], value: string | null | undefined) {
@@ -564,6 +568,7 @@ export function LineInboxAiToolbar({
   const [saveHint, setSaveHint] = useState<string | null>(null);
   const [replyText, setReplyText] = useState("");
   const [replyCopied, setReplyCopied] = useState(false);
+  const [copiedQueueReplyKey, setCopiedQueueReplyKey] = useState<string | null>(null);
 
   const [queueMessages, setQueueMessages] = useState<PendingQueueMessage[]>([]);
   const [queueGroups, setQueueGroups] = useState<PendingQueueGroup[]>([]);
@@ -1291,22 +1296,9 @@ export function LineInboxAiToolbar({
             ? `Saved ${selectedCount} item(s) from LINE queue${attachedPhotoCount ? ` + attached ${attachedPhotoCount} photo(s)` : ""}.`
             : `บันทึกจากคิว LINE แล้ว ${selectedCount} งาน${attachedPhotoCount ? ` + แนบรูป ${attachedPhotoCount} รูป` : ""}`
         );
-        const savedLines =
-          actions.length > 0
-            ? actions.map((line) => ({
-                name: String(line.item_name ?? "").trim(),
-                status: String(line.item_status ?? "").trim() || "เช็ค",
-              }))
-            : m.new_lines
-                .filter((line) => indices.includes(line.item_index))
-                .map((line) => ({
-                  name: line.suggested_item_name || line.raw_text,
-                  status: line.suggested_status || "เช็ค",
-                }));
         setReplyText(
           buildLineReplyText({
             plate: m.plate_display || "",
-            lines: savedLines,
             uiLang,
           })
         );
@@ -1429,6 +1421,21 @@ export function LineInboxAiToolbar({
     }
   }, [replyText, uiLang]);
 
+  const copyQueueReply = useCallback(
+    async (group: PendingQueueGroup) => {
+      const text = buildQueueAcceptedReplyText(group, uiLang).trim();
+      if (!text) return;
+      try {
+        await navigator.clipboard.writeText(text);
+        setCopiedQueueReplyKey(group.group_key);
+        window.setTimeout(() => setCopiedQueueReplyKey((current) => (current === group.group_key ? null : current)), 1400);
+      } catch {
+        window.prompt(uiLang === "en" ? "Copy LINE reply" : "คัดลอกข้อความตอบ LINE", text);
+      }
+    },
+    [uiLang]
+  );
+
   const runConfirm = useCallback(async () => {
     setError(null);
     setSaveHint(null);
@@ -1530,10 +1537,6 @@ export function LineInboxAiToolbar({
       setReplyText(
         buildLineReplyText({
           plate: detectedOrder?.fullPlate || selected?.fullPlate || detected?.plate_text || "",
-          lines: selectedRows.map((row) => ({
-            name: String(row.itemName || row.suggested_item_name || row.raw_text).trim(),
-            status: String(row.status || row.suggested_status || "เช็ค").trim(),
-          })),
           uiLang,
         })
       );
@@ -1697,7 +1700,10 @@ export function LineInboxAiToolbar({
                 )
               ) : (
                 <ul className="max-h-[min(58vh,520px)] space-y-3 overflow-y-auto overscroll-contain pr-1">
-                  {queueGroups.map((group) => (
+                  {queueGroups.map((group) => {
+                    const acceptedReplyText = buildQueueAcceptedReplyText(group, uiLang);
+                    const acceptedReplyCopied = copiedQueueReplyKey === group.group_key;
+                    return (
                     <li
                       key={group.group_key}
                       className="rounded-2xl border border-slate-200 bg-slate-50/90 p-3 ring-1 ring-slate-100"
@@ -1722,6 +1728,31 @@ export function LineInboxAiToolbar({
                             {uiLang === "en" ? "Needs car" : "ต้องเลือกรถ"}
                           </span>
                         ) : null}
+                      </div>
+
+                      <div className="mb-2.5 rounded-xl border border-sky-200 bg-sky-50 px-2.5 py-2 text-[11px] text-sky-950">
+                        <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+                          <p className="font-bold">
+                            {uiLang === "en" ? "Copy-ready LINE acknowledgement" : "ข้อความรับงาน LINE พร้อมคัดลอก"}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => void copyQueueReply(group)}
+                            className="inline-flex min-h-8 items-center gap-1 rounded-full bg-slate-950 px-3 py-1 text-[11px] font-bold text-white touch-manipulation"
+                          >
+                            {acceptedReplyCopied ? <Check className="h-3.5 w-3.5" aria-hidden /> : <Copy className="h-3.5 w-3.5" aria-hidden />}
+                            {acceptedReplyCopied
+                              ? uiLang === "en"
+                                ? "Copied"
+                                : "คัดลอกแล้ว"
+                              : uiLang === "en"
+                                ? "Copy"
+                                : "คัดลอก"}
+                          </button>
+                        </div>
+                        <pre className="max-h-28 overflow-auto whitespace-pre-wrap rounded-lg bg-white/85 p-2 text-[11px] leading-relaxed text-slate-800 ring-1 ring-sky-100">
+                          {acceptedReplyText}
+                        </pre>
                       </div>
 
                       {group.attachments.length > 0 ? (
@@ -1962,7 +1993,8 @@ export function LineInboxAiToolbar({
                         })}
                       </div>
                     </li>
-                  ))}
+                    );
+                  })}
                 </ul>
               )
             ) : queueTab === "photos" ? (
