@@ -33,7 +33,7 @@ import { isStaffRosterNameExcluded, normalizeStaffRosterNames } from "@/lib/orde
 import { buildOrderTrackingShareOpenUrl } from "@/lib/line/order-tracking-share-url";
 import {
   LineInboxBridgeProvider,
-  LineInboxAiSearchButton,
+  LineInboxFloatingNavigator,
   LineInboxCarAiSection,
   type LineInboxPickCarPayload,
 } from "@/components/orders/mobile-v2/line-inbox-ai-toolbar";
@@ -6824,7 +6824,6 @@ export function MobileOrderTrackingHome({
               >
                 {uiLang === "en" ? "Clear" : "ล้าง"}
               </button>
-              <LineInboxAiSearchButton />
             </div>
           </div>
         </div>
@@ -7981,6 +7980,7 @@ export function MobileOrderTrackingHome({
         </main>
       </div>
     </div>
+        <LineInboxFloatingNavigator />
       </LineInboxBridgeProvider>
     </>
   );

@@ -562,17 +562,62 @@ type LineInboxCarPickerRow = {
   jobCount: number;
   photoCount: number;
   isUnresolved: boolean;
+  latestMessageAt: number;
 };
 
 type LineInboxBridgeContextValue = {
   uiLang: UiLang;
   open: boolean;
   setOpen: (open: boolean) => void;
-  searchChip: ReactNode;
-  carPickerPanel: ReactNode;
+  floatingNavigator: ReactNode;
   overlays: ReactNode;
   renderCarAiSection: (orderId: string, carRowId: string | null, active: boolean) => ReactNode;
 };
+
+function todayYmdBangkok(): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Bangkok" });
+}
+
+function ymdBangkokFromIso(iso: string): string {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return "";
+  return new Date(t).toLocaleDateString("en-CA", { timeZone: "Asia/Bangkok" });
+}
+
+function groupLatestReceivedMs(group: PendingQueueGroup): number {
+  let max = 0;
+  for (const m of group.messages) {
+    const t = Date.parse(m.received_at);
+    if (Number.isFinite(t) && t > max) max = t;
+  }
+  for (const a of group.attachments ?? []) {
+    const t = Date.parse(a.received_at);
+    if (Number.isFinite(t) && t > max) max = t;
+  }
+  return max;
+}
+
+/** Car has pending LINE/AI work with activity received today (Bangkok). */
+function groupHasLineWorkToday(group: PendingQueueGroup, todayYmd: string): boolean {
+  const messageToday = group.messages.some((m) => {
+    if (ymdBangkokFromIso(m.received_at) !== todayYmd) return false;
+    const jobs = (m.action_lines?.length ?? 0) + Math.max(0, m.new_line_count ?? 0);
+    return jobs > 0;
+  });
+  const photoToday = (group.attachments ?? []).some((a) => ymdBangkokFromIso(a.received_at) === todayYmd);
+  return messageToday || photoToday;
+}
+
+function formatLatestLineMessageTime(ms: number, uiLang: UiLang): string {
+  if (!ms) return "";
+  return new Date(ms).toLocaleString(uiLang === "en" ? "en-US" : "th-TH", {
+    timeZone: "Asia/Bangkok",
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
 const LineInboxBridgeContext = createContext<LineInboxBridgeContextValue | null>(null);
 
@@ -597,14 +642,10 @@ export function LineInboxBridgeProvider({
   );
 }
 
-export function LineInboxAiSearchButton({ className }: { className?: string }) {
-  const { searchChip, carPickerPanel, open } = useLineInboxBridge();
-  return (
-    <div className={cn("relative shrink-0", className)}>
-      {searchChip}
-      {open ? carPickerPanel : null}
-    </div>
-  );
+/** Fixed bottom-right FAB + car list bottom sheet (Issue #64). */
+export function LineInboxFloatingNavigator() {
+  const { floatingNavigator } = useLineInboxBridge();
+  return <>{floatingNavigator}</>;
 }
 
 export function LineInboxCarAiSection({
@@ -620,11 +661,11 @@ export function LineInboxCarAiSection({
   return <>{renderCarAiSection(orderId, carRowId, active)}</>;
 }
 
-/** @deprecated Use LineInboxBridgeProvider + LineInboxAiSearchButton for per-car flow. */
+/** @deprecated Use LineInboxBridgeProvider + LineInboxFloatingNavigator. */
 export function LineInboxAiToolbar(props: LineInboxAiToolbarProps) {
   return (
     <LineInboxBridgeProvider {...props}>
-      <LineInboxAiSearchButton />
+      <LineInboxFloatingNavigator />
     </LineInboxBridgeProvider>
   );
 }
@@ -960,8 +1001,10 @@ function useLineInboxBridgeState({
       : "งานใหม่";
 
   const carPickerRows = useMemo((): LineInboxCarPickerRow[] => {
+    const todayYmd = todayYmdBangkok();
     const rows: LineInboxCarPickerRow[] = [];
     for (const group of queueGroups) {
+      if (!groupHasLineWorkToday(group, todayYmd)) continue;
       const carRowId = String(group.car_row_id ?? "").trim() || null;
       const matched = carRowId
         ? orders.find((o) => String(o.carRowId ?? "").trim() === carRowId)
@@ -979,14 +1022,14 @@ function useLineInboxBridgeState({
         jobCount,
         photoCount,
         isUnresolved: group.is_unresolved,
+        latestMessageAt: groupLatestReceivedMs(group),
       });
     }
-    return rows.sort((a, b) => {
-      const plateCmp = a.plate.localeCompare(b.plate, "th", { numeric: true, sensitivity: "base" });
-      if (plateCmp !== 0) return plateCmp;
-      return (a.orderId ?? "").localeCompare(b.orderId ?? "");
-    });
+    return rows.sort((a, b) => b.latestMessageAt - a.latestMessageAt);
   }, [orders, queueGroups]);
+
+  /** Badge = number of cars with LINE/AI work today (not line count). */
+  const lineInboxCarCountToday = carPickerRows.length;
 
   const toggleQueueLine = useCallback((inboxId: string, itemIndex: number) => {
     setQueueDeselected((prev) => {
@@ -1703,80 +1746,120 @@ function useLineInboxBridgeState({
     uploadSuggestionPhotos,
   ]);
 
-  const searchChip = (
-    <button
-      type="button"
-      onPointerDown={(e) => e.preventDefault()}
-      onClick={() => setOpen(!open)}
-      className={cn(
-        "relative inline-flex h-10 shrink-0 items-center gap-1.5 rounded-2xl px-3 text-xs font-bold touch-manipulation ring-1",
-        open
-          ? "bg-violet-800 text-white ring-violet-600"
-          : "bg-violet-600 text-white ring-violet-500/80 active:bg-violet-700"
-      )}
-      aria-expanded={open}
-    >
-      <span>AI · LINE</span>
-      {showBadgeDot ? (
-        <span className="rounded-full bg-rose-600 px-1.5 py-0.5 text-[11px] font-bold tabular-nums ring-1 ring-white/80">
-          {queueBadgeIsPhotoLed
-            ? uiLang === "en"
-              ? `${queuePhotoCount} photos`
-              : `รูปใหม่ ${queuePhotoCount}`
-            : uiLang === "en"
-              ? `${rawBadgeTotal} new`
-              : `${aiLineBadgeLabel} ${rawBadgeTotal > 99 ? "99+" : rawBadgeTotal}`}
-        </span>
-      ) : null}
-    </button>
+  const carDrawerList = (
+    <ul className="space-y-2 overflow-y-auto overscroll-contain pb-2 pr-0.5">
+      {carPickerRows.map((row) => (
+        <li key={row.groupKey}>
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              onPickCar?.({ orderId: row.orderId, carRowId: row.carRowId, plate: row.plate });
+            }}
+            className="w-full rounded-2xl bg-slate-50 px-3 py-3 text-left ring-1 ring-slate-200/80 touch-manipulation active:bg-violet-50"
+          >
+            <div className="flex items-start justify-between gap-2">
+              <p className="min-w-0 flex-1 truncate text-base font-bold text-slate-950">{row.plate}</p>
+              {row.latestMessageAt > 0 ? (
+                <span className="shrink-0 text-[10px] font-semibold tabular-nums text-slate-500">
+                  {formatLatestLineMessageTime(row.latestMessageAt, uiLang)}
+                </span>
+              ) : null}
+            </div>
+            {row.spec ? (
+              <p className="mt-0.5 line-clamp-2 text-[12px] font-medium text-slate-600">{row.spec}</p>
+            ) : null}
+            <div className="mt-1.5 flex flex-wrap gap-1.5 text-[10px] font-semibold text-slate-500">
+              {row.sale ? <span className="rounded-full bg-white px-2 py-0.5 ring-1 ring-slate-200">{row.sale}</span> : null}
+              {row.jobCount > 0 ? (
+                <span className="rounded-full bg-emerald-50 px-1.5 py-0.5 text-emerald-800 ring-1 ring-emerald-200">
+                  {uiLang === "en" ? `${row.jobCount} new jobs` : `งานใหม่ ${row.jobCount}`}
+                </span>
+              ) : null}
+              {row.photoCount > 0 ? (
+                <span className="rounded-full bg-violet-50 px-1.5 py-0.5 text-violet-800 ring-1 ring-violet-200">
+                  {uiLang === "en" ? `${row.photoCount} LINE photos` : `รูป LINE ${row.photoCount}`}
+                </span>
+              ) : null}
+            </div>
+          </button>
+        </li>
+      ))}
+    </ul>
   );
 
-  const carPickerPanel = (
-    <div className="absolute left-0 right-0 top-full z-50 mt-1.5 min-w-[18rem] max-w-[min(100vw-1rem,28rem)] rounded-2xl border border-violet-200 bg-white p-2 shadow-lg ring-1 ring-violet-100 sm:left-auto sm:right-0">
-      <p className="mb-2 px-1 text-[11px] font-bold uppercase tracking-wide text-violet-800">
-        {uiLang === "en" ? "Cars with new LINE work" : "รถที่มีงานใหม่จาก LINE"}
-      </p>
-      {queueLoading ? (
-        <p className="px-1 py-2 text-[12px] text-slate-500">{uiLang === "en" ? "Loading…" : "กำลังโหลด…"}</p>
-      ) : carPickerRows.length === 0 ? (
-        <p className="px-1 py-2 text-[12px] text-slate-500">
-          {uiLang === "en" ? "No pending LINE work." : "ยังไม่มีงานใหม่จาก LINE"}
-        </p>
-      ) : (
-        <ul className="max-h-[420px] space-y-1.5 overflow-y-auto overscroll-contain pr-0.5">
-          {carPickerRows.map((row) => (
-            <li key={row.groupKey}>
+  const floatingNavigator = (
+    <>
+      <button
+        type="button"
+        onPointerDown={(e) => e.preventDefault()}
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        aria-label={uiLang === "en" ? "LINE cars with new work today" : "รถที่มีงานใหม่จาก LINE วันนี้"}
+        className={cn(
+          "fixed z-[65] flex h-14 min-w-[3.5rem] items-center justify-center gap-1 rounded-full px-4 text-xs font-bold text-white shadow-lg ring-2 touch-manipulation",
+          "bottom-[max(1rem,env(safe-area-inset-bottom))] right-[max(0.75rem,env(safe-area-inset-right))]",
+          open ? "bg-violet-800 ring-violet-500" : "bg-violet-600 ring-violet-400/80 active:bg-violet-700"
+        )}
+      >
+        <span className="leading-tight">AI · LINE</span>
+        {lineInboxCarCountToday > 0 ? (
+          <span className="absolute -right-0.5 -top-0.5 flex h-[22px] min-w-[22px] items-center justify-center rounded-full bg-rose-600 px-1 text-[11px] font-bold tabular-nums ring-2 ring-white">
+            {lineInboxCarCountToday > 99 ? "99+" : lineInboxCarCountToday}
+          </span>
+        ) : null}
+      </button>
+
+      {open ? (
+        <>
+          <button
+            type="button"
+            aria-label={uiLang === "en" ? "Close" : "ปิด"}
+            className="fixed inset-0 z-[70] bg-black/45 touch-manipulation"
+            onClick={() => setOpen(false)}
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="line-inbox-car-drawer-title"
+            className="fixed inset-x-0 bottom-0 z-[71] flex max-h-[min(85vh,640px)] flex-col rounded-t-2xl bg-white shadow-2xl ring-1 ring-slate-200/80"
+            style={{ paddingBottom: "max(env(safe-area-inset-bottom), 0px)" }}
+          >
+            <div className="mx-auto mt-2 h-1 w-10 shrink-0 rounded-full bg-slate-300" />
+            <div className="shrink-0 border-b border-slate-100 px-4 pb-3 pt-3">
+              <h2 id="line-inbox-car-drawer-title" className="text-base font-bold text-violet-950">
+                {uiLang === "en" ? "Cars with new LINE work today" : "รถที่มีงานใหม่จาก LINE วันนี้"}
+              </h2>
+              <p className="mt-1 text-[11px] font-medium text-slate-500">
+                {uiLang === "en"
+                  ? `${lineInboxCarCountToday} car(s) · tap to open card`
+                  : `${lineInboxCarCountToday} คัน · แตะเพื่อไปการ์ดรถ`}
+              </p>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto px-3 pt-2">
+              {queueLoading ? (
+                <p className="py-6 text-center text-sm text-slate-500">{uiLang === "en" ? "Loading…" : "กำลังโหลด…"}</p>
+              ) : carPickerRows.length === 0 ? (
+                <p className="py-6 text-center text-sm text-slate-500">
+                  {uiLang === "en" ? "No cars with new LINE work today." : "วันนี้ยังไม่มีรถที่มีงานใหม่จาก LINE"}
+                </p>
+              ) : (
+                carDrawerList
+              )}
+            </div>
+            <div className="shrink-0 px-4 py-3">
               <button
                 type="button"
-                onClick={() => {
-                  setOpen(false);
-                  onPickCar?.({ orderId: row.orderId, carRowId: row.carRowId, plate: row.plate });
-                }}
-                className="w-full rounded-xl bg-slate-50 px-3 py-2.5 text-left ring-1 ring-slate-200/80 touch-manipulation active:bg-violet-50"
+                onClick={() => setOpen(false)}
+                className="h-11 w-full rounded-2xl bg-slate-100 text-sm font-semibold text-slate-800 touch-manipulation"
               >
-                <p className="truncate text-sm font-bold text-slate-950">{row.plate}</p>
-                {row.spec ? (
-                  <p className="mt-0.5 line-clamp-2 text-[11px] font-medium text-slate-600">{row.spec}</p>
-                ) : null}
-                <div className="mt-1 flex flex-wrap gap-1.5 text-[10px] font-semibold text-slate-500">
-                  {row.sale ? <span>{row.sale}</span> : null}
-                  {row.jobCount > 0 ? (
-                    <span className="rounded-full bg-emerald-50 px-1.5 py-0.5 text-emerald-800 ring-1 ring-emerald-200">
-                      {uiLang === "en" ? `${row.jobCount} new` : `งานใหม่ ${row.jobCount}`}
-                    </span>
-                  ) : null}
-                  {row.photoCount > 0 ? (
-                    <span className="rounded-full bg-violet-50 px-1.5 py-0.5 text-violet-800 ring-1 ring-violet-200">
-                      {uiLang === "en" ? `${row.photoCount} photos` : `รูป ${row.photoCount}`}
-                    </span>
-                  ) : null}
-                </div>
+                {uiLang === "en" ? "Close" : "ปิด"}
               </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
+            </div>
+          </div>
+        </>
+      ) : null}
+    </>
   );
 
   const renderQueueGroupContent = (group: PendingQueueGroup) => (
@@ -2149,8 +2232,7 @@ function useLineInboxBridgeState({
     uiLang,
     open,
     setOpen,
-    searchChip,
-    carPickerPanel,
+    floatingNavigator,
     overlays,
     renderCarAiSection,
   };
