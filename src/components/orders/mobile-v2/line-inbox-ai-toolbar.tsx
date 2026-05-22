@@ -783,11 +783,18 @@ export function LineInboxAiToolbar({
   );
   const queueHasOnlyPhotos =
     queueActionCount === 0 && queueMessageCount === 0 && pendingSaveCount === 0 && queuePhotoCount > 0;
-  const rawBadgeTotal = queueHasOnlyPhotos
+  /** No new text, but LINE photos waiting — badge should not read as generic "งานใหม่" from action-line totals alone. */
+  const queueBadgePrefersPhotos =
+    queueMessageCount === 0 &&
+    pendingSaveCount === 0 &&
+    queuePhotoCount > 0 &&
+    queueActionCount > 0;
+  const queueBadgeIsPhotoLed = queueHasOnlyPhotos || queueBadgePrefersPhotos;
+  const rawBadgeTotal = queueBadgeIsPhotoLed
     ? queuePhotoCount
     : (queueActionCount || queueMessageCount) + pendingSaveCount;
   const showBadgeDot = rawBadgeTotal > 0;
-  const aiLineBadgeLabel = queueHasOnlyPhotos
+  const aiLineBadgeLabel = queueBadgeIsPhotoLed
     ? uiLang === "en"
       ? "new photos"
       : "รูปใหม่"
@@ -1517,7 +1524,7 @@ export function LineInboxAiToolbar({
         onPointerDown={(e) => e.preventDefault()}
         onClick={() => {
           const nextOpen = !open;
-          if (nextOpen && queueHasOnlyPhotos) setQueueTab("photos");
+          if (nextOpen && queueBadgeIsPhotoLed && queueMessageCount === 0) setQueueTab("photos");
           setOpen(nextOpen);
         }}
         className={cn(
