@@ -12,6 +12,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { Check, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { resolveSaleStaffForOrder } from "@/lib/orders/sale-assignees-shared";
@@ -140,6 +141,8 @@ type SuggestionPhotoSheetState = {
   itemName?: string;
 };
 
+const LINE_ORDER_REVIEW_URL = "https://used-car-export-dashboard.vercel.app/m/orders";
+
 function defaultAction(item: LineInboxAnalyzeItem): RowDraft["action"] {
   if (item.duplicate_status === "duplicate" && String(item.matched_order_item_id ?? "").trim()) {
     return "merge";
@@ -227,6 +230,42 @@ function buildLineReplyText({
     itemLines,
     "ติดตามสถานะในระบบ Order Tracking ได้ครับ",
   ].join("\n");
+}
+
+function buildLineAcknowledgementReplyText({
+  plate,
+  uiLang,
+}: {
+  plate: string;
+  uiLang: UiLang;
+}): string {
+  const safePlate = plate.trim() || "-";
+
+  if (uiLang === "en") {
+    return [
+      "Received the LINE request.",
+      "",
+      safePlate !== "-" ? `Car: ${safePlate}` : "The system is reading the LINE message.",
+      "Please review the AI result before saving:",
+      LINE_ORDER_REVIEW_URL,
+    ].join("\n");
+  }
+
+  return [
+    "รับงานแล้วครับ",
+    "",
+    safePlate !== "-" ? `รถ: ${safePlate}` : "ระบบกำลังอ่านงานจาก LINE",
+    "กรุณาตรวจสอบงานที่ AI จับได้ก่อนบันทึก:",
+    LINE_ORDER_REVIEW_URL,
+  ].join("\n");
+}
+
+function buildQueueAcceptedReplyText(group: PendingQueueGroup, uiLang: UiLang): string {
+  const carTitle = queueGroupDisplayTitle(group, uiLang);
+  return buildLineAcknowledgementReplyText({
+    plate: group.is_unresolved ? "" : carTitle,
+    uiLang,
+  });
 }
 
 function addUniqueOption(target: string[], value: string | null | undefined) {
@@ -707,6 +746,7 @@ function useLineInboxBridgeState({
   const [saveHint, setSaveHint] = useState<string | null>(null);
   const [replyText, setReplyText] = useState("");
   const [replyCopied, setReplyCopied] = useState(false);
+  const [copiedQueueReplyKey, setCopiedQueueReplyKey] = useState<string | null>(null);
 
   const [queueMessages, setQueueMessages] = useState<PendingQueueMessage[]>([]);
   const [queueGroups, setQueueGroups] = useState<PendingQueueGroup[]>([]);
@@ -1603,6 +1643,24 @@ function useLineInboxBridgeState({
     }
   }, [replyText, uiLang]);
 
+  const copyQueueReply = useCallback(
+    async (group: PendingQueueGroup) => {
+      const text = buildQueueAcceptedReplyText(group, uiLang).trim();
+      if (!text) return;
+      try {
+        await navigator.clipboard.writeText(text);
+        setCopiedQueueReplyKey(group.group_key);
+        window.setTimeout(
+          () => setCopiedQueueReplyKey((current) => (current === group.group_key ? null : current)),
+          1400
+        );
+      } catch {
+        window.prompt(uiLang === "en" ? "Copy LINE reply" : "คัดลอกข้อความตอบ LINE", text);
+      }
+    },
+    [uiLang]
+  );
+
   const runConfirm = useCallback(async () => {
     setError(null);
     setSaveHint(null);
@@ -1874,8 +1932,35 @@ function useLineInboxBridgeState({
     </>
   );
 
-  const renderQueueGroupContent = (group: PendingQueueGroup) => (
+  const renderQueueGroupContent = (group: PendingQueueGroup) => {
+    const acceptedReplyText = buildQueueAcceptedReplyText(group, uiLang);
+    const acceptedReplyCopied = copiedQueueReplyKey === group.group_key;
+    return (
     <div className="space-y-3">
+      <div className="rounded-xl border border-sky-200 bg-sky-50 px-2.5 py-2 text-[11px] text-sky-950">
+        <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+          <p className="font-bold">
+            {uiLang === "en" ? "Copy-ready LINE acknowledgement" : "ข้อความรับงาน LINE พร้อมคัดลอก"}
+          </p>
+          <button
+            type="button"
+            onClick={() => void copyQueueReply(group)}
+            className="inline-flex min-h-8 items-center gap-1 rounded-full bg-slate-950 px-3 py-1 text-[11px] font-bold text-white touch-manipulation"
+          >
+            {acceptedReplyCopied ? <Check className="h-3.5 w-3.5" aria-hidden /> : <Copy className="h-3.5 w-3.5" aria-hidden />}
+            {acceptedReplyCopied
+              ? uiLang === "en"
+                ? "Copied"
+                : "คัดลอกแล้ว"
+              : uiLang === "en"
+                ? "Copy"
+                : "คัดลอก"}
+          </button>
+        </div>
+        <pre className="max-h-28 overflow-auto whitespace-pre-wrap rounded-lg bg-white/85 p-2 text-[11px] leading-relaxed text-slate-800 ring-1 ring-sky-100">
+          {acceptedReplyText}
+        </pre>
+      </div>
       {group.attachments.length > 0 ? (
         <div>
           <p className="mb-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-500">
@@ -2026,7 +2111,8 @@ function useLineInboxBridgeState({
         );
       })}
     </div>
-  );
+    );
+  };
 
   const renderCarAiSection = (orderId: string, carRowId: string | null, active: boolean) => {
     if (!active || String(focusedOrderId ?? "").trim() !== orderId) return null;
