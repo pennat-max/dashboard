@@ -267,10 +267,11 @@ function safeQueueAction(action: string): QueueActionDraft["action"] {
   return "create";
 }
 
-function imageOnlyQueueMessage(uiLang: UiLang): string {
+function imageOnlyQueueMessage(uiLang: UiLang, count: number): string {
+  const safeCount = Math.max(0, count);
   return uiLang === "en"
-    ? "No new text work, but LINE photos are waiting for review."
-    : "ไม่มีงานข้อความใหม่ แต่มีรูปจาก LINE รอจัดการ";
+    ? `No new text messages, but ${safeCount} LINE photo(s) are waiting for review — open the LINE photos tab.`
+    : `ไม่มีข้อความใหม่ แต่มีรูปจาก LINE ${safeCount} รูปรอจัดการ — กดแท็บ รูปจาก LINE`;
 }
 
 function formatQueueAttachmentTime(value: string): string {
@@ -770,9 +771,29 @@ export function LineInboxAiToolbar({
     ? stagedLineAttachments[suggestionPhotoSheet.rowKey] ?? []
     : [];
 
-  const queueBadgeTotal = queueTotalAction || queueTotalNew || queueAttachments.length;
-  const rawBadgeTotal = queueBadgeTotal + pendingSaveCount;
+  const queueActionCount = Math.max(0, queueTotalAction);
+  const queueMessageCount = Math.max(
+    0,
+    queueTotalNew || queueMessages.reduce((sum, message) => sum + Math.max(0, message.new_line_count || 0), 0)
+  );
+  const queuePhotoCount = queueAttachments.length;
+  const queueMessagesWithNewLines = useMemo(
+    () => queueMessages.filter((message) => (message.new_line_count || 0) > 0 && message.new_lines.length > 0),
+    [queueMessages]
+  );
+  const queueHasOnlyPhotos =
+    queueActionCount === 0 && queueMessageCount === 0 && pendingSaveCount === 0 && queuePhotoCount > 0;
+  const rawBadgeTotal = queueHasOnlyPhotos
+    ? queuePhotoCount
+    : (queueActionCount || queueMessageCount) + pendingSaveCount;
   const showBadgeDot = rawBadgeTotal > 0;
+  const aiLineBadgeLabel = queueHasOnlyPhotos
+    ? uiLang === "en"
+      ? "new photos"
+      : "รูปใหม่"
+    : uiLang === "en"
+      ? "new jobs"
+      : "งานใหม่";
 
   const toggleQueueLine = useCallback((inboxId: string, itemIndex: number) => {
     setQueueDeselected((prev) => {
@@ -1494,7 +1515,11 @@ export function LineInboxAiToolbar({
       <button
         type="button"
         onPointerDown={(e) => e.preventDefault()}
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => {
+          const nextOpen = !open;
+          if (nextOpen && queueHasOnlyPhotos) setQueueTab("photos");
+          setOpen(nextOpen);
+        }}
         className={cn(
           "relative flex min-h-[52px] min-w-[5.25rem] max-w-[9rem] shrink-0 flex-col items-center justify-center gap-1 rounded-xl px-2 py-2 text-center transition-colors touch-manipulation",
           open
@@ -1510,7 +1535,7 @@ export function LineInboxAiToolbar({
       >
         <span className="line-clamp-2 max-w-full text-[11px] font-semibold leading-snug">AI · LINE</span>
         <span className="text-[10px] font-medium leading-tight opacity-90">
-          {uiLang === "en" ? "new jobs" : "งานใหม่"}
+          {aiLineBadgeLabel}
         </span>
         {showBadgeDot ? (
           <span className="absolute -right-1 -top-1 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-rose-600 px-1 text-[11px] font-bold text-white ring-2 ring-white">
@@ -1527,19 +1552,31 @@ export function LineInboxAiToolbar({
             </p>
             <p className="mb-2 text-[10px] leading-snug text-slate-600">
               {uiLang === "en"
-                ? `Action queue · ${queueTotalAction || queueTotalNew} pending action(s) · ${queueAttachments.length} photo(s) · auto-refresh ~45s`
-                : `รอจัดการ · ${queueTotalAction || queueTotalNew} รายการ · รูป ${queueAttachments.length} · รีเฟรชอัตโนมัติ ~45 วินาที`}
+                ? `Action queue · ${queueActionCount} action(s) · messages ${queueMessageCount} · photos ${queuePhotoCount} · auto-refresh ~45s`
+                : `รอจัดการ · ${queueActionCount} รายการ · ข้อความ ${queueMessageCount} · รูป ${queuePhotoCount} · รีเฟรชอัตโนมัติ ~45 วินาที`}
             </p>
             <div className="mb-3 flex gap-1 overflow-x-auto pb-1">
               {[
-                { key: "actions" as const, label: uiLang === "en" ? "Action queue" : "รอจัดการ" },
-                { key: "messages" as const, label: uiLang === "en" ? "Messages" : "ข้อความเข้าใหม่" },
+                {
+                  key: "actions" as const,
+                  label:
+                    uiLang === "en"
+                      ? `Action queue (${queueActionCount})`
+                      : `รอจัดการ (${queueActionCount})`,
+                },
+                {
+                  key: "messages" as const,
+                  label:
+                    uiLang === "en"
+                      ? `Messages (${queueMessageCount})`
+                      : `ข้อความเข้าใหม่ (${queueMessageCount})`,
+                },
                 {
                   key: "photos" as const,
                   label:
                     uiLang === "en"
-                      ? `LINE photos (${queueAttachments.length})`
-                      : `รูปจาก LINE (${queueAttachments.length})`,
+                      ? `LINE photos (${queuePhotoCount})`
+                      : `รูปจาก LINE (${queuePhotoCount})`,
                 },
               ].map((tab) => (
                 <button
@@ -1562,8 +1599,8 @@ export function LineInboxAiToolbar({
                 <p className="text-[11px] text-slate-500">{uiLang === "en" ? "Loading…" : "กำลังโหลด…"}</p>
               ) : queueGroups.length === 0 ? (
                 <p className="text-[11px] text-slate-500">
-                  {queueAttachments.length > 0
-                    ? imageOnlyQueueMessage(uiLang)
+                  {queuePhotoCount > 0
+                    ? imageOnlyQueueMessage(uiLang, queuePhotoCount)
                     : uiLang === "en"
                       ? "No analyzed LINE actions are waiting."
                       : "ยังไม่มีรายการ LINE ที่รอจัดการ"}
@@ -1915,17 +1952,17 @@ export function LineInboxAiToolbar({
               )
             ) : queueLoading ? (
               <p className="text-[11px] text-slate-500">{uiLang === "en" ? "Loading…" : "กำลังโหลด…"}</p>
-            ) : queueMessages.length === 0 ? (
+            ) : queueMessagesWithNewLines.length === 0 ? (
               <p className="text-[11px] text-slate-500">
-                {queueAttachments.length > 0
-                  ? imageOnlyQueueMessage(uiLang)
+                {queuePhotoCount > 0
+                  ? imageOnlyQueueMessage(uiLang, queuePhotoCount)
                   : uiLang === "en"
                     ? "No pending new jobs from LINE."
                     : "ยังไม่มีงานใหม่ค้างจาก LINE"}
               </p>
             ) : (
               <ul className="max-h-[min(45vh,280px)] space-y-3 overflow-y-auto overscroll-contain pr-1">
-                {queueMessages.map((m) => {
+                {queueMessagesWithNewLines.map((m) => {
                   const selectedIdx = selectedIndicesForInbox(m);
                   return (
                     <li
