@@ -2,6 +2,7 @@
 
 import React, {
   Fragment,
+  useCallback,
   useId,
   useMemo,
   useDeferredValue,
@@ -30,7 +31,12 @@ import {
 } from "@/lib/orders/sale-assignees-shared";
 import { isStaffRosterNameExcluded, normalizeStaffRosterNames } from "@/lib/orders/staff-roster-shared";
 import { buildOrderTrackingShareOpenUrl } from "@/lib/line/order-tracking-share-url";
-import { LineInboxAiToolbar } from "@/components/orders/mobile-v2/line-inbox-ai-toolbar";
+import {
+  LineInboxBridgeProvider,
+  LineInboxFloatingNavigator,
+  LineInboxCarAiSection,
+  type LineInboxPickCarPayload,
+} from "@/components/orders/mobile-v2/line-inbox-ai-toolbar";
 import {
   ORDER_ITEM_REF_PIC_EN,
   ORDER_ITEM_TAM_ROOP_TOKEN,
@@ -2300,6 +2306,7 @@ const OrderCard = React.memo(function OrderCard({
   toolbarStaffFilters,
   toolbarStatusFilters,
   onLiveItemsChange,
+  lineInboxActive = false,
 }: {
   order: Order;
   uiLang: UiLang;
@@ -2316,6 +2323,8 @@ const OrderCard = React.memo(function OrderCard({
   toolbarStatusFilters: Set<ItemStatusFilterValue | typeof ITEM_STATUS_DUE_TODAY>;
   /** แจ้งแม่ให้รวมรายการล่าสุดใน mappedOrders — ชิปนับอัปเดตทันที */
   onLiveItemsChange?: (orderId: string, items: OrderItem[]) => void;
+  /** เปิดการ์ดและไฮไลต์คิว AI · LINE ในการ์ด */
+  lineInboxActive?: boolean;
 }) {
   const router = useRouter();
   const pathname = usePathname() || "/m/orders";
@@ -2326,6 +2335,9 @@ const OrderCard = React.memo(function OrderCard({
     }))
   );
   const [showAllItems, setShowAllItems] = useState(false);
+  useEffect(() => {
+    if (lineInboxActive) setShowAllItems(true);
+  }, [lineInboxActive]);
   /** ขยายดูแถวที่ไม่ตรงตัวกรองพนักงาน/สถานะ (โหมดเดิมชั่วคราว) */
   const [toolbarOthersExpanded, setToolbarOthersExpanded] = useState(false);
   const [showCost, setShowCost] = useState(false);
@@ -3826,7 +3838,10 @@ const OrderCard = React.memo(function OrderCard({
   return (
     <article
       id={`order-card-${order.id}`}
-      className="rounded-none bg-white px-2 py-2.5 shadow-sm ring-1 ring-slate-200/60 sm:rounded-2xl sm:px-3 sm:py-3"
+      className={cn(
+        "rounded-none bg-white px-2 py-2.5 shadow-sm ring-1 ring-slate-200/60 sm:rounded-2xl sm:px-3 sm:py-3",
+        lineInboxActive && "ring-2 ring-violet-400"
+      )}
     >
       <div className="mb-2 flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
@@ -4087,6 +4102,12 @@ const OrderCard = React.memo(function OrderCard({
           </div>
         </div>
       ) : null}
+
+      <LineInboxCarAiSection
+        orderId={order.id}
+        carRowId={order.carRowId}
+        active={lineInboxActive}
+      />
 
       <div className="space-y-1">
         {compareItems.map((item) => {
@@ -4742,6 +4763,7 @@ export function MobileOrderTrackingHome({
   const [experimentRequestedCount, setExperimentRequestedCount] = useState(ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT);
   const [experimentLoadingDetails, setExperimentLoadingDetails] = useState(false);
   const [experimentDetailError, setExperimentDetailError] = useState<string | null>(null);
+  const [lineInboxFocusOrderId, setLineInboxFocusOrderId] = useState<string | null>(null);
 
   useEffect(() => {
     if (orderChipCacheExperimentEnabled) return;
@@ -6288,6 +6310,49 @@ export function MobileOrderTrackingHome({
     void hydrateExperimentDetails(experimentWantedOrders);
   }, [experimentWantedOrders, hydrateExperimentDetails, orderChipCacheExperimentEnabled]);
 
+  const focusLineInboxCar = useCallback(
+    async (payload: LineInboxPickCarPayload) => {
+      if (!payload.orderId) return;
+      setLineInboxFocusOrderId(payload.orderId);
+      setSaleFilters(new Set());
+      setSaleStatusFilters(new Set());
+      setStaffFilters(new Set());
+      setItemStatusFilters(new Set());
+      const q = String(payload.plate ?? "").trim();
+      if (q && q !== "-") setVehicleSearch(sanitizeVehicleSearchInput(q));
+
+      const order = mappedOrders.find((o) => o.id === payload.orderId);
+      if (order && orderChipCacheExperimentEnabled) {
+        await hydrateExperimentDetails([order]);
+      }
+
+      const idx = visible.findIndex((o) => o.id === payload.orderId);
+      if (idx >= 0) {
+        setVisibleLimit((prev) => Math.max(prev, idx + 1));
+        setExperimentRequestedCount((prev) =>
+          Math.max(prev, idx + 1 + ORDER_TRACKING_EXPERIMENT_AHEAD_BUFFER)
+        );
+      }
+
+      const tryScroll = (attempt = 0) => {
+        const el = document.getElementById(`order-card-${payload.orderId}`);
+        if (el) {
+          el.scrollIntoView({ behavior: "smooth", block: "start" });
+          window.requestAnimationFrame(() => {
+            document.getElementById("line-inbox-car-ai-section")?.scrollIntoView({
+              behavior: "smooth",
+              block: "nearest",
+            });
+          });
+          return;
+        }
+        if (attempt < 16) window.requestAnimationFrame(() => tryScroll(attempt + 1));
+      };
+      window.requestAnimationFrame(() => tryScroll());
+    },
+    [hydrateExperimentDetails, mappedOrders, orderChipCacheExperimentEnabled, visible]
+  );
+
   const deepLinkSetupRef = useRef(false);
   const deepLinkScrollDoneRef = useRef(false);
   useEffect(() => {
@@ -6676,6 +6741,17 @@ export function MobileOrderTrackingHome({
           </div>
         </div>
       ) : null}
+      <LineInboxBridgeProvider
+        orders={lineInboxAiOrderPicks}
+        uiLang={uiLang}
+        preferredOrderId={initialFocusedOrderId}
+        staffOptions={staffRoster}
+        saleAssigneesBySale={saleAssignees}
+        statusOptions={itemStatusRoster}
+        focusedOrderId={lineInboxFocusOrderId}
+        onPickCar={(payload) => void focusLineInboxCar(payload)}
+        onSaved={() => router.refresh()}
+      >
       <div
         ref={orderTrackingRootRef}
         className="flex min-h-0 min-h-full w-full flex-1 flex-col bg-slate-100 antialiased text-[15px] leading-normal text-slate-800"
@@ -7808,15 +7884,6 @@ export function MobileOrderTrackingHome({
                       <div className="text-xs font-medium leading-snug">{uiLang === "en" ? "Show all" : "แสดงทั้งหมด"}</div>
                       <div className="text-base font-semibold tabular-nums">{itemStatusTotalCount}</div>
                     </button>
-                    <LineInboxAiToolbar
-                      orders={lineInboxAiOrderPicks}
-                      uiLang={uiLang}
-                      preferredOrderId={initialFocusedOrderId}
-                      staffOptions={staffRoster}
-                      saleAssigneesBySale={saleAssignees}
-                      statusOptions={itemStatusRoster}
-                      onSaved={() => router.refresh()}
-                    />
                     {itemStatusFilterOptionsForToolbar.map((s) => (
                       <button
                         key={s}
@@ -7846,7 +7913,7 @@ export function MobileOrderTrackingHome({
               </div>
           </>
         </header>
-        <main className="px-0 pb-3 pt-0 sm:px-3">
+        <main className="px-0 pb-[calc(4.75rem+env(safe-area-inset-bottom,0px))] pt-0 sm:px-3">
             <div className="space-y-3 pb-4">
               {visiblePagedForRender.map((order) => (
                 <OrderCard
@@ -7862,6 +7929,7 @@ export function MobileOrderTrackingHome({
                   toolbarStaffFilters={filteringStaffFilters}
                   toolbarStatusFilters={filteringItemStatusFilters}
                   onLiveItemsChange={handleOrderLiveItemsChange}
+                  lineInboxActive={lineInboxFocusOrderId === order.id}
                 />
               ))}
               {orderChipCacheExperimentEnabled && experimentLoadingDetails && experimentMissingWantedCount > 0 ? (
@@ -7912,6 +7980,8 @@ export function MobileOrderTrackingHome({
         </main>
       </div>
     </div>
+        <LineInboxFloatingNavigator />
+      </LineInboxBridgeProvider>
     </>
   );
 }
