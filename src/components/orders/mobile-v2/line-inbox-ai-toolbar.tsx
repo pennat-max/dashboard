@@ -67,6 +67,14 @@ type PendingQueueAttachment = {
   file_name: string | null;
   mime_type: string | null;
   received_at: string;
+  source_label?: string;
+  raw_text_preview?: string;
+  car_row_id?: string;
+  plate_display?: string;
+  car_title?: string;
+  sale?: string;
+  needs_human_review?: boolean;
+  status?: "not_linked" | "attached" | "ignored" | string;
 };
 
 type PendingQueueGroup = {
@@ -257,6 +265,29 @@ function queueActionDraftForLine(
 function safeQueueAction(action: string): QueueActionDraft["action"] {
   if (action === "merge" || action === "skip") return action;
   return "create";
+}
+
+function imageOnlyQueueMessage(uiLang: UiLang, count: number): string {
+  const safeCount = Math.max(0, count);
+  return uiLang === "en"
+    ? `No new text messages, but ${safeCount} LINE photo(s) are waiting for review — open the LINE photos tab.`
+    : `ไม่มีข้อความใหม่ แต่มีรูปจาก LINE ${safeCount} รูปรอจัดการ — กดแท็บ รูปจาก LINE`;
+}
+
+function formatQueueAttachmentTime(value: string): string {
+  if (!value) return "";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString();
+}
+
+function queueAttachmentCarLabel(attachment: PendingQueueAttachment, uiLang: UiLang): string {
+  const carTitle = String(attachment.car_title ?? "").trim();
+  const plate = String(attachment.plate_display ?? "").trim();
+  const sale = String(attachment.sale ?? "").trim();
+  const base = carTitle || plate;
+  if (!base) return uiLang === "en" ? "No car selected yet" : "ยังไม่ได้เลือกรถ";
+  return sale ? `${base} · ${sale}` : base;
 }
 
 function revokeStagedPhotoMap(map: Record<string, LineInboxStagedPhoto[]>) {
@@ -740,8 +771,36 @@ export function LineInboxAiToolbar({
     ? stagedLineAttachments[suggestionPhotoSheet.rowKey] ?? []
     : [];
 
-  const rawBadgeTotal = (queueTotalAction || queueTotalNew) + pendingSaveCount;
+  const queueActionCount = Math.max(0, queueTotalAction);
+  const queueMessageCount = Math.max(
+    0,
+    queueTotalNew || queueMessages.reduce((sum, message) => sum + Math.max(0, message.new_line_count || 0), 0)
+  );
+  const queuePhotoCount = queueAttachments.length;
+  const queueMessagesWithNewLines = useMemo(
+    () => queueMessages.filter((message) => (message.new_line_count || 0) > 0 && message.new_lines.length > 0),
+    [queueMessages]
+  );
+  const queueHasOnlyPhotos =
+    queueActionCount === 0 && queueMessageCount === 0 && pendingSaveCount === 0 && queuePhotoCount > 0;
+  /** No new text, but LINE photos waiting — badge should not read as generic "งานใหม่" from action-line totals alone. */
+  const queueBadgePrefersPhotos =
+    queueMessageCount === 0 &&
+    pendingSaveCount === 0 &&
+    queuePhotoCount > 0 &&
+    queueActionCount > 0;
+  const queueBadgeIsPhotoLed = queueHasOnlyPhotos || queueBadgePrefersPhotos;
+  const rawBadgeTotal = queueBadgeIsPhotoLed
+    ? queuePhotoCount
+    : (queueActionCount || queueMessageCount) + pendingSaveCount;
   const showBadgeDot = rawBadgeTotal > 0;
+  const aiLineBadgeLabel = queueBadgeIsPhotoLed
+    ? uiLang === "en"
+      ? "new photos"
+      : "รูปใหม่"
+    : uiLang === "en"
+      ? "new jobs"
+      : "งานใหม่";
 
   const toggleQueueLine = useCallback((inboxId: string, itemIndex: number) => {
     setQueueDeselected((prev) => {
@@ -1251,6 +1310,44 @@ export function LineInboxAiToolbar({
     [clearStagedForRowKeys, fetchQueue, onSaved, uiLang]
   );
 
+  const skipImageOnlyAttachment = useCallback(
+    async (attachment: PendingQueueAttachment) => {
+      const inboxId = String(attachment.inbox_id ?? "").trim();
+      if (!inboxId) return;
+      setSavingInboxId(inboxId);
+      setError(null);
+      setSaveHint(null);
+      try {
+        const res = await fetch("/api/line-inbox/pending-save", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({
+            saves: [{ inbox_message_id: inboxId, skip_all: true }],
+          }),
+        });
+        const data = (await res.json()) as { ok?: boolean; error?: string };
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        setStagedLineAttachments((prev) => {
+          const next: Record<string, PendingQueueAttachment[]> = {};
+          for (const [rowKey, list] of Object.entries(prev)) {
+            const kept = list.filter((item) => item.line_message_id !== attachment.line_message_id);
+            if (kept.length > 0) next[rowKey] = kept;
+          }
+          return next;
+        });
+        setSaveHint(uiLang === "en" ? "Skipped this LINE photo." : "ข้ามรูปจาก LINE นี้แล้ว");
+        await fetchQueue();
+        onSaved?.();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setSavingInboxId(null);
+      }
+    },
+    [fetchQueue, onSaved, uiLang]
+  );
+
   useEffect(() => {
     if (!suggestionPhotoSheet) return;
     if (!suggestionPhotoSheetItemId || !canUseSuggestionPhotoSheet) {
@@ -1425,7 +1522,11 @@ export function LineInboxAiToolbar({
       <button
         type="button"
         onPointerDown={(e) => e.preventDefault()}
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => {
+          const nextOpen = !open;
+          if (nextOpen && queueBadgeIsPhotoLed && queueMessageCount === 0) setQueueTab("photos");
+          setOpen(nextOpen);
+        }}
         className={cn(
           "relative flex min-h-[52px] min-w-[5.25rem] max-w-[9rem] shrink-0 flex-col items-center justify-center gap-1 rounded-xl px-2 py-2 text-center transition-colors touch-manipulation",
           open
@@ -1441,7 +1542,7 @@ export function LineInboxAiToolbar({
       >
         <span className="line-clamp-2 max-w-full text-[11px] font-semibold leading-snug">AI · LINE</span>
         <span className="text-[10px] font-medium leading-tight opacity-90">
-          {uiLang === "en" ? "new jobs" : "งานใหม่"}
+          {aiLineBadgeLabel}
         </span>
         {showBadgeDot ? (
           <span className="absolute -right-1 -top-1 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-rose-600 px-1 text-[11px] font-bold text-white ring-2 ring-white">
@@ -1458,14 +1559,32 @@ export function LineInboxAiToolbar({
             </p>
             <p className="mb-2 text-[10px] leading-snug text-slate-600">
               {uiLang === "en"
-                ? `Action queue · ${queueTotalAction || queueTotalNew} pending action(s) · auto-refresh ~45s`
-                : `รอจัดการ · ${queueTotalAction || queueTotalNew} รายการ · รีเฟรชอัตโนมัติ ~45 วินาที`}
+                ? `Action queue · ${queueActionCount} action(s) · messages ${queueMessageCount} · photos ${queuePhotoCount} · auto-refresh ~45s`
+                : `รอจัดการ · ${queueActionCount} รายการ · ข้อความ ${queueMessageCount} · รูป ${queuePhotoCount} · รีเฟรชอัตโนมัติ ~45 วินาที`}
             </p>
             <div className="mb-3 flex gap-1 overflow-x-auto pb-1">
               {[
-                { key: "actions" as const, label: uiLang === "en" ? "Action queue" : "รอจัดการ" },
-                { key: "messages" as const, label: uiLang === "en" ? "Messages" : "ข้อความเข้าใหม่" },
-                { key: "photos" as const, label: uiLang === "en" ? "LINE photos" : "รูปจาก LINE" },
+                {
+                  key: "actions" as const,
+                  label:
+                    uiLang === "en"
+                      ? `Action queue (${queueActionCount})`
+                      : `รอจัดการ (${queueActionCount})`,
+                },
+                {
+                  key: "messages" as const,
+                  label:
+                    uiLang === "en"
+                      ? `Messages (${queueMessageCount})`
+                      : `ข้อความเข้าใหม่ (${queueMessageCount})`,
+                },
+                {
+                  key: "photos" as const,
+                  label:
+                    uiLang === "en"
+                      ? `LINE photos (${queuePhotoCount})`
+                      : `รูปจาก LINE (${queuePhotoCount})`,
+                },
               ].map((tab) => (
                 <button
                   key={tab.key}
@@ -1487,7 +1606,11 @@ export function LineInboxAiToolbar({
                 <p className="text-[11px] text-slate-500">{uiLang === "en" ? "Loading…" : "กำลังโหลด…"}</p>
               ) : queueGroups.length === 0 ? (
                 <p className="text-[11px] text-slate-500">
-                  {uiLang === "en" ? "No analyzed LINE actions are waiting." : "ยังไม่มีรายการ LINE ที่รอจัดการ"}
+                  {queuePhotoCount > 0
+                    ? imageOnlyQueueMessage(uiLang, queuePhotoCount)
+                    : uiLang === "en"
+                      ? "No analyzed LINE actions are waiting."
+                      : "ยังไม่มีรายการ LINE ที่รอจัดการ"}
                 </p>
               ) : (
                 <ul className="max-h-[min(58vh,520px)] space-y-3 overflow-y-auto overscroll-contain pr-1">
@@ -1731,30 +1854,122 @@ export function LineInboxAiToolbar({
               queueAttachments.length === 0 ? (
                 <p className="text-[11px] text-slate-500">{uiLang === "en" ? "No captured LINE photos yet." : "ยังไม่มีรูปจาก LINE"}</p>
               ) : (
-                <div className="grid max-h-[min(45vh,320px)] grid-cols-4 gap-2 overflow-y-auto pr-1">
-                  {queueAttachments.slice(0, 40).map((attachment) => (
-                    <a
-                      key={`${attachment.line_message_id}-${attachment.url}`}
-                      href={attachment.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="block overflow-hidden rounded-xl bg-slate-100 ring-1 ring-slate-200"
-                    >
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={attachment.url} alt="" className="aspect-square w-full object-cover" loading="lazy" />
-                    </a>
-                  ))}
+                <div className="grid max-h-[min(52vh,420px)] gap-2 overflow-y-auto pr-1 sm:grid-cols-2">
+                  {queueAttachments.slice(0, 40).map((attachment) => {
+                    const busy = savingInboxId === attachment.inbox_id;
+                    const timeLabel = formatQueueAttachmentTime(attachment.received_at);
+                    const matchedOrder = orders.find(
+                      (order) =>
+                        String(order.carRowId ?? "").trim() &&
+                        String(order.carRowId ?? "").trim() === String(attachment.car_row_id ?? "").trim()
+                    );
+                    return (
+                      <article
+                        key={`${attachment.line_message_id}-${attachment.url}`}
+                        className="overflow-hidden rounded-2xl bg-slate-50 ring-1 ring-slate-200"
+                      >
+                        <a
+                          href={attachment.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="block overflow-hidden bg-slate-100"
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={attachment.url}
+                            alt={uiLang === "en" ? "LINE photo waiting for review" : "รูปจาก LINE รอจัดการ"}
+                            className="aspect-[4/3] w-full object-cover"
+                            loading="lazy"
+                          />
+                        </a>
+                        <div className="space-y-2 p-2">
+                          <div className="flex flex-wrap items-center justify-between gap-1 text-[10px] font-semibold text-slate-500">
+                            <span>{attachment.source_label || "LINE"}</span>
+                            {timeLabel ? <span>{timeLabel}</span> : null}
+                          </div>
+                          <p className="line-clamp-2 text-[12px] font-bold leading-snug text-slate-950">
+                            {queueAttachmentCarLabel(attachment, uiLang)}
+                          </p>
+                          <div className="flex flex-wrap gap-1.5">
+                            <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-800 ring-1 ring-amber-200">
+                              {uiLang === "en" ? "Not linked" : "ยังไม่แนบงาน"}
+                            </span>
+                            {attachment.needs_human_review ? (
+                              <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-bold text-violet-700 ring-1 ring-violet-200">
+                                review
+                              </span>
+                            ) : null}
+                          </div>
+                          {attachment.raw_text_preview &&
+                          attachment.raw_text_preview !== "[LINE image]" &&
+                          attachment.raw_text_preview !== "[LINE file]" ? (
+                            <p className="line-clamp-2 rounded-lg bg-white px-2 py-1 text-[10px] text-slate-500 ring-1 ring-slate-200">
+                              {attachment.raw_text_preview}
+                            </p>
+                          ) : null}
+                          <div className="grid grid-cols-3 gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (matchedOrder) {
+                                  setSelectedOrderId(matchedOrder.id);
+                                  setCarSearch(matchedOrder.fullPlate || matchedOrder.car || "");
+                                  setSaveHint(uiLang === "en" ? "Car selected. Choose a task row to attach the photo." : "เลือกรถแล้ว เลือกแถวงานเพื่อแนบรูป");
+                                  return;
+                                }
+                                setCarSearch(attachment.plate_display || attachment.car_title || "");
+                                setSaveHint(uiLang === "en" ? "Search/select the car manually before attaching this photo." : "ค้นหา/เลือกรถก่อนแนบรูปนี้");
+                              }}
+                              className="min-h-9 rounded-full bg-white px-2 text-[10px] font-bold text-slate-700 ring-1 ring-slate-200 touch-manipulation"
+                            >
+                              {uiLang === "en" ? "Car" : "เลือกรถ"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSaveHint(
+                                  uiLang === "en"
+                                    ? "Open a task row with a photo reference, then choose this LINE photo in the item photo sheet."
+                                    : "เปิดแถวงานที่มี ตามรูป/ตามภาพ แล้วเลือกรูปนี้จากหน้ารูปตามรายการ"
+                                );
+                              }}
+                              className="min-h-9 rounded-full bg-sky-50 px-2 text-[10px] font-bold text-sky-700 ring-1 ring-sky-200 touch-manipulation"
+                            >
+                              {uiLang === "en" ? "Attach" : "แนบงาน"}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => void skipImageOnlyAttachment(attachment)}
+                              className={cn(
+                                "min-h-9 rounded-full px-2 text-[10px] font-bold ring-1 touch-manipulation",
+                                busy
+                                  ? "bg-slate-100 text-slate-400 ring-slate-200"
+                                  : "bg-white text-rose-700 ring-rose-200"
+                              )}
+                            >
+                              {busy ? (uiLang === "en" ? "..." : "...") : uiLang === "en" ? "Skip" : "ข้าม"}
+                            </button>
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })}
                 </div>
               )
             ) : queueLoading ? (
               <p className="text-[11px] text-slate-500">{uiLang === "en" ? "Loading…" : "กำลังโหลด…"}</p>
-            ) : queueMessages.length === 0 ? (
+            ) : queueMessagesWithNewLines.length === 0 ? (
               <p className="text-[11px] text-slate-500">
-                {uiLang === "en" ? "No pending new jobs from LINE." : "ยังไม่มีงานใหม่ค้างจาก LINE"}
+                {queuePhotoCount > 0
+                  ? imageOnlyQueueMessage(uiLang, queuePhotoCount)
+                  : uiLang === "en"
+                    ? "No pending new jobs from LINE."
+                    : "ยังไม่มีงานใหม่ค้างจาก LINE"}
               </p>
             ) : (
               <ul className="max-h-[min(45vh,280px)] space-y-3 overflow-y-auto overscroll-contain pr-1">
-                {queueMessages.map((m) => {
+                {queueMessagesWithNewLines.map((m) => {
                   const selectedIdx = selectedIndicesForInbox(m);
                   return (
                     <li
