@@ -22,6 +22,7 @@ const VEHICLE_BODY_SPEC_RE =
   /(D[-\s]?CAB|DOUBLE[_\s-]?CAB|SMART[_\s-]?CAB|CAB|DC|2WD|4WD|AT|MT|7AT|6AT|STANDARD|HIGH|LOW|PRE[-\s]?RUNNER|\b[123]\.\d\b|ป้ายแดง)/i;
 const VEHICLE_COLOR_YEAR_RE =
   /(SILVER|BLACK|WHITE|GRAY|GREY|BLUE|RED|GREEN|ORANGE|BRONZE|BROWN|GOLD|YELLOW|PEARL|ป้ายแดง|JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC|\b(?:19|20)\d{2}\b|[A-Z][a-z]{2}\d{2})/i;
+const RED_PLATE_CONTEXT_RE = /^ป้ายแดง$/i;
 const STOCK_NUMBER_RE = /\b\d{4,6}\b/;
 const WORK_INTENT_RE =
   /(กรอไมล์|เลขไมล์|กันสาด|โรบาร์|สติ๊กเกอร์|ฟิล์ม|บันได|กันชน|แร็ค|แรค|ฝาครอบ|ไฟ|กล้อง|เซ็นเซอร์|ยาง|ล้อ|แบต|แบตเตอรี่|โช้ค|ยกสูง|ป้าย|เอกสาร|ซ่อม|เปลี่ยน|ขาด|แตก|เสีย|หาย|ต้องสั่ง|ส่งอู่|ทำสี|ตรวจ|เช็ค|ติด|ติดตั้ง|เพิ่ม|ใส่|แปลง|ล้าง|ขัด|เคลือบ|เก็บงาน|ประเมิน|รับงาน|งาน)/i;
@@ -152,6 +153,7 @@ function looksLikeStockSpecContext(raw: string): boolean {
 }
 
 function looksLikeVehicleContext(raw: string): boolean {
+  if (RED_PLATE_CONTEXT_RE.test(raw)) return true;
   if (looksLikeStockSpecContext(raw)) return true;
   if (STRONG_WORK_INTENT_RE.test(raw)) return false;
   const hasThaiPlateLike = THAI_PLATE_RE.test(raw);
