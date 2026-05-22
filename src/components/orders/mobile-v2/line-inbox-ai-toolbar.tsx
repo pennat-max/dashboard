@@ -1628,7 +1628,7 @@ export function LineInboxAiToolbar({
                   accent: "bg-slate-100 text-slate-800 ring-slate-200",
                 },
                 {
-                  label: uiLang === "en" ? "New text" : "ข้อความใหม่",
+                  label: uiLang === "en" ? "New messages" : "ข้อความเข้าใหม่",
                   count: queueMessageCount,
                   accent: "bg-emerald-50 text-emerald-900 ring-emerald-200",
                 },
