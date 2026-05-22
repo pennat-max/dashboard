@@ -267,11 +267,66 @@ function safeQueueAction(action: string): QueueActionDraft["action"] {
   return "create";
 }
 
+function formatQueueTabLabel(base: string, count: number): string {
+  return count > 0 ? `${base} (${count})` : base;
+}
+
+function duplicateLabel(uiLang: UiLang, status: DuplicateStatus): string {
+  if (uiLang === "en") {
+    switch (status) {
+      case "new":
+        return "New";
+      case "duplicate":
+        return "Duplicate";
+      case "possible_duplicate":
+        return "Maybe dup.";
+      default:
+        return "Unclear";
+    }
+  }
+  return duplicateLabelTh(status);
+}
+
+function queueGroupDisplayTitle(group: PendingQueueGroup, uiLang: UiLang): string {
+  const plate = String(group.plate_display ?? "").trim();
+  const title = String(group.car_title ?? "").trim();
+  if (title && plate && plate !== "-" && normalizeLookup(title).includes(normalizeLookup(plate))) {
+    return title;
+  }
+  if (title) return title;
+  if (plate && plate !== "-") return plate;
+  return uiLang === "en" ? "Unmatched car" : "ยังไม่จับรถ";
+}
+
 function imageOnlyQueueMessage(uiLang: UiLang, count: number): string {
   const safeCount = Math.max(0, count);
   return uiLang === "en"
-    ? `No new text messages, but ${safeCount} LINE photo(s) are waiting for review — open the LINE photos tab.`
-    : `ไม่มีข้อความใหม่ แต่มีรูปจาก LINE ${safeCount} รูปรอจัดการ — กดแท็บ รูปจาก LINE`;
+    ? `No new text messages. ${safeCount} LINE photo(s) are waiting for review.`
+    : `ไม่มีข้อความใหม่ มีรูปจาก LINE ${safeCount} รูปรอตรวจ`;
+}
+
+function ImageOnlyEmptyCallout({
+  uiLang,
+  photoCount,
+  onOpenPhotosTab,
+}: {
+  uiLang: UiLang;
+  photoCount: number;
+  onOpenPhotosTab: () => void;
+}) {
+  if (photoCount <= 0) return null;
+  return (
+    <div className="rounded-xl bg-violet-50/90 px-3 py-3 ring-1 ring-violet-200">
+      <p className="text-[12px] leading-relaxed text-violet-950">{imageOnlyQueueMessage(uiLang, photoCount)}</p>
+      <button
+        type="button"
+        onClick={onOpenPhotosTab}
+        className="mt-2.5 min-h-11 w-full rounded-full bg-violet-700 px-4 text-[12px] font-bold text-white ring-1 ring-violet-600 touch-manipulation active:bg-violet-800"
+      >
+        {uiLang === "en" ? `Open LINE photos (${photoCount})` : `เปิดแท็บ รูปจาก LINE (${photoCount})`}
+      </button>
+    </div>
+  );
 }
 
 function formatQueueAttachmentTime(value: string): string {
@@ -359,7 +414,7 @@ function LineInboxInlineSelectLink({
       title={title}
       aria-label={title}
       className={cn(
-        "h-10 min-h-[40px] w-[76px] min-w-[4.5rem] shrink-0 touch-manipulation rounded-full border-0 px-2 py-1.5 text-xs font-semibold shadow-sm outline-none ring-1 focus-visible:ring-2 sm:w-[88px]",
+        "h-11 min-h-[44px] w-[76px] min-w-[4.5rem] shrink-0 touch-manipulation rounded-full border-0 px-2 py-1.5 text-xs font-semibold shadow-sm outline-none ring-1 focus-visible:ring-2 sm:w-[88px]",
         className
       )}
     >
@@ -1535,14 +1590,22 @@ export function LineInboxAiToolbar({
         )}
         aria-expanded={open}
         title={
-          uiLang === "en"
-            ? "LINE group queue + paste to analyze"
-            : "คิวจากกลุ่ม LINE + วางข้อความวิเคราะห์"
+          queueBadgeIsPhotoLed
+            ? uiLang === "en"
+              ? `${queuePhotoCount} LINE photo(s) waiting · open panel for thumbnails`
+              : `รูปจาก LINE รอตรวจ ${queuePhotoCount} รูป · เปิดเพื่อดูแท็บรูป`
+            : uiLang === "en"
+              ? `LINE queue · action ${queueActionCount} · new text ${queueMessageCount} · photos ${queuePhotoCount}`
+              : `คิว LINE · รอจัดการ ${queueActionCount} · ข้อความใหม่ ${queueMessageCount} · รูป ${queuePhotoCount}`
         }
       >
         <span className="line-clamp-2 max-w-full text-[11px] font-semibold leading-snug">AI · LINE</span>
         <span className="text-[10px] font-medium leading-tight opacity-90">
-          {aiLineBadgeLabel}
+          {queueBadgeIsPhotoLed
+            ? uiLang === "en"
+              ? `${queuePhotoCount} photo${queuePhotoCount === 1 ? "" : "s"}`
+              : `รูปใหม่ ${queuePhotoCount}`
+            : aiLineBadgeLabel}
         </span>
         {showBadgeDot ? (
           <span className="absolute -right-1 -top-1 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-rose-600 px-1 text-[11px] font-bold text-white ring-2 ring-white">
@@ -1557,33 +1620,49 @@ export function LineInboxAiToolbar({
             <p className="mb-1 text-[11px] font-bold uppercase tracking-wide text-violet-800">
               {uiLang === "en" ? "From LINE group (queue)" : "จากกลุ่ม LINE (คิว)"}
             </p>
-            <p className="mb-2 text-[10px] leading-snug text-slate-600">
-              {uiLang === "en"
-                ? `Action queue · ${queueActionCount} action(s) · messages ${queueMessageCount} · photos ${queuePhotoCount} · auto-refresh ~45s`
-                : `รอจัดการ · ${queueActionCount} รายการ · ข้อความ ${queueMessageCount} · รูป ${queuePhotoCount} · รีเฟรชอัตโนมัติ ~45 วินาที`}
+            <div className="mb-2 grid grid-cols-3 gap-1.5 text-center">
+              {[
+                {
+                  label: uiLang === "en" ? "Action" : "รอจัดการ",
+                  count: queueActionCount,
+                  accent: "bg-slate-100 text-slate-800 ring-slate-200",
+                },
+                {
+                  label: uiLang === "en" ? "New messages" : "ข้อความเข้าใหม่",
+                  count: queueMessageCount,
+                  accent: "bg-emerald-50 text-emerald-900 ring-emerald-200",
+                },
+                {
+                  label: uiLang === "en" ? "Photos" : "รูป LINE",
+                  count: queuePhotoCount,
+                  accent: "bg-violet-50 text-violet-900 ring-violet-200",
+                },
+              ].map((stat) => (
+                <div
+                  key={stat.label}
+                  className={cn("rounded-lg px-1.5 py-1.5 text-[10px] font-semibold ring-1", stat.accent)}
+                >
+                  <div className="tabular-nums text-sm font-bold">{stat.count}</div>
+                  <div className="leading-tight">{stat.label}</div>
+                </div>
+              ))}
+            </div>
+            <p className="mb-2 text-[10px] text-slate-500">
+              {uiLang === "en" ? "Auto-refresh ~45s" : "รีเฟรชอัตโนมัติ ~45 วินาที"}
             </p>
-            <div className="mb-3 flex gap-1 overflow-x-auto pb-1">
+            <div className="mb-3 flex gap-1.5 overflow-x-auto pb-1">
               {[
                 {
                   key: "actions" as const,
-                  label:
-                    uiLang === "en"
-                      ? `Action queue (${queueActionCount})`
-                      : `รอจัดการ (${queueActionCount})`,
+                  label: formatQueueTabLabel(uiLang === "en" ? "Action queue" : "รอจัดการ", queueActionCount),
                 },
                 {
                   key: "messages" as const,
-                  label:
-                    uiLang === "en"
-                      ? `Messages (${queueMessageCount})`
-                      : `ข้อความเข้าใหม่ (${queueMessageCount})`,
+                  label: formatQueueTabLabel(uiLang === "en" ? "New messages" : "ข้อความเข้าใหม่", queueMessageCount),
                 },
                 {
                   key: "photos" as const,
-                  label:
-                    uiLang === "en"
-                      ? `LINE photos (${queuePhotoCount})`
-                      : `รูปจาก LINE (${queuePhotoCount})`,
+                  label: formatQueueTabLabel(uiLang === "en" ? "LINE photos" : "รูปจาก LINE", queuePhotoCount),
                 },
               ].map((tab) => (
                 <button
@@ -1591,7 +1670,7 @@ export function LineInboxAiToolbar({
                   type="button"
                   onClick={() => setQueueTab(tab.key)}
                   className={cn(
-                    "shrink-0 rounded-full px-3 py-1.5 text-[11px] font-bold ring-1 touch-manipulation",
+                    "shrink-0 rounded-full px-3.5 py-2 text-[12px] font-bold ring-1 touch-manipulation min-h-11",
                     queueTab === tab.key
                       ? "bg-slate-950 text-white ring-slate-950"
                       : "bg-slate-50 text-slate-700 ring-slate-200"
@@ -1605,29 +1684,37 @@ export function LineInboxAiToolbar({
               queueLoading ? (
                 <p className="text-[11px] text-slate-500">{uiLang === "en" ? "Loading…" : "กำลังโหลด…"}</p>
               ) : queueGroups.length === 0 ? (
-                <p className="text-[11px] text-slate-500">
-                  {queuePhotoCount > 0
-                    ? imageOnlyQueueMessage(uiLang, queuePhotoCount)
-                    : uiLang === "en"
-                      ? "No analyzed LINE actions are waiting."
-                      : "ยังไม่มีรายการ LINE ที่รอจัดการ"}
-                </p>
+                queuePhotoCount > 0 ? (
+                  <ImageOnlyEmptyCallout
+                    uiLang={uiLang}
+                    photoCount={queuePhotoCount}
+                    onOpenPhotosTab={() => setQueueTab("photos")}
+                  />
+                ) : (
+                  <p className="text-[12px] text-slate-500">
+                    {uiLang === "en" ? "No analyzed LINE actions are waiting." : "ยังไม่มีรายการ LINE ที่รอจัดการ"}
+                  </p>
+                )
               ) : (
                 <ul className="max-h-[min(58vh,520px)] space-y-3 overflow-y-auto overscroll-contain pr-1">
                   {queueGroups.map((group) => (
                     <li
                       key={group.group_key}
-                      className="rounded-2xl border border-slate-200 bg-slate-50/90 p-2.5 ring-1 ring-slate-100"
+                      className="rounded-2xl border border-slate-200 bg-slate-50/90 p-3 ring-1 ring-slate-100"
                     >
-                      <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
+                      <div className="mb-2.5 flex flex-wrap items-start justify-between gap-2">
                         <div className="min-w-0 flex-1">
-                          <p className="line-clamp-2 text-sm font-bold leading-snug text-violet-950">
-                            {group.car_title || group.plate_display || (uiLang === "en" ? "Unmatched car" : "ยังไม่จับรถ")}
+                          <p className="line-clamp-2 text-[15px] font-bold leading-snug text-violet-950">
+                            {queueGroupDisplayTitle(group, uiLang)}
                           </p>
-                          <div className="mt-1 flex flex-wrap gap-1.5 text-[10px] font-semibold text-slate-500">
+                          <div className="mt-1.5 flex flex-wrap gap-1.5 text-[10px] font-semibold text-slate-500">
                             {group.sale ? <span>Sale: {group.sale}</span> : null}
-                            <span>{group.messages.length} msg</span>
-                            <span>{group.total_action_lines} action</span>
+                            <span>
+                              {group.messages.length} {uiLang === "en" ? "msg" : "ข้อความ"}
+                            </span>
+                            <span>
+                              {group.total_action_lines} {uiLang === "en" ? "AI lines" : "งาน AI"}
+                            </span>
                           </div>
                         </div>
                         {group.is_unresolved ? (
@@ -1638,23 +1725,35 @@ export function LineInboxAiToolbar({
                       </div>
 
                       {group.attachments.length > 0 ? (
-                        <div className="mb-2 flex gap-1.5 overflow-x-auto pb-1">
-                          {group.attachments.slice(0, 8).map((attachment) => (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img
-                              key={`${attachment.line_message_id}-${attachment.url}`}
-                              src={attachment.url}
-                              alt=""
-                              className="h-12 w-12 shrink-0 rounded-lg object-cover ring-1 ring-slate-200"
-                              loading="lazy"
-                            />
-                          ))}
+                        <div className="mb-2.5">
+                          <p className="mb-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                            {uiLang === "en" ? "Captured images" : "รูปที่แนบมา"} ({group.attachments.length})
+                          </p>
+                          <div className="flex gap-2 overflow-x-auto pb-1">
+                            {group.attachments.slice(0, 8).map((attachment) => (
+                              <a
+                                key={`${attachment.line_message_id}-${attachment.url}`}
+                                href={attachment.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="block shrink-0 overflow-hidden rounded-xl ring-1 ring-slate-200"
+                              >
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img
+                                  src={attachment.url}
+                                  alt={uiLang === "en" ? "LINE attachment" : "รูปจาก LINE"}
+                                  className="h-16 w-16 object-cover"
+                                  loading="lazy"
+                                />
+                              </a>
+                            ))}
+                          </div>
                         </div>
                       ) : null}
 
-                      <details className="mb-2 rounded-xl bg-white px-2 py-1.5 text-[11px] ring-1 ring-slate-200/80">
-                        <summary className="cursor-pointer select-none font-bold text-slate-700">
-                          {uiLang === "en" ? "Existing tasks" : "งานเดิมของรถคันนี้"} ({group.existing_items.length})
+                      <details className="mb-2.5 rounded-xl border border-slate-200/80 bg-white px-2.5 py-2 text-[11px]">
+                        <summary className="min-h-10 cursor-pointer select-none font-bold text-slate-700 touch-manipulation">
+                          {uiLang === "en" ? "Existing tasks in system" : "งานเดิมในระบบ"} ({group.existing_items.length})
                         </summary>
                         {group.existing_items.length === 0 ? (
                           <p className="mt-1 text-slate-500">{uiLang === "en" ? "No existing items found." : "ยังไม่พบงานเดิม"}</p>
@@ -1675,7 +1774,7 @@ export function LineInboxAiToolbar({
                         {group.messages.map((m) => {
                           const selectedActions = selectedQueueActionsForInbox(m);
                           return (
-                            <div key={m.inbox_id} className="rounded-xl bg-white px-2 py-2 ring-1 ring-slate-200/80">
+                            <div key={m.inbox_id} className="rounded-xl bg-white px-2.5 py-2.5 ring-1 ring-slate-200/80">
                               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                                 <span className="text-[10px] font-bold text-slate-500">
                                   {m.source_label || "LINE"} · {m.received_at ? new Date(m.received_at).toLocaleString() : ""}
@@ -1695,7 +1794,10 @@ export function LineInboxAiToolbar({
                                 </details>
                               ) : null}
 
-                              <ul className="space-y-2">
+                              <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-violet-800">
+                                {uiLang === "en" ? "AI suggested tasks" : "งานที่ AI เสนอ"} ({(m.action_lines ?? []).length})
+                              </p>
+                              <ul className="space-y-2.5">
                                 {(m.action_lines ?? []).map((line) => {
                                   const rowKey = queueSuggestionRowKey(m.inbox_id, line.item_index);
                                   const draft = queueDrafts[rowKey] ?? queueActionDraftForLine(line, "");
@@ -1709,13 +1811,18 @@ export function LineInboxAiToolbar({
                                     <li
                                       key={line.item_index}
                                       className={cn(
-                                        "space-y-2 rounded-xl border p-2",
+                                        "space-y-2.5 rounded-xl border p-2.5",
                                         draft.included ? "border-slate-200 bg-slate-100" : "border-slate-200 bg-slate-50 opacity-80",
-                                        line.duplicate_status === "duplicate" ? "bg-amber-50" : "",
-                                        line.duplicate_status === "possible_duplicate" ? "bg-orange-50" : ""
+                                        line.duplicate_status === "new"
+                                          ? "border-l-4 border-l-emerald-500"
+                                          : line.duplicate_status === "duplicate"
+                                            ? "border-l-4 border-l-amber-500 bg-amber-50/80"
+                                            : line.duplicate_status === "possible_duplicate"
+                                              ? "border-l-4 border-l-orange-500 bg-orange-50/80"
+                                              : "border-l-4 border-l-slate-300"
                                       )}
                                     >
-                                      <div className="flex min-w-0 items-center gap-2">
+                                      <div className="flex min-w-0 items-start gap-2">
                                         <input
                                           type="checkbox"
                                           checked={draft.included}
@@ -1726,8 +1833,16 @@ export function LineInboxAiToolbar({
                                                 event.target.checked && draft.action === "skip" ? "create" : draft.action,
                                             })
                                           }
-                                          className="h-5 w-5 shrink-0 rounded border-slate-400"
+                                          className="mt-0.5 h-6 w-6 shrink-0 rounded border-slate-400 touch-manipulation"
                                         />
+                                        <span
+                                          className={cn(
+                                            "shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ring-1",
+                                            duplicateBadgeClass(line.duplicate_status)
+                                          )}
+                                        >
+                                          {duplicateLabel(uiLang, line.duplicate_status)}
+                                        </span>
                                         <LineInboxSuggestedItemNameField
                                           value={lineName}
                                           uiLang={uiLang}
@@ -1763,7 +1878,7 @@ export function LineInboxAiToolbar({
                                                 action === "merge" ? draft.orderItemId || line.matched_order_item_id : draft.orderItemId,
                                             });
                                           }}
-                                          className="h-10 min-h-[40px] rounded-full bg-white px-2 text-[11px] font-bold text-slate-700 shadow-sm ring-1 ring-slate-200"
+                                          className="h-11 min-h-[44px] rounded-full bg-white px-2.5 text-[11px] font-bold text-slate-700 shadow-sm ring-1 ring-slate-200 touch-manipulation"
                                         >
                                           <option value="create">{uiLang === "en" ? "Add new" : "เพิ่มงานใหม่"}</option>
                                           <option value="merge" disabled={!canMerge}>
@@ -1776,7 +1891,7 @@ export function LineInboxAiToolbar({
                                             type="button"
                                             onClick={() => openSuggestionPhotoSheet(rowKey, -1, lineName)}
                                             className={cn(
-                                              "h-10 min-h-[40px] rounded-full px-3 text-[11px] font-bold ring-1 touch-manipulation",
+                                              "h-11 min-h-[44px] rounded-full px-3 text-[11px] font-bold ring-1 touch-manipulation",
                                               stagedPhotoCount > 0
                                                 ? "bg-violet-700 text-white ring-violet-700"
                                                 : "bg-sky-50 text-sky-700 ring-sky-200"
@@ -1788,8 +1903,8 @@ export function LineInboxAiToolbar({
                                         ) : null}
                                       </div>
                                       {line.matched_item_name ? (
-                                        <p className="text-[10px] font-medium text-amber-800">
-                                          {uiLang === "en" ? "Similar existing" : "คล้ายงานเดิม"}: {line.matched_item_name}
+                                        <p className="rounded-lg bg-amber-50/90 px-2 py-1.5 text-[10px] font-medium text-amber-900 ring-1 ring-amber-200/80">
+                                          {uiLang === "en" ? "Matches existing task" : "ตรงกับงานเดิม"}: {line.matched_item_name}
                                         </p>
                                       ) : null}
                                       <div className="grid gap-2 sm:grid-cols-[10rem_1fr]">
@@ -1815,13 +1930,13 @@ export function LineInboxAiToolbar({
                                   {uiLang === "en" ? "Car is not matched yet; save is disabled." : "ยังจับรถไม่ได้ จึงยังบันทึกไม่ได้"}
                                 </p>
                               ) : null}
-                              <div className="mt-2 grid grid-cols-2 gap-2">
+                              <div className="mt-2.5 grid grid-cols-1 gap-2 sm:grid-cols-2">
                                 <Button
                                   type="button"
                                   size="sm"
                                   disabled={savingInboxId === m.inbox_id || selectedActions.length === 0 || !m.car_row_id}
                                   onClick={() => void saveQueueCard(m)}
-                                  className="touch-manipulation bg-slate-950 hover:bg-slate-900"
+                                  className="min-h-11 touch-manipulation bg-slate-950 hover:bg-slate-900"
                                 >
                                   {savingInboxId === m.inbox_id
                                     ? uiLang === "en"
@@ -1837,7 +1952,7 @@ export function LineInboxAiToolbar({
                                   variant="outline"
                                   disabled={savingInboxId === m.inbox_id}
                                   onClick={() => void skipQueueCard(m)}
-                                  className="touch-manipulation"
+                                  className="min-h-11 touch-manipulation"
                                 >
                                   {uiLang === "en" ? "Skip all" : "ข้ามทั้งหมด"}
                                 </Button>
@@ -1852,9 +1967,15 @@ export function LineInboxAiToolbar({
               )
             ) : queueTab === "photos" ? (
               queueAttachments.length === 0 ? (
-                <p className="text-[11px] text-slate-500">{uiLang === "en" ? "No captured LINE photos yet." : "ยังไม่มีรูปจาก LINE"}</p>
+                <p className="text-[12px] text-slate-500">{uiLang === "en" ? "No captured LINE photos yet." : "ยังไม่มีรูปจาก LINE"}</p>
               ) : (
-                <div className="grid max-h-[min(52vh,420px)] gap-2 overflow-y-auto pr-1 sm:grid-cols-2">
+                <div className="max-h-[min(56vh,480px)] overflow-y-auto pr-1">
+                  <p className="mb-2 text-[11px] font-bold text-violet-900">
+                    {uiLang === "en"
+                      ? `${queuePhotoCount} photo(s) waiting for review`
+                      : `รูปจาก LINE ${queuePhotoCount} รูปรอตรวจ`}
+                  </p>
+                  <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
                   {queueAttachments.slice(0, 40).map((attachment) => {
                     const busy = savingInboxId === attachment.inbox_id;
                     const timeLabel = formatQueueAttachmentTime(attachment.received_at);
@@ -1866,7 +1987,7 @@ export function LineInboxAiToolbar({
                     return (
                       <article
                         key={`${attachment.line_message_id}-${attachment.url}`}
-                        className="overflow-hidden rounded-2xl bg-slate-50 ring-1 ring-slate-200"
+                        className="flex flex-col overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-200"
                       >
                         <a
                           href={attachment.url}
@@ -1878,11 +1999,11 @@ export function LineInboxAiToolbar({
                           <img
                             src={attachment.url}
                             alt={uiLang === "en" ? "LINE photo waiting for review" : "รูปจาก LINE รอจัดการ"}
-                            className="aspect-[4/3] w-full object-cover"
+                            className="aspect-square w-full object-cover"
                             loading="lazy"
                           />
                         </a>
-                        <div className="space-y-2 p-2">
+                        <div className="space-y-2 p-2.5">
                           <div className="flex flex-wrap items-center justify-between gap-1 text-[10px] font-semibold text-slate-500">
                             <span>{attachment.source_label || "LINE"}</span>
                             {timeLabel ? <span>{timeLabel}</span> : null}
@@ -1907,7 +2028,7 @@ export function LineInboxAiToolbar({
                               {attachment.raw_text_preview}
                             </p>
                           ) : null}
-                          <div className="grid grid-cols-3 gap-1.5">
+                          <div className="grid grid-cols-1 gap-1.5">
                             <button
                               type="button"
                               onClick={() => {
@@ -1920,7 +2041,7 @@ export function LineInboxAiToolbar({
                                 setCarSearch(attachment.plate_display || attachment.car_title || "");
                                 setSaveHint(uiLang === "en" ? "Search/select the car manually before attaching this photo." : "ค้นหา/เลือกรถก่อนแนบรูปนี้");
                               }}
-                              className="min-h-9 rounded-full bg-white px-2 text-[10px] font-bold text-slate-700 ring-1 ring-slate-200 touch-manipulation"
+                              className="min-h-11 rounded-full bg-white px-2 text-[11px] font-bold text-slate-700 ring-1 ring-slate-200 touch-manipulation"
                             >
                               {uiLang === "en" ? "Car" : "เลือกรถ"}
                             </button>
@@ -1933,7 +2054,7 @@ export function LineInboxAiToolbar({
                                     : "เปิดแถวงานที่มี ตามรูป/ตามภาพ แล้วเลือกรูปนี้จากหน้ารูปตามรายการ"
                                 );
                               }}
-                              className="min-h-9 rounded-full bg-sky-50 px-2 text-[10px] font-bold text-sky-700 ring-1 ring-sky-200 touch-manipulation"
+                              className="min-h-11 rounded-full bg-sky-50 px-2 text-[11px] font-bold text-sky-700 ring-1 ring-sky-200 touch-manipulation"
                             >
                               {uiLang === "en" ? "Attach" : "แนบงาน"}
                             </button>
@@ -1942,7 +2063,7 @@ export function LineInboxAiToolbar({
                               disabled={busy}
                               onClick={() => void skipImageOnlyAttachment(attachment)}
                               className={cn(
-                                "min-h-9 rounded-full px-2 text-[10px] font-bold ring-1 touch-manipulation",
+                                "min-h-11 rounded-full px-2 text-[11px] font-bold ring-1 touch-manipulation",
                                 busy
                                   ? "bg-slate-100 text-slate-400 ring-slate-200"
                                   : "bg-white text-rose-700 ring-rose-200"
@@ -1955,18 +2076,23 @@ export function LineInboxAiToolbar({
                       </article>
                     );
                   })}
+                  </div>
                 </div>
               )
             ) : queueLoading ? (
               <p className="text-[11px] text-slate-500">{uiLang === "en" ? "Loading…" : "กำลังโหลด…"}</p>
             ) : queueMessagesWithNewLines.length === 0 ? (
-              <p className="text-[11px] text-slate-500">
-                {queuePhotoCount > 0
-                  ? imageOnlyQueueMessage(uiLang, queuePhotoCount)
-                  : uiLang === "en"
-                    ? "No pending new jobs from LINE."
-                    : "ยังไม่มีงานใหม่ค้างจาก LINE"}
-              </p>
+              queuePhotoCount > 0 ? (
+                <ImageOnlyEmptyCallout
+                  uiLang={uiLang}
+                  photoCount={queuePhotoCount}
+                  onOpenPhotosTab={() => setQueueTab("photos")}
+                />
+              ) : (
+                <p className="text-[12px] text-slate-500">
+                  {uiLang === "en" ? "No pending new jobs from LINE." : "ยังไม่มีงานใหม่ค้างจาก LINE"}
+                </p>
+              )
             ) : (
               <ul className="max-h-[min(45vh,280px)] space-y-3 overflow-y-auto overscroll-contain pr-1">
                 {queueMessagesWithNewLines.map((m) => {
@@ -1976,13 +2102,27 @@ export function LineInboxAiToolbar({
                       key={m.inbox_id}
                       className="rounded-xl border border-slate-200 bg-slate-50/90 p-2.5 ring-1 ring-slate-100"
                     >
-                      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-1">
+                      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
                         <span className="text-sm font-bold tabular-nums text-violet-950">
-                          {uiLang === "en" ? "Plate" : "ทะเบียน"}: {m.plate_display || "—"}
+                          {queueGroupDisplayTitle(
+                            {
+                              group_key: m.inbox_id,
+                              car_row_id: m.car_row_id,
+                              plate_display: m.plate_display,
+                              car_title: m.car_title ?? m.plate_display,
+                              sale: m.sale ?? "",
+                              is_unresolved: !m.car_row_id,
+                              total_action_lines: m.action_line_count ?? 0,
+                              total_new_lines: m.new_line_count,
+                              existing_items: m.existing_items ?? [],
+                              attachments: m.attachments ?? [],
+                              messages: [m],
+                            },
+                            uiLang
+                          )}
                         </span>
-                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-900">
-                          {uiLang === "en" ? "New" : "งานใหม่"} {m.new_line_count}{" "}
-                          {uiLang === "en" ? "lines" : "บรรทัด"}
+                        <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-[11px] font-bold text-emerald-900 ring-1 ring-emerald-200">
+                          {uiLang === "en" ? "New lines" : "ข้อความใหม่"} {m.new_line_count}
                         </span>
                       </div>
                       {m.raw_text_preview ? (
@@ -2005,15 +2145,15 @@ export function LineInboxAiToolbar({
                             (stagedLineAttachments[rowKey]?.length ?? 0);
                           return (
                             <li key={line.item_index}>
-                              <div className="flex items-start gap-2 rounded-lg bg-white/80 px-2 py-1.5 ring-1 ring-slate-200/80">
-                                <label className="flex min-w-0 flex-1 cursor-pointer gap-2">
+                              <div className="flex items-start gap-2 rounded-xl border border-emerald-200/80 bg-white px-2.5 py-2 ring-1 ring-emerald-100/80">
+                                <label className="flex min-w-0 flex-1 cursor-pointer gap-2.5 touch-manipulation">
                                   <input
                                     type="checkbox"
                                     checked={checked}
                                     onChange={() => toggleQueueLine(m.inbox_id, line.item_index)}
-                                    className="mt-0.5 h-5 w-5 shrink-0 rounded border-slate-400"
+                                    className="mt-0.5 h-6 w-6 shrink-0 rounded border-slate-400"
                                   />
-                                  <span className="min-w-0 flex-1 text-[12px] font-medium leading-snug text-slate-900">
+                                  <span className="min-w-0 flex-1 text-[13px] font-semibold leading-snug text-slate-900">
                                     {lineName}
                                   </span>
                                 </label>
@@ -2022,7 +2162,7 @@ export function LineInboxAiToolbar({
                                     type="button"
                                     onClick={() => openSuggestionPhotoSheet(rowKey, -1, lineName)}
                                     className={cn(
-                                      "shrink-0 rounded-full px-2 py-1 text-[10px] font-bold ring-1 touch-manipulation",
+                                      "min-h-11 shrink-0 rounded-full px-3 py-2 text-[11px] font-bold ring-1 touch-manipulation",
                                       stagedPhotoCount > 0
                                         ? "bg-violet-700 text-white ring-violet-700"
                                         : "bg-sky-50 text-sky-700 ring-sky-200"
