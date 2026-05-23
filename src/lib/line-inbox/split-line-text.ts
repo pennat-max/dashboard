@@ -31,6 +31,7 @@ const WORK_INTENT_RE =
   /(กรอไมล์|เลขไมล์|กันสาด|โรบาร์|สติ๊กเกอร์|ฟิล์ม|บันได|กันชน|แร็ค|แรค|ฝาครอบ|ไฟ|กล้อง|เซ็นเซอร์|ยาง|ล้อ|แบต|แบตเตอรี่|โช้ค|ยกสูง|ป้าย|เอกสาร|ซ่อม|เปลี่ยน|ขาด|แตก|เสีย|หาย|ต้องสั่ง|ส่งอู่|ทำสี|ตรวจ|เช็ค|ติด|ติดตั้ง|เพิ่ม|ใส่|แปลง|ล้าง|ขัด|เคลือบ|เก็บงาน|ประเมิน|รับงาน|งาน)/i;
 const STRONG_WORK_INTENT_RE =
   /(กรอไมล์|เลขไมล์|กุญแจ|กันสาด|โรบาร์|สติ๊กเกอร์|ฟิล์ม|บันได|กันชน|แร็ค|แรค|ฝาครอบ|ไฟ|กล้อง|เซ็นเซอร์|ยาง|ล้อ|แบต|แบตเตอรี่|โช้ค|ยกสูง|เอกสาร|ซ่อม|เปลี่ยน|ขาด|แตก|เสีย|หาย|ต้องสั่ง|สั่ง|ส่งอู่|ทำสี|ตรวจ|เช็ค|ติด|ติดตั้ง|เพิ่ม|ใส่|แปลง|ล้าง|ขัด|เคลือบ|เก็บงาน|ประเมิน|รับงาน|งาน)/i;
+const STANDALONE_CONTROL_LINE_RE = /^(?:เพิ่ม|เพิ่มงาน|งานใหม่)$/i;
 const CAR_REFERENCE_META_RE =
   /(ใส่\s*ปี.*(?:chassis|chasis|เลขถัง|ตัวถัง)|(?:chassis|chasis|เลขถัง|ตัวถัง).*(?:ปี|link|ลิงก์|ถูก|ทุกครั้ง|หลายที่)|(?:ปี|link|ลิงก์).*(?:chassis|chasis|เลขถัง|ตัวถัง))/i;
 const REAL_WORK_EXCLUDING_GENERIC_ENTRY_RE =
@@ -184,6 +185,7 @@ function cleanWorkLine(raw: string): string {
 function normalizeWorkItemText(raw: string): string {
   return sanitizeLine(raw)
     .replace(/([\u0E00-\u0E7F])([A-Z]{2,})\b/g, "$1 $2")
+    .replace(/รอแจ้งกรอไมล์\s+อีกที/gi, "รอแจ้งกรอไมล์อีกที")
     .replace(/ติด\s*ฟิล์ม\s*รอบคัน/gi, "ติดฟิล์มรอบคัน")
     .replace(/ฟิล์ม\s*รอบคัน/gi, "ฟิล์มรอบคัน");
 }
@@ -218,6 +220,28 @@ function addWorkItem(target: Array<{ text: string; note: string }>, value: strin
   const key = lineKey(clean);
   if (target.some((item) => lineKey(item.text) === key)) return;
   target.push({ text: clean, note: "" });
+}
+
+function splitCompoundWorkLine(value: string): string[] {
+  const clean = normalizeWorkItemText(value);
+  if (!clean || STANDALONE_CONTROL_LINE_RE.test(clean)) return [];
+
+  const segmented = clean
+    .replace(/\s+(รถมีตรวจ)/gi, "|||$1")
+    .replace(/\s+(รอแจ้งกรอไมล์)/gi, "|||$1")
+    .replace(/\s+(เอารถไปเช็ค)/gi, "|||$1")
+    .replace(/\s+(ถ้ามีอะไรเสีย)/gi, "|||$1");
+
+  return segmented
+    .split("|||")
+    .map((part) => normalizeWorkItemText(part))
+    .filter(Boolean);
+}
+
+function addWorkLines(target: Array<{ text: string; note: string }>, value: string) {
+  for (const part of splitCompoundWorkLine(value)) {
+    addWorkItem(target, part);
+  }
 }
 
 function addDetailToLast(target: Array<{ text: string; note: string }>, value: string): boolean {
@@ -306,7 +330,9 @@ export function splitLineTextForInbox(text: string): SplitLineTextResult {
       continue;
     }
 
-    addWorkItem(groupedItems, line);
+    const beforeCount = groupedItems.length;
+    addWorkLines(groupedItems, line);
+    if (groupedItems.length === beforeCount) addUnique(ignoredNoise, rawLine);
   }
 
   const grouped = groupedItems.slice(0, 60);
