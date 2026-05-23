@@ -13,7 +13,7 @@ export type SplitLineTextResult = {
 };
 
 const MENTION_RE = /@\S+/g;
-const THAI_PLATE_RE = /\d{0,2}[ก-ฮ]{1,3}[-\s]?\d{2,4}/g;
+const THAI_PLATE_RE = /(?<![\u0E00-\u0E7F])\d{0,2}[\u0E01-\u0E2E]{1,3}[-\s]?\d{2,4}/g;
 const CHASSIS_RE = /\b[A-HJ-NPR-Z0-9]{17}\b/i;
 const VEHICLE_SPEC_RE =
   /(REVO|FORTUNER|HILUX|VIGO|RANGER|D-MAX|TRITON|CAMRY|2WD|4WD|AT|MT|DOUBLE[_\s-]?CAB|SMART[_\s-]?CAB|SILVER|BLACK|WHITE|GRAY|GREY|JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC|\b[123]\.\d\b|\b(?:19|20)\d{2}\b)/i;
@@ -25,6 +25,8 @@ const VEHICLE_COLOR_YEAR_RE =
   /(SILVER|BLACK|WHITE|GRAY|GREY|BLUE|RED|GREEN|ORANGE|BRONZE|BROWN|GOLD|YELLOW|PEARL|ป้ายแดง|JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC|\b(?:19|20)\d{2}\b|[A-Z][a-z]{2}\d{2})/i;
 const RED_PLATE_CONTEXT_RE = /^ป้ายแดง$/i;
 const STOCK_NUMBER_RE = /\b\d{4,6}\b/;
+const THAI_STOCK_IDENTITY_RE =
+  /^(?:ทะเบียน|เลขทะเบียน|stock|สต็อก|สต๊อก|ref|reference)\s*[:#：-]?\s*\d{4,6}\b/i;
 const WORK_INTENT_RE =
   /(กรอไมล์|เลขไมล์|กันสาด|โรบาร์|สติ๊กเกอร์|ฟิล์ม|บันได|กันชน|แร็ค|แรค|ฝาครอบ|ไฟ|กล้อง|เซ็นเซอร์|ยาง|ล้อ|แบต|แบตเตอรี่|โช้ค|ยกสูง|ป้าย|เอกสาร|ซ่อม|เปลี่ยน|ขาด|แตก|เสีย|หาย|ต้องสั่ง|ส่งอู่|ทำสี|ตรวจ|เช็ค|ติด|ติดตั้ง|เพิ่ม|ใส่|แปลง|ล้าง|ขัด|เคลือบ|เก็บงาน|ประเมิน|รับงาน|งาน)/i;
 const STRONG_WORK_INTENT_RE =
@@ -44,7 +46,11 @@ const DETAIL_PARENT_RE =
   /(ฟิล์ม|สี|paint|ติด|ติดตั้ง|ใส่|เปลี่ยน|ซ่อม|repair|install|แปลง|แต่ง|ยกสูง|โรบาร์|กันชน|บันได|แร็ค|แรค|ฝาครอบ|สติ๊กเกอร์|ขัด|เคลือบ|เก็บงาน)/i;
 
 function sanitizeLine(raw: string): string {
-  return raw.replace(/^[\s\-•*]+/, "").replace(/\s+/g, " ").trim();
+  return raw
+    .replace(/^[\s\-•*]+/, "")
+    .replace(/[\s*•]+$/, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function addUnique(target: string[], value: string) {
@@ -153,8 +159,13 @@ function looksLikeStockSpecContext(raw: string): boolean {
   return true;
 }
 
+function looksLikeThaiStockIdentityContext(raw: string): boolean {
+  return THAI_STOCK_IDENTITY_RE.test(raw) && vehicleSignalScore(raw) >= 4;
+}
+
 function looksLikeVehicleContext(raw: string): boolean {
   if (RED_PLATE_CONTEXT_RE.test(raw)) return true;
+  if (looksLikeThaiStockIdentityContext(raw)) return true;
   if (looksLikeStockSpecContext(raw)) return true;
   if (STRONG_WORK_INTENT_RE.test(raw)) return false;
   const hasThaiPlateLike = THAI_PLATE_RE.test(raw);
@@ -172,6 +183,7 @@ function cleanWorkLine(raw: string): string {
 
 function normalizeWorkItemText(raw: string): string {
   return sanitizeLine(raw)
+    .replace(/([\u0E00-\u0E7F])([A-Z]{2,})\b/g, "$1 $2")
     .replace(/ติด\s*ฟิล์ม\s*รอบคัน/gi, "ติดฟิล์มรอบคัน")
     .replace(/ฟิล์ม\s*รอบคัน/gi, "ฟิล์มรอบคัน");
 }
@@ -192,6 +204,14 @@ function looksLikeDetailLine(raw: string): boolean {
   return /[0-9]/.test(raw) && /[ก-ฮ]/.test(raw) && semanticTokens(raw).length <= 6;
 }
 
+function looksLikeShortContinuationLine(raw: string): boolean {
+  if (!raw || raw.length > 32) return false;
+  if (STRONG_WORK_INTENT_RE.test(raw) || looksLikeVehicleContext(raw) || looksLikeMentionOnly(raw)) return false;
+  const tokens = semanticTokens(raw);
+  if (tokens.length === 0 || tokens.length > 3) return false;
+  return /^[A-Za-z0-9&.'\-\s]+$/.test(raw);
+}
+
 function addWorkItem(target: Array<{ text: string; note: string }>, value: string) {
   const clean = normalizeWorkItemText(value);
   if (!clean) return;
@@ -208,6 +228,17 @@ function addDetailToLast(target: Array<{ text: string; note: string }>, value: s
   const parts = last.note ? last.note.split(/\s*\/\s*/) : [];
   if (!parts.some((part) => lineKey(part) === lineKey(clean))) parts.push(clean);
   last.note = parts.join(" / ");
+  return true;
+}
+
+function addShortContinuationToLastText(target: Array<{ text: string; note: string }>, value: string): boolean {
+  const clean = sanitizeLine(value);
+  if (!clean || target.length === 0) return false;
+  const last = target[target.length - 1];
+  if (!last) return false;
+  if (!/(ทะเบียน|ป้ายทะเบียน|สติก|สติ๊ก|สต็อก|สต๊อก)$/i.test(last.text)) return false;
+  if (lineKey(last.text).includes(lineKey(clean))) return true;
+  last.text = `${last.text} ${clean}`.replace(/\s+/g, " ").trim();
   return true;
 }
 
@@ -238,6 +269,11 @@ export function splitLineTextForInbox(text: string): SplitLineTextResult {
       continue;
     }
 
+    const continuationLine = cleanWorkLine(rawLine);
+    if (looksLikeShortContinuationLine(continuationLine) && addShortContinuationToLastText(groupedItems, continuationLine)) {
+      continue;
+    }
+
     if (looksLikeLinePersonContext(rawLine)) {
       addUnique(ignoredMentions, rawLine);
       continue;
@@ -259,7 +295,7 @@ export function splitLineTextForInbox(text: string): SplitLineTextResult {
       continue;
     }
 
-    if (looksLikeDetailLine(line)) {
+    if (looksLikeDetailLine(line) || looksLikeShortContinuationLine(line)) {
       if (addDetailToLast(groupedItems, line)) continue;
       addUnique(ignoredNoise, rawLine);
       continue;

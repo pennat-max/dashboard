@@ -41,7 +41,9 @@ type CarMatchRow = {
 };
 
 const STOCK_NUMBER_RE = /\b\d{4,6}\b/g;
-const THAI_PLATE_RE = /\d{0,2}[ก-ฮ]{1,3}[-\s]?\d{2,4}/g;
+const THAI_PLATE_RE = /(?<![\u0E00-\u0E7F])\d{0,2}[\u0E01-\u0E2E]{1,3}[-\s]?\d{2,4}/g;
+const THAI_STOCK_IDENTITY_RE =
+  /^(?:ทะเบียน|เลขทะเบียน|stock|สต็อก|สต๊อก|ref|reference)\s*[:#：-]?\s*(\d{4,6})\b/i;
 const VEHICLE_TOKEN_RE =
   /\b(?:TOYOTA|NISSAN|NAVARA|ISUZU|MAZDA|MITSUBISHI|FORD|HONDA|REVO|FORTUNER|HILUX|VIGO|RANGER|D-?MAX|DMAX|TRITON|CAMRY|ALTIS|YARIS|VIOS|MU-?X|EVEREST|PAJERO|PRO-?4X|RAPTOR|D-?CAB|DOUBLE|SMART|CAB|DC|2WD|4WD|AT|MT|7AT|6AT|STANDARD|WHITE|BLACK|GRAY|GREY|SILVER|BLUE|RED|GREEN|ORANGE|BRONZE|BROWN|GOLD|PEARL)\b/gi;
 const COMMON_TOKEN_RE = /^(?:THE|AND|FOR|WITH|CAR|AUTO|ป้ายแดง)$/i;
@@ -87,6 +89,28 @@ function extractStockNumbers(text: string): string[] {
     if (!out.includes(token)) out.push(token);
   }
   return out.slice(0, 5);
+}
+
+function extractThaiStockIdentity(line: string): string | null {
+  const m = String(line ?? "").trim().match(THAI_STOCK_IDENTITY_RE);
+  return m?.[1] ?? null;
+}
+
+function uniqueContextLines(lines: string[]): string[] {
+  const out: string[] = [];
+  for (const line of lines.map((value) => value.replace(/\s+/g, " ").trim()).filter(Boolean)) {
+    const key = line.toLowerCase();
+    if (!out.some((existing) => existing.toLowerCase() === key)) out.push(line);
+  }
+  return out;
+}
+
+function prioritizeIdentityContextLines(raw: string, contextLines: string[]): string[] {
+  const explicitIdentityLines = raw
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter((line) => Boolean(extractThaiStockIdentity(line)));
+  return uniqueContextLines([...explicitIdentityLines, ...contextLines]);
 }
 
 function extractVehicleTokens(text: string): string[] {
@@ -274,7 +298,21 @@ export async function resolveCarFromContext(
         .map((line) => line.replace(/\s+/g, " ").trim())
         .filter(Boolean);
 
-  for (const line of contextLines.slice(0, 8)) {
+  for (const line of prioritizeIdentityContextLines(raw, contextLines).slice(0, 8)) {
+    const identityStock = extractThaiStockIdentity(line);
+    if (identityStock) {
+      const { data } = await supabase
+        .from(CARS_TABLE)
+        .select(CAR_MATCH_SELECT)
+        .eq("plate_number", identityStock)
+        .limit(2);
+      const rows = data ?? [];
+      const row = rows[0] as CarMatchRow | undefined;
+      if (rows.length === 1 && row?.row_id) {
+        return resolvedFromRow(row, 0.93, 1);
+      }
+    }
+
     const stocks = extractStockNumbers(line);
     const stockOrParts = stocks.flatMap((stock) => [
       `spec.ilike.%${likeToken(stock)}%`,
