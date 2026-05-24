@@ -107,17 +107,53 @@ export async function persistLineInboxConfirmations(
         .single();
       if (inserted.error) {
         if (!isMissingDbColumnError(inserted.error.message)) throw new Error(inserted.error.message);
+        const retryPayload: Record<string, unknown> = {
+          order_task_id: taskId,
+          label: c.item_name,
+          qty: 1,
+          status: dbStatus,
+        };
+        if (assigneeStaff) retryPayload.assignee_staff = assigneeStaff;
         const retry = await supabase
           .from(ORDER_ITEMS_TABLE)
-          .insert({
-            order_task_id: taskId,
-            label: c.item_name,
-            qty: 1,
-            status: dbStatus,
-          })
+          .insert(retryPayload)
           .select("id")
           .single();
-        if (retry.error) throw new Error(retry.error.message);
+        if (retry.error) {
+          if (!assigneeStaff || !isMissingDbColumnError(retry.error.message)) throw new Error(retry.error.message);
+          const retryWithoutAssignee = await supabase
+            .from(ORDER_ITEMS_TABLE)
+            .insert({
+              order_task_id: taskId,
+              label: c.item_name,
+              qty: 1,
+              status: dbStatus,
+            })
+            .select("id")
+            .single();
+          if (retryWithoutAssignee.error) throw new Error(retryWithoutAssignee.error.message);
+          const rid = String(retryWithoutAssignee.data?.id ?? "");
+          await createOrderTaskUpdate(supabase, {
+            order_task_id: taskId,
+            order_item_id: rid,
+            action_type: "intake_saved",
+            old_value: null,
+            new_value: {
+              label: c.item_name,
+              status: dbStatus,
+              assignee_staff: assigneeStaff || null,
+              due_date: dueDate || null,
+              note: c.note || null,
+              source: "line_inbox_confirm",
+              line_inbox_message_id: lineInboxMsgRef || null,
+            },
+            note: "LINE inbox confirm · create",
+            updated_by: "line-inbox",
+            role: "sales",
+          });
+          saved.push({ order_item_id: rid, label: c.item_name, action: "create" });
+          continue;
+        }
         const rid = String(retry.data?.id ?? "");
         await createOrderTaskUpdate(supabase, {
           order_task_id: taskId,
@@ -196,11 +232,21 @@ export async function persistLineInboxConfirmations(
 
       let { error } = await supabase.from(ORDER_ITEMS_TABLE).update(patch).eq("id", oid);
       if (error && isMissingDbColumnError(error.message)) {
+        const retryPatch: Record<string, unknown> = { label: labelNext, status: dbStatus };
+        const assigneeNext = String(c.assignee_staff ?? "").trim();
+        if (assigneeNext) retryPatch.assignee_staff = assigneeNext;
         const retry = await supabase
           .from(ORDER_ITEMS_TABLE)
-          .update({ label: labelNext, status: dbStatus })
+          .update(retryPatch)
           .eq("id", oid);
         error = retry.error;
+        if (error && assigneeNext && isMissingDbColumnError(error.message)) {
+          const retryWithoutAssignee = await supabase
+            .from(ORDER_ITEMS_TABLE)
+            .update({ label: labelNext, status: dbStatus })
+            .eq("id", oid);
+          error = retryWithoutAssignee.error;
+        }
       }
       if (error) throw new Error(error.message);
 

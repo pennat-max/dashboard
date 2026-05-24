@@ -327,6 +327,14 @@ assert(
   "line inbox persistence writes assignee_staff to order_items"
 );
 assert(
+  persistConfirm.includes("if (assigneeStaff) retryPayload.assignee_staff = assigneeStaff"),
+  "line inbox fallback insert still writes assignee_staff when the column is available"
+);
+assert(
+  persistConfirm.includes("if (assigneeNext) retryPatch.assignee_staff = assigneeNext"),
+  "line inbox fallback merge still writes assignee_staff when the column is available"
+);
+assert(
   pendingQueueRoute.includes("รูปจาก LINE ยังไม่ผูกกับข้อความ/รถ"),
   "image-only queue card has a non-blank fallback title"
 );
