@@ -9,7 +9,12 @@ import {
 import { buildFallbackAnalyzeItemsFromRawText } from "@/lib/line-inbox/fallback-analyze-items";
 import { buildFallbackAnalyzePayloadFromRawText } from "@/lib/line-inbox/fallback-analyze-payload";
 import { pushLineTextMessage } from "@/lib/line/push-message";
-import { buildLineApprovalAcknowledgementText } from "@/lib/line-inbox/acknowledgement";
+import {
+  buildLineApprovalAcknowledgementText,
+  buildLineCarDisplayLabel,
+  buildLineOrderReviewUrl,
+  type LineApprovalAcknowledgementItem,
+} from "@/lib/line-inbox/acknowledgement";
 import type { DuplicateStatus, LineInboxAnalyzeItem, LineInboxAnalyzeResponse } from "@/lib/line-inbox/types";
 import { formatZodIssues, lineInboxPendingSaveBodySchema } from "@/lib/line-inbox/api-schemas";
 import { persistLineInboxConfirmations, type PersistConfirmRow } from "@/lib/line-inbox/persist-line-inbox-confirm";
@@ -52,8 +57,14 @@ function detectedCarTitle(payload: LineInboxAnalyzeResponse): string {
   const plate = cleanLine(payload.detected_car?.plate_text);
   const spec = cleanLine(payload.detected_car?.spec_text);
   const chassis = cleanLine(payload.detected_car?.chassis);
-  if (plate && spec && !spec.toLowerCase().startsWith(plate.toLowerCase())) return `${plate} ${spec}`;
-  return spec || plate || chassis;
+  return buildLineCarDisplayLabel({ plate, title: spec, fallback: chassis });
+}
+
+function reviewUrlForLineInbox(payload: LineInboxAnalyzeResponse, carRowId: string): string {
+  return buildLineOrderReviewUrl({
+    carRowId,
+    plate: cleanLine(payload.detected_car?.plate_text) || detectedCarTitle(payload),
+  });
 }
 
 function resolveLinePushTarget(row: {
@@ -78,11 +89,13 @@ function resolveLinePushTarget(row: {
 async function maybeSendApprovalAcknowledgement(params: {
   row: { source_type?: unknown; group_id?: unknown; user_id?: unknown };
   payload: LineInboxAnalyzeResponse;
-  approvedItemLabels: string[];
+  approvedItems: LineApprovalAcknowledgementItem[];
+  reviewUrl: string;
 }): Promise<{ autoReply: AutoReplyResult; replyText: string }> {
   const replyText = buildLineApprovalAcknowledgementText({
     carTitle: detectedCarTitle(params.payload),
-    approvedItems: params.approvedItemLabels,
+    approvedItems: params.approvedItems,
+    reviewUrl: params.reviewUrl,
   });
 
   if (!isAutoReplyAfterApproveEnabled()) {
@@ -92,7 +105,7 @@ async function maybeSendApprovalAcknowledgement(params: {
     };
   }
 
-  if (params.approvedItemLabels.length === 0) {
+  if (params.approvedItems.length === 0) {
     return {
       replyText,
       autoReply: { enabled: true, attempted: false, sent: false, skipped_reason: "no_saved_items" },
@@ -172,7 +185,14 @@ export async function POST(request: Request) {
     saved_count: number;
     skipped: boolean;
     order_task_id: string | null;
-    saved_items: Array<{ item_index: number; order_item_id: string; label: string; action: string }>;
+    saved_items: Array<{
+      item_index: number;
+      order_item_id: string;
+      label: string;
+      action: string;
+      status: string;
+      assignee_staff: string;
+    }>;
     reply_text?: string;
     auto_reply?: AutoReplyResult;
   }> = [];
@@ -301,18 +321,27 @@ export async function POST(request: Request) {
         line_inbox_msg_ref_for_audit: inboxId,
       });
 
-      const approvedItemLabels = saved.map((item) => item.label);
+      const approvedItems: LineApprovalAcknowledgementItem[] = saved.map((item, index) => {
+        const source = actionable[index];
+        return {
+          name: item.label,
+          assignee: String(source?.assignee_staff ?? "").trim(),
+          status: String(source?.item_status ?? "").trim(),
+        };
+      });
+      const reviewUrl = reviewUrlForLineInbox(payload, car_row_id);
       const autoReplyEnabled = isAutoReplyAfterApproveEnabled();
       let acknowledged: Awaited<ReturnType<typeof maybeSendApprovalAcknowledgement>> = {
         replyText: buildLineApprovalAcknowledgementText({
           carTitle: detectedCarTitle(payload),
-          approvedItems: approvedItemLabels,
+          approvedItems,
+          reviewUrl,
         }),
         autoReply: {
           enabled: autoReplyEnabled,
           attempted: false,
           sent: false,
-          skipped_reason: approvedItemLabels.length === 0 ? "no_saved_items" : autoReplyEnabled ? "line_error" : "disabled",
+          skipped_reason: approvedItems.length === 0 ? "no_saved_items" : autoReplyEnabled ? "line_error" : "disabled",
         },
       };
 
@@ -327,7 +356,8 @@ export async function POST(request: Request) {
           acknowledged = await maybeSendApprovalAcknowledgement({
             row: row as { source_type?: unknown; group_id?: unknown; user_id?: unknown },
             payload,
-            approvedItemLabels,
+            approvedItems,
+            reviewUrl,
           });
         } catch (error) {
           const safeError = cleanErrorForLog(error);
@@ -358,6 +388,8 @@ export async function POST(request: Request) {
           order_item_id: item.order_item_id,
           label: item.label,
           action: item.action,
+          status: String(actionable[index]?.item_status ?? "").trim(),
+          assignee_staff: String(actionable[index]?.assignee_staff ?? "").trim(),
         })),
         reply_text: acknowledged.replyText,
         auto_reply: acknowledged.autoReply,

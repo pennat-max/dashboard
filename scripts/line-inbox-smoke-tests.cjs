@@ -60,6 +60,11 @@ const { splitLineTextForInbox } = loadTsFile(path.join(root, "src/lib/line-inbox
 const { buildFallbackAnalyzeItemsFromRawText } = loadTsFile(
   path.join(root, "src/lib/line-inbox/fallback-analyze-items.ts")
 );
+const {
+  buildLineApprovalAcknowledgementText,
+  buildLineCarDisplayLabel,
+  buildLineOrderReviewUrl,
+} = loadTsFile(path.join(root, "src/lib/line-inbox/acknowledgement.ts"));
 
 function assertItems(input, expectedItems, label) {
   const result = splitLineTextForInbox(input);
@@ -143,6 +148,50 @@ assert.deepStrictEqual(
   "fallback analyze items recover action rows when analyze_payload.items is empty"
 );
 
+const koTho2692CarLabel = buildLineCarDisplayLabel({
+  plate: "กท-2692",
+  title: "กท-2692 ROCCO PRE 2.4 Hight AT Double_Cab PEARL_WHITE Aug20",
+});
+assert.strictEqual(
+  koTho2692CarLabel,
+  "กท-2692 ROCCO PRE 2.4 Hight AT Double_Cab PEARL_WHITE Aug20",
+  "car display label does not duplicate plate when spec already starts with plate"
+);
+assert.strictEqual(
+  buildLineCarDisplayLabel({
+    plate: "กท-2692",
+    title: "กท-2692 กท-2692 ROCCO PRE 2.4 Hight AT Double_Cab PEARL_WHITE Aug20",
+  }),
+  "กท-2692 ROCCO PRE 2.4 Hight AT Double_Cab PEARL_WHITE Aug20",
+  "car display label collapses duplicate leading plate"
+);
+
+const koTho2692ReviewUrl = buildLineOrderReviewUrl({
+  carRowId: "64ceddf5-2f7b-4e63-b8aa-71cf6d8d537b",
+  plate: "กท-2692",
+});
+assert(koTho2692ReviewUrl.includes("load=full"), "review URL keeps full-load mode");
+assert(
+  koTho2692ReviewUrl.includes("focusCar=64ceddf5-2f7b-4e63-b8aa-71cf6d8d537b"),
+  "review URL includes focusCar deep link"
+);
+assert(koTho2692ReviewUrl.includes("search="), "review URL includes search fallback");
+
+const approvalReply = buildLineApprovalAcknowledgementText({
+  carTitle: koTho2692CarLabel,
+  reviewUrl: koTho2692ReviewUrl,
+  approvedItems: [
+    { name: "แต่งเหมือนรูปทุกอย่าง", assignee: "PREW", status: "สั่ง" },
+    { name: "ยกเลิกติดกันแมลง+กันสาด", assignee: "", status: "เช็ค" },
+  ],
+});
+assert(approvalReply.includes("รถ: กท-2692 ROCCO PRE"), "approval reply includes non-duplicated car label");
+assert(!approvalReply.includes("กท-2692 กท-2692 ROCCO"), "approval reply does not duplicate plate");
+assert(approvalReply.includes("ผู้รับผิดชอบ: PREW"), "approval reply includes selected assignee");
+assert(approvalReply.includes("สถานะ: สั่ง"), "approval reply includes selected status");
+assert(approvalReply.includes("ผู้รับผิดชอบ: ยังไม่ระบุ"), "approval reply shows explicit unassigned label");
+assert(approvalReply.includes("focusCar=64ceddf5-2f7b-4e63-b8aa-71cf6d8d537b"), "approval reply includes car deep link");
+
 const pendingQueueRoute = fs.readFileSync(
   path.join(root, "src/app/api/line-inbox/pending-queue/route.ts"),
   "utf8"
@@ -174,6 +223,12 @@ assert(
   pendingSaveRoute.includes("buildFallbackAnalyzePayloadFromRawText"),
   "pending-save accepts fallback item indexes from old/no-payload LINE text rows"
 );
+assert(pendingSaveRoute.includes("assignee_staff: String(actionRow.assignee_staff"), "pending-save receives selected assignee");
+assert(pendingSaveRoute.includes("item_status: String(actionRow.item_status"), "pending-save receives selected status");
+assert(pendingSaveRoute.includes("saved_items: saved.map"), "pending-save response returns saved item rows");
+assert(pendingSaveRoute.includes("assignee_staff: String(actionable[index]?.assignee_staff"), "pending-save response includes assignee");
+assert(pendingSaveRoute.includes("status: String(actionable[index]?.item_status"), "pending-save response includes status");
+assert(pendingSaveRoute.includes("buildLineOrderReviewUrl"), "pending-save reply uses focusCar deep link");
 assert(
   pendingQueueRoute.includes("รูปจาก LINE ยังไม่ผูกกับข้อความ/รถ"),
   "image-only queue card has a non-blank fallback title"

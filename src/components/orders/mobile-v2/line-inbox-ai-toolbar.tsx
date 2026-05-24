@@ -361,7 +361,7 @@ function buildOrderReviewUrl({
   const safeCarRowId = String(carRowId ?? "").trim();
   const safePlate = collapseDisplaySpaces(plate);
   url.searchParams.set("load", "full");
-  if (safeCarRowId) url.searchParams.set("carRowId", safeCarRowId);
+  if (safeCarRowId) url.searchParams.set("focusCar", safeCarRowId);
   if (safePlate && safePlate !== "-") url.searchParams.set("search", safePlate);
   return url.toString();
 }
@@ -379,16 +379,27 @@ function normalizeSearchText(value: string): string {
 function buildLineReplyText({
   plate,
   lines,
+  reviewUrl,
   uiLang,
 }: {
   plate: string;
-  lines: Array<{ name: string; status: string }>;
+  lines: Array<{ name: string; status: string; assignee?: string }>;
+  reviewUrl?: string;
   uiLang: UiLang;
 }): string {
   const safePlate = plate.trim() || "-";
+  const safeReviewUrl = String(reviewUrl ?? "").trim() || LINE_ORDER_REVIEW_URL;
   const itemLines =
     lines.length > 0
-      ? lines.map((line, index) => `${index + 1}. ${line.name.trim() || "-"} - ${line.status.trim() || "-"}`).join("\n")
+      ? lines
+          .map((line, index) => {
+            const assignee = String(line.assignee ?? "").trim() || (uiLang === "en" ? "Unassigned" : "ยังไม่ระบุ");
+            const status = line.status.trim() || "-";
+            return uiLang === "en"
+              ? `${index + 1}. ${line.name.trim() || "-"} — owner: ${assignee} — status: ${status}`
+              : `${index + 1}. ${line.name.trim() || "-"} — ผู้รับผิดชอบ: ${assignee} — สถานะ: ${status}`;
+          })
+          .join("\n")
       : "-";
 
   if (uiLang === "en") {
@@ -397,7 +408,8 @@ function buildLineReplyText({
       `Car: ${safePlate}`,
       "Items:",
       itemLines,
-      "You can follow the status in Order Tracking.",
+      "Review the saved work:",
+      safeReviewUrl,
     ].join("\n");
   }
 
@@ -406,7 +418,8 @@ function buildLineReplyText({
     `รถ: ${safePlate}`,
     "รายการ:",
     itemLines,
-    "ติดตามสถานะในระบบ Order Tracking ได้ครับ",
+    "ตรวจสอบข้อมูลงาน:",
+    safeReviewUrl,
   ].join("\n");
 }
 
@@ -699,6 +712,13 @@ function queueGroupDisplayTitle(group: PendingQueueGroup, uiLang: UiLang): strin
   const plate = String(group.plate_display ?? "").trim();
   const title = String(group.car_title ?? "").trim();
   const fallback = String(group.fallback_title ?? group.fallbackTitle ?? "").trim();
+  return buildDisplayCarLabel({ plate, title, fallback, uiLang });
+}
+
+function queueMessageDisplayTitle(message: PendingQueueMessage, uiLang: UiLang): string {
+  const plate = String(message.plate_display ?? "").trim();
+  const title = String(message.car_title ?? "").trim();
+  const fallback = String(message.fallback_title ?? message.fallbackTitle ?? "").trim();
   return buildDisplayCarLabel({ plate, title, fallback, uiLang });
 }
 
@@ -1504,9 +1524,10 @@ function useLineInboxBridgeState({
 
   const selectedQueueActionsForInbox = useCallback(
     (m: PendingQueueMessage) => {
+      const fallbackAssignee = resolveSaleStaffForOrder(String(m.sale ?? ""), saleAssigneesBySale);
       return queueMessageDisplayActionLines(m).flatMap((line) => {
         const rowKey = queueSuggestionRowKey(m.inbox_id, line.item_index);
-        const draft = queueDrafts[rowKey] ?? queueActionDraftForLine(line, "");
+        const draft = queueDrafts[rowKey] ?? queueActionDraftForLine(line, fallbackAssignee);
         if (!draft.included || draft.action === "skip") return [];
         return [
           {
@@ -1522,7 +1543,7 @@ function useLineInboxBridgeState({
         ];
       });
     },
-    [queueDrafts]
+    [queueDrafts, saleAssigneesBySale]
   );
 
   const clearStagedForRowKeys = useCallback((rowKeys: string[]) => {
@@ -1850,7 +1871,13 @@ function useLineInboxBridgeState({
           error?: string;
           results?: Array<{
             inbox_message_id: string;
-            saved_items?: Array<{ item_index: number; order_item_id: string }>;
+            saved_items?: Array<{
+              item_index: number;
+              order_item_id: string;
+              label?: string;
+              status?: string;
+              assignee_staff?: string;
+            }>;
             reply_text?: string;
             auto_reply?: {
               enabled?: boolean;
@@ -1921,18 +1948,21 @@ function useLineInboxBridgeState({
             ? actions.map((line) => ({
                 name: String(line.item_name ?? "").trim(),
                 status: String(line.item_status ?? "").trim() || "เช็ค",
+                assignee: String(line.assignee_staff ?? "").trim(),
               }))
             : m.new_lines
                 .filter((line) => indices.includes(line.item_index))
                 .map((line) => ({
                   name: line.suggested_item_name || line.raw_text,
                   status: line.suggested_status || "เช็ค",
+                  assignee: "",
                 }));
         setReplyText(
           String(resultForMessage?.reply_text ?? "").trim() ||
             buildLineReplyText({
-              plate: m.plate_display || "",
+              plate: queueMessageDisplayTitle(m, uiLang),
               lines: savedLines,
+              reviewUrl: buildOrderReviewUrl({ carRowId: m.car_row_id, plate: m.plate_display }),
               uiLang,
             })
         );
@@ -2173,11 +2203,21 @@ function useLineInboxBridgeState({
       );
       setReplyText(
         buildLineReplyText({
-          plate: detectedOrder?.fullPlate || selected?.fullPlate || detected?.plate_text || "",
+          plate: buildDisplayCarLabel({
+            plate: detectedOrder?.fullPlate || selected?.fullPlate || detected?.plate_text || "",
+            title: detectedOrder?.car || selected?.car || detected?.spec_text || "",
+            fallback: detected?.chassis || "",
+            uiLang,
+          }),
           lines: selectedRows.map((row) => ({
             name: String(row.itemName || row.suggested_item_name || row.raw_text).trim(),
             status: String(row.status || row.suggested_status || "เช็ค").trim(),
+            assignee: String(row.assignee ?? "").trim(),
           })),
+          reviewUrl: buildOrderReviewUrl({
+            carRowId: effectiveCarRowId,
+            plate: detectedOrder?.fullPlate || selected?.fullPlate || detected?.plate_text || "",
+          }),
           uiLang,
         })
       );
