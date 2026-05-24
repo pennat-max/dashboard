@@ -6,6 +6,7 @@ import {
   markLineInboxMessageWorkflowConfirmed,
   markLineInboxMessageWorkflowSkipped,
 } from "@/lib/line-inbox/line-inbox-messages";
+import { buildFallbackAnalyzeItemsFromRawText } from "@/lib/line-inbox/fallback-analyze-items";
 import { pushLineTextMessage } from "@/lib/line/push-message";
 import { buildLineApprovalAcknowledgementText } from "@/lib/line-inbox/acknowledgement";
 import type { DuplicateStatus, LineInboxAnalyzeItem, LineInboxAnalyzeResponse } from "@/lib/line-inbox/types";
@@ -180,7 +181,7 @@ export async function POST(request: Request) {
       const inboxId = block.inbox_message_id;
       const { data: row, error: selErr } = await supabase
         .from(LINE_INBOX_MESSAGES_TABLE)
-        .select("id,workflow_status,analyze_payload,car_row_id,source_type,group_id,user_id")
+        .select("id,workflow_status,raw_text,analyze_payload,car_row_id,source_type,group_id,user_id")
         .eq("id", inboxId)
         .maybeSingle();
 
@@ -207,7 +208,17 @@ export async function POST(request: Request) {
         throw new Error(`inbox_message ${inboxId} has no analyze payload`);
       }
 
-      const items = payloadRaw.items ?? [];
+      const crFromPayload = String(payloadRaw.detected_car?.car_row_id ?? "").trim();
+      const crFromRow = String((row as { car_row_id?: unknown }).car_row_id ?? "").trim();
+      const car_row_id = crFromPayload || crFromRow;
+      const items =
+        (payloadRaw.items ?? []).length > 0
+          ? payloadRaw.items ?? []
+          : buildFallbackAnalyzeItemsFromRawText(
+              (row as { raw_text?: unknown }).raw_text,
+              payloadRaw.existing_items ?? [],
+              Boolean(car_row_id)
+            );
       const actionable: Array<PersistConfirmRow & { item_index: number }> = [];
 
       if (block.actions?.length) {
@@ -267,9 +278,6 @@ export async function POST(request: Request) {
         continue;
       }
 
-      const crFromPayload = String(payloadRaw.detected_car?.car_row_id ?? "").trim();
-      const crFromRow = String((row as { car_row_id?: unknown }).car_row_id ?? "").trim();
-      const car_row_id = crFromPayload || crFromRow;
       if (!car_row_id) {
         throw new Error(`This LINE inbox message is not matched to a car yet; inbox ${inboxId}`);
       }

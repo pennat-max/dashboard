@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireMutateRole } from "@/lib/auth/mutation-guard";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { LINE_INBOX_MESSAGES_TABLE } from "@/lib/line-inbox/line-inbox-messages";
+import { buildFallbackAnalyzeItemsFromRawText } from "@/lib/line-inbox/fallback-analyze-items";
 import type {
   DuplicateStatus,
   ExistingOrderItemRow,
@@ -741,9 +742,33 @@ export async function GET() {
       const followingImages = findFollowingImageContexts(row, rows);
       const rowNeedsHumanReview = Boolean(row.needs_human_review);
 
+      const car_row_id = effectiveCarRowId(payload, row, related);
+      const relatedCarTitle = detectedCarTitle(related?.payload ?? null, cleanString(related?.row.car_row_id));
+      const plateTextRaw = String(payload.detected_car?.plate_text ?? "").trim();
+      const specText = String(payload.detected_car?.spec_text ?? "").trim();
+      const carTitleRaw = [plateTextRaw, specText].filter(Boolean).join(" ").trim();
+      const carTitle = carTitleRaw || relatedCarTitle;
+      const fallbackTitle = fallbackTitleForQueue({ row, related, carTitle, carRowId: car_row_id });
+      const fallbackDescription = fallbackDescriptionForQueue({ row, related, fallbackTitle });
+      const fallbackSubtitle = fallbackSubtitleForQueue({ row, related, carRowId: car_row_id });
+      const relatedTextMessageId = cleanString(related?.row.id);
+      const plateText = plateTextRaw || fallbackTitle;
+      const sale = String(payload.detected_car?.sale ?? related?.payload?.detected_car?.sale ?? "").trim();
+      const extractedCarCandidates = payloadOrRelatedCandidates(payload, related);
+      const aiTargetCarReference =
+        cleanString(payload.aiTargetCarReference) || cleanString(related?.payload?.aiTargetCarReference);
+      const aiTargetCarConfidence =
+        cleanString(payload.aiTargetCarConfidence) || cleanString(related?.payload?.aiTargetCarConfidence);
+      const matchReason = cleanString(payload.matchReason) || cleanString(related?.payload?.matchReason);
+      const inheritedCarRowId = inheritedCarRowIdForQueue(payload, row, related);
+      const needsHumanReview = Boolean(payload.needs_human_review || rowNeedsHumanReview);
+      const queueItems =
+        (payload.items ?? []).length > 0
+          ? payload.items ?? []
+          : buildFallbackAnalyzeItemsFromRawText(row.raw_text, payload.existing_items ?? [], Boolean(car_row_id));
       const newEntries: PendingQueueNewLine[] = [];
       const actionEntries: PendingQueueActionLine[] = [];
-      (payload.items ?? []).forEach((item: LineInboxAnalyzeItem, idx: number) => {
+      queueItems.forEach((item: LineInboxAnalyzeItem, idx: number) => {
         const st = item.duplicate_status as DuplicateStatus;
         const displayName = queueItemDisplayName(item);
         if (st === "new") {
@@ -779,27 +804,6 @@ export async function GET() {
           included_by_default: st === "new",
         });
       });
-
-      const car_row_id = effectiveCarRowId(payload, row, related);
-      const relatedCarTitle = detectedCarTitle(related?.payload ?? null, cleanString(related?.row.car_row_id));
-      const plateTextRaw = String(payload.detected_car?.plate_text ?? "").trim();
-      const specText = String(payload.detected_car?.spec_text ?? "").trim();
-      const carTitleRaw = [plateTextRaw, specText].filter(Boolean).join(" ").trim();
-      const carTitle = carTitleRaw || relatedCarTitle;
-      const fallbackTitle = fallbackTitleForQueue({ row, related, carTitle, carRowId: car_row_id });
-      const fallbackDescription = fallbackDescriptionForQueue({ row, related, fallbackTitle });
-      const fallbackSubtitle = fallbackSubtitleForQueue({ row, related, carRowId: car_row_id });
-      const relatedTextMessageId = cleanString(related?.row.id);
-      const plateText = plateTextRaw || fallbackTitle;
-      const sale = String(payload.detected_car?.sale ?? related?.payload?.detected_car?.sale ?? "").trim();
-      const extractedCarCandidates = payloadOrRelatedCandidates(payload, related);
-      const aiTargetCarReference =
-        cleanString(payload.aiTargetCarReference) || cleanString(related?.payload?.aiTargetCarReference);
-      const aiTargetCarConfidence =
-        cleanString(payload.aiTargetCarConfidence) || cleanString(related?.payload?.aiTargetCarConfidence);
-      const matchReason = cleanString(payload.matchReason) || cleanString(related?.payload?.matchReason);
-      const inheritedCarRowId = inheritedCarRowIdForQueue(payload, row, related);
-      const needsHumanReview = Boolean(payload.needs_human_review || rowNeedsHumanReview);
       const manualReviewOnly = needsHumanReview && actionEntries.length === 0;
 
       if (actionEntries.length === 0 && !manualReviewOnly) continue;

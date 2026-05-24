@@ -36,6 +36,13 @@ function loadTsFile(filePath) {
   const localRequire = (request) => {
     const aliasPath = resolveTsPath(request);
     if (aliasPath) return loadTsFile(aliasPath);
+    if (request.startsWith(".")) {
+      const base = path.resolve(path.dirname(fullPath), request);
+      if (path.extname(base)) return loadTsFile(base);
+      for (const ext of [".ts", ".tsx", ".js", ".cjs"]) {
+        if (fs.existsSync(`${base}${ext}`)) return ext === ".ts" || ext === ".tsx" ? loadTsFile(`${base}${ext}`) : require(`${base}${ext}`);
+      }
+    }
     return require(request);
   };
 
@@ -50,6 +57,9 @@ function loadTsFile(filePath) {
 }
 
 const { splitLineTextForInbox } = loadTsFile(path.join(root, "src/lib/line-inbox/split-line-text.ts"));
+const { buildFallbackAnalyzeItemsFromRawText } = loadTsFile(
+  path.join(root, "src/lib/line-inbox/fallback-analyze-items.ts")
+);
 
 function assertItems(input, expectedItems, label) {
   const result = splitLineTextForInbox(input);
@@ -107,6 +117,32 @@ const withPhotoMarker = assertItems(
 );
 assert(!withPhotoMarker.items.some((item) => /LINE image/i.test(item)), "LINE image marker is not a work item");
 
+const koTho2692Text = [
+  "ทะเบียน กท-2692 ROCCO PRE 2.4 Hight AT Double_Cab PEARL_WHITE Aug20",
+  "แต่งเหมือนรูปทุกอย่าง!!!",
+  "ยกเลิกติดกันแมลง+กันสาด",
+  "เปลี่ยนแม็ก+ยาง ตามรูป",
+  "แต่งเป็นรถเดิมตามรูป",
+  "กรอไมล์ 38,300 กม.",
+  "เก็บงานให้ละเอียดที่สุด",
+  "[LINE image]",
+].join("\n");
+const koTho2692Expected = [
+  "แต่งเหมือนรูปทุกอย่าง",
+  "ยกเลิกติดกันแมลง+กันสาด",
+  "เปลี่ยนแม็ก+ยาง ตามรูป",
+  "แต่งเป็นรถเดิมตามรูป",
+  "กรอไมล์ 38,300 กม.",
+  "เก็บงานให้ละเอียดที่สุด",
+];
+const koTho2692 = assertItems(koTho2692Text, koTho2692Expected, "extracts กท-2692 photo work text");
+assert(!koTho2692.items.some((item) => /LINE image/i.test(item)), "กท-2692 LINE image marker is not a work item");
+assert.deepStrictEqual(
+  buildFallbackAnalyzeItemsFromRawText(koTho2692Text, [], true).map((item) => item.suggested_item_name),
+  koTho2692Expected,
+  "fallback analyze items recover action rows when analyze_payload.items is empty"
+);
+
 const pendingQueueRoute = fs.readFileSync(
   path.join(root, "src/app/api/line-inbox/pending-queue/route.ts"),
   "utf8"
@@ -119,6 +155,7 @@ for (const token of [
   "linePhotoCount",
   "extractionStatus",
   "matchStatus",
+  "buildFallbackAnalyzeItemsFromRawText",
 ]) {
   assert(pendingQueueRoute.includes(token), `pending queue exposes ${token}`);
 }
