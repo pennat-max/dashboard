@@ -4778,7 +4778,14 @@ export function MobileOrderTrackingHome({
   const deepLinkParams = useMemo(() => {
     const params = new URLSearchParams(searchParams?.toString() ?? "");
     return {
-      carRowId: String(params.get("aiLineCar") ?? params.get("carRowId") ?? params.get("focusCar") ?? params.get("car_row_id") ?? "").trim(),
+      carRowId: String(
+        params.get("focusCarRowId") ??
+          params.get("aiLineCar") ??
+          params.get("carRowId") ??
+          params.get("focusCar") ??
+          params.get("car_row_id") ??
+          ""
+      ).trim(),
       search: String(params.get("search") ?? params.get("plate") ?? "").trim(),
     };
   }, [searchParams]);
@@ -6378,6 +6385,14 @@ export function MobileOrderTrackingHome({
 
   const deepLinkSetupRef = useRef(false);
   const deepLinkScrollDoneRef = useRef(false);
+  const deepLinkKey = `${String(initialFocusedOrderId ?? "").trim()}\u0000${deepLinkParams.carRowId}\u0000${deepLinkParams.search}`;
+  const lastDeepLinkKeyRef = useRef("");
+  useEffect(() => {
+    if (lastDeepLinkKeyRef.current === deepLinkKey) return;
+    lastDeepLinkKeyRef.current = deepLinkKey;
+    deepLinkSetupRef.current = false;
+    deepLinkScrollDoneRef.current = false;
+  }, [deepLinkKey]);
   const findDeepLinkOrder = useCallback((): Order | null => {
     const orderId = String(initialFocusedOrderId ?? "").trim();
     const carRowId = deepLinkParams.carRowId;
@@ -6404,9 +6419,14 @@ export function MobileOrderTrackingHome({
     if (!hasDeepLink || deepLinkSetupRef.current || mappedOrders.length === 0) return;
     const order = findDeepLinkOrder();
     if (!order) {
-      if (rawSearch) setVehicleSearch(sanitizeVehicleSearchInput(rawSearch));
-      deepLinkSetupRef.current = true;
-      deepLinkScrollDoneRef.current = true;
+      if (rawSearch) {
+        const querySearch = sanitizeVehicleSearchInput(rawSearch);
+        setVehicleSearch((prev) => (prev === querySearch ? prev : querySearch));
+      }
+      if (!rawOrderId && !deepLinkParams.carRowId) {
+        deepLinkSetupRef.current = true;
+        deepLinkScrollDoneRef.current = true;
+      }
       return;
     }
     const q = rawSearch || String(order.fullPlate ?? "").trim() || String(order.plate ?? "").trim();

@@ -374,7 +374,7 @@ function buildOrderReviewUrl({
   const searchRef = buildOrderSearchRef(plate);
   url.searchParams.set("load", "full");
   const safeCarRowId = String(carRowId ?? "").trim();
-  if (safeCarRowId) url.searchParams.set("aiLineCar", safeCarRowId);
+  if (safeCarRowId) url.searchParams.set("focusCarRowId", safeCarRowId);
   // Keep search as a stable fallback if the focused card cannot be hydrated.
   if (searchRef) url.searchParams.set("search", searchRef);
   return url.toString();

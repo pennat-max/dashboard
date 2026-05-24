@@ -188,9 +188,9 @@ const koTho2692ReviewUrl = buildLineOrderReviewUrl({
 });
 assert(koTho2692ReviewUrl.includes("load=full"), "review URL keeps full-load mode");
 assert.strictEqual(
-  new URL(koTho2692ReviewUrl).searchParams.get("aiLineCar"),
+  new URL(koTho2692ReviewUrl).searchParams.get("focusCarRowId"),
   "64ceddf5-2f7b-4e63-b8aa-71cf6d8d537b",
-  "review URL includes AI LINE car focus id"
+  "review URL includes focused car row id"
 );
 assert.strictEqual(new URL(koTho2692ReviewUrl).searchParams.get("search"), "2692", "review URL searches by short plate ref");
 const sampleThaiPlateReviewUrl = buildLineOrderReviewUrl({
@@ -199,8 +199,8 @@ const sampleThaiPlateReviewUrl = buildLineOrderReviewUrl({
 });
 assert.strictEqual(
   sampleThaiPlateReviewUrl,
-  "https://used-car-export-dashboard.vercel.app/m/orders?load=full&aiLineCar=ignored-row-id&search=6286",
-  "review URL encodes AI LINE car focus and Thai plate search fallback"
+  "https://used-car-export-dashboard.vercel.app/m/orders?load=full&focusCarRowId=ignored-row-id&search=6286",
+  "review URL encodes focused car row id and Thai plate search fallback"
 );
 
 const approvalReply = buildLineApprovalAcknowledgementText({
@@ -222,8 +222,17 @@ assert(approvalReply.includes("3. เปลี่ยนแม็ก+ยาง �
 assert(!approvalReply.includes("ผู้รับผิดชอบ:"), "approval reply does not use verbose assignee label");
 assert(!approvalReply.includes("สถานะ:"), "approval reply does not use verbose status label");
 assert(approvalReply.includes("ดูงาน:"), "approval reply uses compact review link label");
-assert(approvalReply.includes("aiLineCar=64ceddf5-2f7b-4e63-b8aa-71cf6d8d537b"), "approval reply includes AI LINE car focus link");
+assert(approvalReply.includes("focusCarRowId=64ceddf5-2f7b-4e63-b8aa-71cf6d8d537b"), "approval reply includes focused car row id link");
 assert(approvalReply.includes("search=2692"), "approval reply includes short search deep link");
+const travo95295ReviewUrl = buildLineOrderReviewUrl({
+  carRowId: "a18c7942-10fc-4d32-8059-5b97f86ec9e8",
+  plate: "95295 TRAVO 4WD 2.8 4TREX AT Standard SILVER Mar26",
+});
+assert.strictEqual(
+  travo95295ReviewUrl,
+  "https://used-car-export-dashboard.vercel.app/m/orders?load=full&focusCarRowId=a18c7942-10fc-4d32-8059-5b97f86ec9e8&search=95295",
+  "review URL focuses 95295 by car_row_id with short search fallback"
+);
 
 const pendingQueueRoute = fs.readFileSync(
   path.join(root, "src/app/api/line-inbox/pending-queue/route.ts"),
@@ -289,12 +298,18 @@ assert(
   "copy-ready UI reply does not use verbose Thai assignee label"
 );
 assert(
-  lineInboxToolbar.includes('url.searchParams.set("aiLineCar"'),
-  "copy-ready UI reply includes AI LINE car focus links"
+  lineInboxToolbar.includes('url.searchParams.set("focusCarRowId"'),
+  "copy-ready UI reply includes focused car row id links"
 );
 assert(
+  mobileOrderTrackingHome.includes('params.get("focusCarRowId")') &&
   mobileOrderTrackingHome.includes('params.get("aiLineCar")'),
-  "orders page reads aiLineCar deep links"
+  "orders page reads focusCarRowId deep links with aiLineCar compatibility"
+);
+assert(
+  mobileOrderTrackingHome.includes("deepLinkSetupRef.current = false") &&
+    mobileOrderTrackingHome.includes("deepLinkScrollDoneRef.current = false"),
+  "orders page resets deep link focus when query params change"
 );
 assert(
   mobileOrderTrackingHome.includes("void focusLineInboxCar({"),
