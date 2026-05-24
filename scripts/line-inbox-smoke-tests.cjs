@@ -269,6 +269,18 @@ assert(
   "copy-ready UI reply uses compact assignee/status format"
 );
 assert(
+  lineInboxToolbar.includes("selectedQueueActionsForInbox(m, fallbackAssignee)"),
+  "queue save payload uses the same sale-owner fallback assignee shown in the UI"
+);
+assert(
+  lineInboxToolbar.includes("saveQueueCard(m, fallbackAssignee)"),
+  "queue approve action passes the displayed fallback assignee into save"
+);
+assert(
+  lineInboxToolbar.includes("queueActionDraftForLine(line, fallbackAssignee)"),
+  "queue duplicate warning uses fallback assignee draft defaults"
+);
+assert(
   !lineInboxToolbar.includes("owner: ${assignee}"),
   "copy-ready UI reply does not use verbose English owner label"
 );
@@ -302,6 +314,18 @@ assert(pendingSaveRoute.includes("saved_items: saved.map"), "pending-save respon
 assert(pendingSaveRoute.includes("assignee_staff: String(actionable[index]?.assignee_staff"), "pending-save response includes assignee");
 assert(pendingSaveRoute.includes("status: String(actionable[index]?.item_status"), "pending-save response includes status");
 assert(pendingSaveRoute.includes("buildLineOrderReviewUrl"), "pending-save reply uses search review link");
+assert(
+  pendingSaveRoute.includes("assignee_staff: item.assignee_staff"),
+  "pending-save passes selected assignee into persistence"
+);
+const persistConfirm = fs.readFileSync(
+  path.join(root, "src/lib/line-inbox/persist-line-inbox-confirm.ts"),
+  "utf8"
+);
+assert(
+  persistConfirm.includes("if (assigneeStaff) createPayload.assignee_staff = assigneeStaff"),
+  "line inbox persistence writes assignee_staff to order_items"
+);
 assert(
   pendingQueueRoute.includes("รูปจาก LINE ยังไม่ผูกกับข้อความ/รถ"),
   "image-only queue card has a non-blank fallback title"

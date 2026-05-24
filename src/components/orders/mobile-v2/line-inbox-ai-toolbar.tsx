@@ -1539,8 +1539,10 @@ function useLineInboxBridgeState({
   );
 
   const selectedQueueActionsForInbox = useCallback(
-    (m: PendingQueueMessage) => {
-      const fallbackAssignee = resolveSaleStaffForOrder(String(m.sale ?? ""), saleAssigneesBySale);
+    (m: PendingQueueMessage, fallbackAssigneeOverride = "") => {
+      const fallbackAssignee =
+        String(fallbackAssigneeOverride ?? "").trim() ||
+        resolveSaleStaffForOrder(String(m.sale ?? ""), saleAssigneesBySale);
       return queueMessageDisplayActionLines(m).flatMap((line) => {
         const rowKey = queueSuggestionRowKey(m.inbox_id, line.item_index);
         const draft = queueDrafts[rowKey] ?? queueActionDraftForLine(line, fallbackAssignee);
@@ -1850,14 +1852,14 @@ function useLineInboxBridgeState({
   );
 
   const saveQueueCard = useCallback(
-    async (m: PendingQueueMessage) => {
-      const actions = selectedQueueActionsForInbox(m);
+    async (m: PendingQueueMessage, fallbackAssignee = "") => {
+      const actions = selectedQueueActionsForInbox(m, fallbackAssignee);
       const indices = actions.length > 0 ? [] : selectedIndicesForInbox(m);
       const selectedCount = actions.length || indices.length;
       if (selectedCount === 0) return;
       const riskyCount = (m.action_lines ?? []).filter((line) => {
         const rowKey = queueSuggestionRowKey(m.inbox_id, line.item_index);
-        const draft = queueDrafts[rowKey] ?? queueActionDraftForLine(line, "");
+        const draft = queueDrafts[rowKey] ?? queueActionDraftForLine(line, fallbackAssignee);
         return draft.included && draft.action !== "skip" && line.duplicate_status !== "new";
       }).length;
       if (riskyCount > 0) {
@@ -2530,9 +2532,9 @@ function useLineInboxBridgeState({
             return true;
           });
         })();
-        const matchedCar = queueMessageHasMatchedCar(m) || queueGroupHasMatchedCar(group);
-        const selectedActions = selectedQueueActionsForInbox(m);
         const fallbackAssignee = resolveSaleStaffForOrder(group.sale, saleAssigneesBySale);
+        const matchedCar = queueMessageHasMatchedCar(m) || queueGroupHasMatchedCar(group);
+        const selectedActions = selectedQueueActionsForInbox(m, fallbackAssignee);
         return (
           <div key={m.inbox_id} className="rounded-xl bg-white px-2.5 py-2.5 ring-1 ring-slate-200/80">
             {showManual ? (
@@ -2736,7 +2738,7 @@ function useLineInboxBridgeState({
                 type="button"
                 size="sm"
                 disabled={savingInboxId === m.inbox_id || selectedActions.length === 0 || !messageCarRowId}
-                onClick={() => void saveQueueCard(m)}
+                onClick={() => void saveQueueCard(m, fallbackAssignee)}
                 className="min-h-11 touch-manipulation bg-slate-950 hover:bg-slate-900"
               >
                 {savingInboxId === m.inbox_id
