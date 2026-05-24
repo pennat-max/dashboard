@@ -5,6 +5,7 @@ import { LINE_INBOX_MESSAGES_TABLE } from "@/lib/line-inbox/line-inbox-messages"
 import type {
   DuplicateStatus,
   ExistingOrderItemRow,
+  LineInboxCarCandidate,
   LineInboxAnalyzeItem,
   LineInboxAnalyzeResponse,
   LineInboxAttachmentMeta,
@@ -56,6 +57,11 @@ type PendingQueueAttachment = {
   relatedTextMessageId: string;
   line_photo_count: number;
   linePhotoCount: number;
+  extractedCarCandidates: LineInboxCarCandidate[];
+  aiTargetCarReference: string;
+  aiTargetCarConfidence: string;
+  matchReason: string;
+  inheritedCarRowId: string;
   sale: string;
   needs_human_review: boolean;
   status: "not_linked";
@@ -89,6 +95,11 @@ type PendingQueueMsg = {
   relatedTextMessageId: string;
   line_photo_count: number;
   linePhotoCount: number;
+  extractedCarCandidates: LineInboxCarCandidate[];
+  aiTargetCarReference: string;
+  aiTargetCarConfidence: string;
+  matchReason: string;
+  inheritedCarRowId: string;
   car_row_id: string;
   sale: string;
   raw_text: string;
@@ -121,6 +132,11 @@ type PendingQueueGroup = {
   relatedTextMessageId: string;
   line_photo_count: number;
   linePhotoCount: number;
+  extractedCarCandidates: LineInboxCarCandidate[];
+  aiTargetCarReference: string;
+  aiTargetCarConfidence: string;
+  matchReason: string;
+  inheritedCarRowId: string;
   sale: string;
   source_label: string;
   source_type: string;
@@ -337,6 +353,11 @@ function extractStoredAttachments(
     relatedTextMessageId?: string;
     linePhotoCount?: number;
     rawTextPreview?: string;
+    extractedCarCandidates?: LineInboxCarCandidate[];
+    aiTargetCarReference?: string;
+    aiTargetCarConfidence?: string;
+    matchReason?: string;
+    inheritedCarRowId?: string;
   } = {}
 ): PendingQueueAttachment[] {
   const inboxId = String(row.id ?? "").trim();
@@ -352,6 +373,11 @@ function extractStoredAttachments(
   const fallbackSubtitle = cleanString(overrides.fallbackSubtitle);
   const relatedTextMessageId = cleanString(overrides.relatedTextMessageId);
   const linePhotoCount = Math.max(1, Number(overrides.linePhotoCount ?? 1));
+  const extractedCarCandidates = overrides.extractedCarCandidates ?? payload.extractedCarCandidates ?? [];
+  const aiTargetCarReference = cleanString(overrides.aiTargetCarReference) || cleanString(payload.aiTargetCarReference);
+  const aiTargetCarConfidence = cleanString(overrides.aiTargetCarConfidence) || cleanString(payload.aiTargetCarConfidence);
+  const matchReason = cleanString(overrides.matchReason) || cleanString(payload.matchReason);
+  const inheritedCarRowId = cleanString(overrides.inheritedCarRowId);
   return (payload.line_attachments ?? [])
     .filter((attachment: LineInboxAttachmentMeta) => {
       return attachment.status === "stored" && Boolean(String(attachment.public_url ?? "").trim());
@@ -381,6 +407,11 @@ function extractStoredAttachments(
       relatedTextMessageId,
       line_photo_count: linePhotoCount,
       linePhotoCount,
+      extractedCarCandidates,
+      aiTargetCarReference,
+      aiTargetCarConfidence,
+      matchReason,
+      inheritedCarRowId,
       sale: cleanString(overrides.sale) || String(payload.detected_car?.sale ?? "").trim(),
       needs_human_review: Boolean(payload.needs_human_review),
       status: "not_linked" as const,
@@ -452,6 +483,30 @@ function detectedCarForQueue(
   };
 }
 
+function payloadOrRelatedCandidates(
+  payload: LineInboxAnalyzeResponse,
+  related: RelatedTextContext | null
+): LineInboxCarCandidate[] {
+  const own = payload.extractedCarCandidates ?? [];
+  if (own.length > 0) return own.slice(0, 8);
+  return (related?.payload?.extractedCarCandidates ?? []).slice(0, 8);
+}
+
+function inheritedCarRowIdForQueue(
+  payload: LineInboxAnalyzeResponse,
+  row: PendingQueueDbRow,
+  related: RelatedTextContext | null
+): string {
+  const own =
+    cleanString(payload.detected_car?.car_row_id) ||
+    cleanString(row.car_row_id);
+  if (own) return "";
+  return (
+    cleanString(related?.payload?.detected_car?.car_row_id) ||
+    cleanString(related?.row.car_row_id)
+  );
+}
+
 function uniqueExistingItems(items: ExistingOrderItemRow[]): ExistingOrderItemRow[] {
   const seen = new Set<string>();
   const out: ExistingOrderItemRow[] = [];
@@ -501,6 +556,11 @@ function groupMessages(messages: PendingQueueMsg[]): PendingQueueGroup[] {
       if (!existing.fallbackSubtitle) existing.fallbackSubtitle = message.fallbackSubtitle;
       if (!existing.related_text_message_id) existing.related_text_message_id = message.related_text_message_id;
       if (!existing.relatedTextMessageId) existing.relatedTextMessageId = message.relatedTextMessageId;
+      if (existing.extractedCarCandidates.length === 0) existing.extractedCarCandidates = message.extractedCarCandidates;
+      if (!existing.aiTargetCarReference) existing.aiTargetCarReference = message.aiTargetCarReference;
+      if (!existing.aiTargetCarConfidence) existing.aiTargetCarConfidence = message.aiTargetCarConfidence;
+      if (!existing.matchReason) existing.matchReason = message.matchReason;
+      if (!existing.inheritedCarRowId) existing.inheritedCarRowId = message.inheritedCarRowId;
       continue;
     }
 
@@ -520,6 +580,11 @@ function groupMessages(messages: PendingQueueMsg[]): PendingQueueGroup[] {
       relatedTextMessageId: message.relatedTextMessageId,
       line_photo_count: message.attachments.length,
       linePhotoCount: message.attachments.length,
+      extractedCarCandidates: message.extractedCarCandidates,
+      aiTargetCarReference: message.aiTargetCarReference,
+      aiTargetCarConfidence: message.aiTargetCarConfidence,
+      matchReason: message.matchReason,
+      inheritedCarRowId: message.inheritedCarRowId,
       sale: message.sale,
       source_label: message.source_label,
       source_type: message.source_type,
@@ -648,6 +713,13 @@ export async function GET() {
       const relatedTextMessageId = cleanString(related?.row.id);
       const plateText = plateTextRaw || fallbackTitle;
       const sale = String(payload.detected_car?.sale ?? related?.payload?.detected_car?.sale ?? "").trim();
+      const extractedCarCandidates = payloadOrRelatedCandidates(payload, related);
+      const aiTargetCarReference =
+        cleanString(payload.aiTargetCarReference) || cleanString(related?.payload?.aiTargetCarReference);
+      const aiTargetCarConfidence =
+        cleanString(payload.aiTargetCarConfidence) || cleanString(related?.payload?.aiTargetCarConfidence);
+      const matchReason = cleanString(payload.matchReason) || cleanString(related?.payload?.matchReason);
+      const inheritedCarRowId = inheritedCarRowIdForQueue(payload, row, related);
       const needsHumanReview = Boolean(payload.needs_human_review || rowNeedsHumanReview);
       const manualReviewOnly = needsHumanReview && actionEntries.length === 0;
 
@@ -664,6 +736,11 @@ export async function GET() {
         relatedTextMessageId,
         linePhotoCount: payload.line_attachments?.length ?? 0,
         rawTextPreview: fallbackDescription.slice(0, 120),
+        extractedCarCandidates,
+        aiTargetCarReference,
+        aiTargetCarConfidence,
+        matchReason,
+        inheritedCarRowId,
       });
       recentAttachments.push(...messageAttachments);
 
@@ -689,6 +766,11 @@ export async function GET() {
         relatedTextMessageId,
         line_photo_count: messageAttachments.length,
         linePhotoCount: messageAttachments.length,
+        extractedCarCandidates,
+        aiTargetCarReference,
+        aiTargetCarConfidence,
+        matchReason,
+        inheritedCarRowId,
         car_row_id: car_row_id || "",
         sale,
         raw_text: String(row.raw_text ?? "").trim(),

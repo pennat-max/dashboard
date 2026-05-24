@@ -19,6 +19,7 @@ import { resolveSaleStaffForOrder } from "@/lib/orders/sale-assignees-shared";
 import type {
   DuplicateStatus,
   ExistingOrderItemRow,
+  LineInboxCarCandidate,
   LineInboxAnalyzeItem,
   LineInboxAnalyzeResponse,
 } from "@/lib/line-inbox/types";
@@ -81,6 +82,11 @@ type PendingQueueMessage = {
   relatedTextMessageId?: string;
   line_photo_count?: number;
   linePhotoCount?: number;
+  extractedCarCandidates?: LineInboxCarCandidate[];
+  aiTargetCarReference?: string;
+  aiTargetCarConfidence?: string;
+  matchReason?: string;
+  inheritedCarRowId?: string;
   car_row_id: string;
   sale?: string;
   raw_text?: string;
@@ -121,6 +127,11 @@ type PendingQueueAttachment = {
   relatedTextMessageId?: string;
   line_photo_count?: number;
   linePhotoCount?: number;
+  extractedCarCandidates?: LineInboxCarCandidate[];
+  aiTargetCarReference?: string;
+  aiTargetCarConfidence?: string;
+  matchReason?: string;
+  inheritedCarRowId?: string;
   sale?: string;
   needs_human_review?: boolean;
   status?: "not_linked" | "attached" | "ignored" | string;
@@ -142,6 +153,11 @@ type PendingQueueGroup = {
   relatedTextMessageId?: string;
   line_photo_count?: number;
   linePhotoCount?: number;
+  extractedCarCandidates?: LineInboxCarCandidate[];
+  aiTargetCarReference?: string;
+  aiTargetCarConfidence?: string;
+  matchReason?: string;
+  inheritedCarRowId?: string;
   sale: string;
   source_label?: string;
   source_type?: string;
@@ -408,6 +424,19 @@ function queueDetectedCarLabel(message: PendingQueueMessage): string {
   const chassis = String(detected?.chassis ?? "").trim();
   const parts = [plate && plate !== "-" ? plate : "", spec, chassis].filter(Boolean);
   return parts.join(" ").trim();
+}
+
+function queueCandidateLabels(candidates: LineInboxCarCandidate[] | undefined): string[] {
+  const out: string[] = [];
+  for (const candidate of candidates ?? []) {
+    const text = String(candidate.text ?? "").trim();
+    if (!text) continue;
+    const suffix = String(candidate.confidence ?? "").trim();
+    const label = suffix ? `${text} (${suffix})` : text;
+    if (!out.some((item) => item.toLowerCase() === label.toLowerCase())) out.push(label);
+    if (out.length >= 4) break;
+  }
+  return out;
 }
 
 function formatQueueMessageReceivedAt(value: string, uiLang: UiLang): string {
@@ -709,6 +738,10 @@ type LineInboxCarPickerRow = {
   isUnresolved: boolean;
   manualReviewPreview: string;
   detectedCarLabel: string;
+  extractedCarCandidates: LineInboxCarCandidate[];
+  aiTargetCarReference: string;
+  aiTargetCarConfidence: string;
+  matchReason: string;
   sourceLabel: string;
   groupIdDisplay: string;
   fallbackSubtitle: string;
@@ -1193,6 +1226,10 @@ function useLineInboxBridgeState({
         isUnresolved: group.is_unresolved,
         manualReviewPreview: manualReviewMessage ? queueMessageRawText(manualReviewMessage).slice(0, 180) : "",
         detectedCarLabel: manualReviewMessage ? queueDetectedCarLabel(manualReviewMessage) : "",
+        extractedCarCandidates: group.extractedCarCandidates ?? manualReviewMessage?.extractedCarCandidates ?? [],
+        aiTargetCarReference: String(group.aiTargetCarReference ?? manualReviewMessage?.aiTargetCarReference ?? "").trim(),
+        aiTargetCarConfidence: String(group.aiTargetCarConfidence ?? manualReviewMessage?.aiTargetCarConfidence ?? "").trim(),
+        matchReason: String(group.matchReason ?? manualReviewMessage?.matchReason ?? "").trim(),
         sourceLabel: String(group.source_label ?? manualReviewMessage?.source_label ?? "").trim(),
         groupIdDisplay: String(group.group_id_display ?? manualReviewMessage?.group_id_display ?? "").trim(),
         fallbackSubtitle: String(group.fallback_subtitle ?? group.fallbackSubtitle ?? "").trim(),
@@ -2034,6 +2071,25 @@ function useLineInboxBridgeState({
                 {row.carRowId ? (
                   <p className="mt-1 break-all text-[10px] text-slate-500">car_row_id: {row.carRowId}</p>
                 ) : null}
+                {row.aiTargetCarReference ? (
+                  <p className="mt-1 text-[10px] font-semibold text-slate-600">
+                    {uiLang === "en" ? "AI target: " : "AI ชี้รถ: "}
+                    {row.aiTargetCarReference}
+                    {row.aiTargetCarConfidence ? ` · ${row.aiTargetCarConfidence}` : ""}
+                  </p>
+                ) : null}
+                {queueCandidateLabels(row.extractedCarCandidates).length > 0 ? (
+                  <p className="mt-1 line-clamp-3 text-[10px] text-slate-600">
+                    {uiLang === "en" ? "Candidates: " : "ตัวเลือกที่พบ: "}
+                    {queueCandidateLabels(row.extractedCarCandidates).join(" · ")}
+                  </p>
+                ) : null}
+                {row.matchReason ? (
+                  <p className="mt-1 line-clamp-2 text-[10px] text-slate-500">
+                    {uiLang === "en" ? "Match: " : "เหตุผล match: "}
+                    {row.matchReason}
+                  </p>
+                ) : null}
                 {row.manualReviewPreview ? (
                   <p className="mt-1 line-clamp-4 whitespace-pre-wrap text-slate-800">{row.manualReviewPreview}</p>
                 ) : null}
@@ -2204,6 +2260,25 @@ function useLineInboxBridgeState({
                 )}
                 {m.car_row_id ? (
                   <p className="mt-1 break-all text-[10px] font-medium text-slate-500">car_row_id: {m.car_row_id}</p>
+                ) : null}
+                {m.aiTargetCarReference ? (
+                  <p className="mt-1 text-[10px] font-semibold text-slate-600">
+                    {uiLang === "en" ? "AI target: " : "AI ชี้รถ: "}
+                    {m.aiTargetCarReference}
+                    {m.aiTargetCarConfidence ? ` · ${m.aiTargetCarConfidence}` : ""}
+                  </p>
+                ) : null}
+                {queueCandidateLabels(m.extractedCarCandidates).length > 0 ? (
+                  <p className="mt-1 line-clamp-3 text-[10px] text-slate-600">
+                    {uiLang === "en" ? "Candidates: " : "ตัวเลือกที่พบ: "}
+                    {queueCandidateLabels(m.extractedCarCandidates).join(" · ")}
+                  </p>
+                ) : null}
+                {m.matchReason ? (
+                  <p className="mt-1 line-clamp-2 text-[10px] text-slate-500">
+                    {uiLang === "en" ? "Match: " : "เหตุผล match: "}
+                    {m.matchReason}
+                  </p>
                 ) : null}
                 {queueMessageRawText(m) ? (
                   <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-lg bg-white/85 p-2 text-[11px] leading-relaxed text-slate-800 ring-1 ring-amber-100">

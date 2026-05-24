@@ -173,6 +173,8 @@ function mergeAiWithRuleGuard(
 
   for (const line of aiDraft?.ignored_vehicle_spec_lines ?? []) addUnique(ignoredVehicle, line);
   if (aiDraft?.detected_car_text) addUnique(ignoredVehicle, aiDraft.detected_car_text);
+  if (aiDraft?.target_car_reference) addUnique(ignoredVehicle, aiDraft.target_car_reference);
+  for (const line of aiDraft?.car_identity_lines ?? []) addUnique(ignoredVehicle, line);
   for (const candidate of aiDraft?.candidate_cars ?? []) {
     if (candidate.text) addUnique(ignoredVehicle, candidate.text);
   }
@@ -243,10 +245,24 @@ export async function runLineInboxAnalyzeCore(
   const carIdForTask = input.car_id != null && Number.isFinite(Number(input.car_id)) ? Number(input.car_id) : null;
   const attachmentsCount = Math.max(0, Math.floor(input.attachmentsCount ?? 0));
 
+  let aiDraft: LineInboxAiAnalyzeDraft | null = null;
+  if (input.useAi) {
+    try {
+      aiDraft = await runLineInboxAiAnalyze(raw_text);
+    } catch {
+      aiDraft = null;
+    }
+  }
+
   const detected = await resolveCarFromContext(supabase, {
     car_row_id: car_row_id_in || null,
     car_id: carIdForTask,
     raw_text,
+    aiTargetCarReference: aiDraft?.target_car_reference ?? null,
+    aiTargetCarReason: aiDraft?.target_car_reason ?? null,
+    aiTargetCarConfidence: aiDraft?.target_car_confidence ?? null,
+    aiCandidateCars: aiDraft?.candidate_cars ?? null,
+    carIdentityLines: aiDraft?.car_identity_lines ?? null,
   });
 
   const carResolved = Boolean(detected.car_row_id);
@@ -255,15 +271,6 @@ export async function runLineInboxAnalyzeCore(
     const taskId = await fetchOrderTaskIdForCar(supabase, detected.car_row_id, carIdForTask);
     if (taskId) {
       existing = await fetchOrderItemsForTask(supabase, taskId);
-    }
-  }
-
-  let aiDraft: LineInboxAiAnalyzeDraft | null = null;
-  if (input.useAi) {
-    try {
-      aiDraft = await runLineInboxAiAnalyze(raw_text);
-    } catch {
-      aiDraft = null;
     }
   }
 
@@ -317,6 +324,10 @@ export async function runLineInboxAnalyzeCore(
     ignored_vehicle_spec_lines: guarded.ignored_vehicle_spec_lines,
     ignored_mention_lines: guarded.ignored_mention_lines,
     ignored_noise_lines: guarded.ignored_noise_lines,
+    extractedCarCandidates: detected.extractedCarCandidates ?? [],
+    aiTargetCarReference: detected.aiTargetCarReference ?? aiDraft?.target_car_reference ?? "",
+    aiTargetCarConfidence: detected.aiTargetCarConfidence ?? aiDraft?.target_car_confidence ?? "",
+    matchReason: detected.matchReason ?? "",
     existing_items: existing,
     items,
     needs_human_review,
