@@ -7,6 +7,7 @@ import {
   markLineInboxMessageWorkflowSkipped,
 } from "@/lib/line-inbox/line-inbox-messages";
 import { buildFallbackAnalyzeItemsFromRawText } from "@/lib/line-inbox/fallback-analyze-items";
+import { buildFallbackAnalyzePayloadFromRawText } from "@/lib/line-inbox/fallback-analyze-payload";
 import { pushLineTextMessage } from "@/lib/line/push-message";
 import { buildLineApprovalAcknowledgementText } from "@/lib/line-inbox/acknowledgement";
 import type { DuplicateStatus, LineInboxAnalyzeItem, LineInboxAnalyzeResponse } from "@/lib/line-inbox/types";
@@ -204,19 +205,22 @@ export async function POST(request: Request) {
       }
 
       const payloadRaw = (row as { analyze_payload?: unknown }).analyze_payload;
-      if (!isAnalyzePayload(payloadRaw)) {
-        throw new Error(`inbox_message ${inboxId} has no analyze payload`);
-      }
+      const payload = isAnalyzePayload(payloadRaw)
+        ? payloadRaw
+        : await buildFallbackAnalyzePayloadFromRawText(supabase, {
+            raw_text: (row as { raw_text?: unknown }).raw_text,
+            car_row_id: (row as { car_row_id?: unknown }).car_row_id,
+          });
 
-      const crFromPayload = String(payloadRaw.detected_car?.car_row_id ?? "").trim();
+      const crFromPayload = String(payload.detected_car?.car_row_id ?? "").trim();
       const crFromRow = String((row as { car_row_id?: unknown }).car_row_id ?? "").trim();
       const car_row_id = crFromPayload || crFromRow;
       const items =
-        (payloadRaw.items ?? []).length > 0
-          ? payloadRaw.items ?? []
+        (payload.items ?? []).length > 0
+          ? payload.items ?? []
           : buildFallbackAnalyzeItemsFromRawText(
               (row as { raw_text?: unknown }).raw_text,
-              payloadRaw.existing_items ?? [],
+              payload.existing_items ?? [],
               Boolean(car_row_id)
             );
       const actionable: Array<PersistConfirmRow & { item_index: number }> = [];
@@ -301,7 +305,7 @@ export async function POST(request: Request) {
       const autoReplyEnabled = isAutoReplyAfterApproveEnabled();
       let acknowledged: Awaited<ReturnType<typeof maybeSendApprovalAcknowledgement>> = {
         replyText: buildLineApprovalAcknowledgementText({
-          carTitle: detectedCarTitle(payloadRaw),
+          carTitle: detectedCarTitle(payload),
           approvedItems: approvedItemLabels,
         }),
         autoReply: {
@@ -322,7 +326,7 @@ export async function POST(request: Request) {
         try {
           acknowledged = await maybeSendApprovalAcknowledgement({
             row: row as { source_type?: unknown; group_id?: unknown; user_id?: unknown },
-            payload: payloadRaw,
+            payload,
             approvedItemLabels,
           });
         } catch (error) {

@@ -3,6 +3,7 @@ import { requireMutateRole } from "@/lib/auth/mutation-guard";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { LINE_INBOX_MESSAGES_TABLE } from "@/lib/line-inbox/line-inbox-messages";
 import { buildFallbackAnalyzeItemsFromRawText } from "@/lib/line-inbox/fallback-analyze-items";
+import { buildFallbackAnalyzePayloadFromRawText } from "@/lib/line-inbox/fallback-analyze-payload";
 import type {
   DuplicateStatus,
   ExistingOrderItemRow,
@@ -235,6 +236,10 @@ function groupIdDisplay(row: Pick<PendingQueueDbRow, "group_id" | "user_id" | "s
 
 function isLineImageOnlyText(value: unknown): boolean {
   return /^\[LINE\s+(?:image|file)\]$/i.test(cleanString(value));
+}
+
+function canBuildFallbackPayloadForRow(row: PendingQueueDbRow): boolean {
+  return Boolean(cleanString(row.id)) && !isLineImageOnlyText(row.raw_text) && Boolean(cleanString(row.raw_text));
 }
 
 function firstRawTextLine(value: unknown): string {
@@ -731,14 +736,26 @@ export async function GET() {
 
     for (const row of rows) {
       const id = String(row.id ?? "").trim();
-      const payloadRaw = row.analyze_payload;
-      const payload = analyzePayloadOrNull(payloadRaw);
-      if (!id || !payload) continue;
-      if (cleanString(row.workflow_status) !== "pending" || cleanString(row.analyze_status) !== "ok") {
+      const related = findNearbyTextContext(row, rows);
+      if (!id || cleanString(row.workflow_status) !== "pending") continue;
+
+      if (isLineImageOnlyText(row.raw_text) && related) {
         continue;
       }
 
-      const related = findNearbyTextContext(row, rows);
+      const payloadRaw = row.analyze_payload;
+      const storedPayload = analyzePayloadOrNull(payloadRaw);
+      const payload =
+        storedPayload && cleanString(row.analyze_status) === "ok"
+          ? storedPayload
+          : canBuildFallbackPayloadForRow(row)
+            ? await buildFallbackAnalyzePayloadFromRawText(supabase, {
+                raw_text: row.raw_text,
+                car_row_id: row.car_row_id,
+              })
+            : storedPayload;
+      if (!payload) continue;
+
       const followingImages = findFollowingImageContexts(row, rows);
       const rowNeedsHumanReview = Boolean(row.needs_human_review);
 

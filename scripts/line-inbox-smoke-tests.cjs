@@ -149,6 +149,8 @@ const pendingQueueRoute = fs.readFileSync(
 );
 for (const token of [
   "findFollowingImageContexts",
+  "canBuildFallbackPayloadForRow",
+  "buildFallbackAnalyzePayloadFromRawText",
   "fallbackTitle",
   "rawTextPreview",
   "relatedPhotoIds",
@@ -156,9 +158,22 @@ for (const token of [
   "extractionStatus",
   "matchStatus",
   "buildFallbackAnalyzeItemsFromRawText",
+  "action_line_count: actionEntriesForMessage.length",
 ]) {
   assert(pendingQueueRoute.includes(token), `pending queue exposes ${token}`);
 }
+assert(
+  pendingQueueRoute.includes("isLineImageOnlyText(row.raw_text) && related"),
+  "pending queue groups image rows under the previous text row"
+);
+const pendingSaveRoute = fs.readFileSync(
+  path.join(root, "src/app/api/line-inbox/pending-save/route.ts"),
+  "utf8"
+);
+assert(
+  pendingSaveRoute.includes("buildFallbackAnalyzePayloadFromRawText"),
+  "pending-save accepts fallback item indexes from old/no-payload LINE text rows"
+);
 assert(
   pendingQueueRoute.includes("รูปจาก LINE ยังไม่ผูกกับข้อความ/รถ"),
   "image-only queue card has a non-blank fallback title"
