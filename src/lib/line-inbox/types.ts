@@ -4,6 +4,15 @@
 
 export type DuplicateStatus = "new" | "duplicate" | "possible_duplicate" | "unclear";
 
+export type LineInboxCarCandidate = {
+  text: string;
+  source?: "rule" | "ai";
+  kind?: string;
+  confidence?: number | string;
+  reason?: string;
+  line?: string;
+};
+
 export type LineInboxAnalyzeItem = {
   raw_text: string;
   suggested_item_name: string;
@@ -31,6 +40,10 @@ export type LineInboxAnalyzeResponse = {
   ignored_noise_lines?: string[];
   line_attachments?: LineInboxAttachmentMeta[];
   attachments_meta_count?: number;
+  extractedCarCandidates?: LineInboxCarCandidate[];
+  aiTargetCarReference?: string;
+  aiTargetCarConfidence?: string;
+  matchReason?: string;
   existing_items?: ExistingOrderItemRow[];
   items: LineInboxAnalyzeItem[];
   needs_human_review: boolean;

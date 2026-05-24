@@ -4775,6 +4775,20 @@ export function MobileOrderTrackingHome({
   const [experimentLoadingDetails, setExperimentLoadingDetails] = useState(false);
   const [experimentDetailError, setExperimentDetailError] = useState<string | null>(null);
   const [lineInboxFocusOrderId, setLineInboxFocusOrderId] = useState<string | null>(null);
+  const deepLinkParams = useMemo(() => {
+    const params = new URLSearchParams(searchParams?.toString() ?? "");
+    return {
+      carRowId: String(
+        params.get("focusCarRowId") ??
+          params.get("aiLineCar") ??
+          params.get("carRowId") ??
+          params.get("focusCar") ??
+          params.get("car_row_id") ??
+          ""
+      ).trim(),
+      search: String(params.get("search") ?? params.get("plate") ?? "").trim(),
+    };
+  }, [searchParams]);
 
   useEffect(() => {
     if (orderChipCacheExperimentEnabled) return;
@@ -4877,7 +4891,12 @@ export function MobileOrderTrackingHome({
   const [saleStatusFilters, setSaleStatusFilters] = useState<Set<SaleStatusFilterValue>>(
     () => new Set(initialSaleStatusFilters)
   );
-  const [vehicleSearch, setVehicleSearch] = useState("");
+  const [vehicleSearch, setVehicleSearch] = useState(() => sanitizeVehicleSearchInput(deepLinkParams.search));
+  useEffect(() => {
+    const querySearch = sanitizeVehicleSearchInput(deepLinkParams.search);
+    if (!querySearch) return;
+    setVehicleSearch((prev) => (prev === querySearch ? prev : querySearch));
+  }, [deepLinkParams.search]);
   const vehicleSearchForFiltering = useDebouncedValue(vehicleSearch, 120);
   const [translateAllBusy, setTranslateAllBusy] = useState(false);
   const [translateAllMessage, setTranslateAllMessage] = useState("");
@@ -6366,42 +6385,94 @@ export function MobileOrderTrackingHome({
 
   const deepLinkSetupRef = useRef(false);
   const deepLinkScrollDoneRef = useRef(false);
+  const deepLinkKey = `${String(initialFocusedOrderId ?? "").trim()}\u0000${deepLinkParams.carRowId}\u0000${deepLinkParams.search}`;
+  const lastDeepLinkKeyRef = useRef("");
   useEffect(() => {
-    const raw = String(initialFocusedOrderId ?? "").trim();
-    if (!raw || deepLinkSetupRef.current || mappedOrders.length === 0) return;
-    const order = mappedOrders.find((o) => o.id === raw);
+    if (lastDeepLinkKeyRef.current === deepLinkKey) return;
+    lastDeepLinkKeyRef.current = deepLinkKey;
+    deepLinkSetupRef.current = false;
+    deepLinkScrollDoneRef.current = false;
+  }, [deepLinkKey]);
+  const findDeepLinkOrder = useCallback((): Order | null => {
+    const orderId = String(initialFocusedOrderId ?? "").trim();
+    const carRowId = deepLinkParams.carRowId;
+    const search = deepLinkParams.search;
+    if (!orderId && !carRowId && !search) return null;
+    if (orderId) {
+      const byOrderId = mappedOrders.find((o) => o.id === orderId);
+      if (byOrderId) return byOrderId;
+    }
+    if (carRowId) {
+      const byCarRowId = mappedOrders.find((o) => String(o.carRowId ?? "").trim() === carRowId);
+      if (byCarRowId) return byCarRowId;
+    }
+    if (search) {
+      return mappedOrders.find((o) => matchesVehicleSearch(o, search)) ?? null;
+    }
+    return null;
+  }, [deepLinkParams.carRowId, deepLinkParams.search, initialFocusedOrderId, mappedOrders]);
+
+  useEffect(() => {
+    const rawOrderId = String(initialFocusedOrderId ?? "").trim();
+    const rawSearch = deepLinkParams.search;
+    const hasDeepLink = Boolean(rawOrderId || deepLinkParams.carRowId || rawSearch);
+    if (!hasDeepLink || deepLinkSetupRef.current || mappedOrders.length === 0) return;
+    const order = findDeepLinkOrder();
     if (!order) {
-      deepLinkSetupRef.current = true;
-      deepLinkScrollDoneRef.current = true;
+      if (rawSearch) {
+        const querySearch = sanitizeVehicleSearchInput(rawSearch);
+        setVehicleSearch((prev) => (prev === querySearch ? prev : querySearch));
+      }
+      if (!rawOrderId && !deepLinkParams.carRowId) {
+        deepLinkSetupRef.current = true;
+        deepLinkScrollDoneRef.current = true;
+      }
       return;
     }
+    const q = rawSearch || String(order.fullPlate ?? "").trim() || String(order.plate ?? "").trim();
     deepLinkSetupRef.current = true;
-    setSaleFilters(new Set());
-    setSaleStatusFilters(new Set());
-    setStaffFilters(new Set());
-    setItemStatusFilters(new Set());
-    const q = String(order.fullPlate ?? "").trim() || String(order.plate ?? "").trim();
-    if (q && q !== "-") setVehicleSearch(sanitizeVehicleSearchInput(q));
-  }, [initialFocusedOrderId, mappedOrders]);
+    void focusLineInboxCar({
+      orderId: order.id,
+      carRowId: String(order.carRowId ?? deepLinkParams.carRowId ?? "").trim() || null,
+      plate: q && q !== "-" ? q : "-",
+    });
+  }, [
+    deepLinkParams.carRowId,
+    deepLinkParams.search,
+    findDeepLinkOrder,
+    focusLineInboxCar,
+    initialFocusedOrderId,
+    mappedOrders.length,
+  ]);
 
   useLayoutEffect(() => {
-    const raw = String(initialFocusedOrderId ?? "").trim();
-    if (!raw || deepLinkScrollDoneRef.current || !deepLinkSetupRef.current) return;
-    const order = mappedOrders.find((o) => o.id === raw);
+    const rawOrderId = String(initialFocusedOrderId ?? "").trim();
+    if (
+      !rawOrderId &&
+      !deepLinkParams.carRowId &&
+      !deepLinkParams.search
+    ) {
+      return;
+    }
+    if (deepLinkScrollDoneRef.current || !deepLinkSetupRef.current) return;
+    const order = findDeepLinkOrder();
     if (!order) {
       deepLinkScrollDoneRef.current = true;
       return;
     }
-    const idx = visible.findIndex((o) => o.id === raw);
+    const idx = visible.findIndex((o) => o.id === order.id);
     if (idx < 0) return;
     setVisibleLimit((prev) => Math.max(prev, idx + 1));
-    const el = document.getElementById(`order-card-${raw}`);
+    setExperimentRequestedCount((prev) =>
+      Math.max(prev, idx + 1 + ORDER_TRACKING_EXPERIMENT_AHEAD_BUFFER)
+    );
+    const el = document.getElementById(`order-card-${order.id}`);
     if (!el) return;
     window.requestAnimationFrame(() => {
       el.scrollIntoView({ behavior: "smooth", block: "nearest" });
       deepLinkScrollDoneRef.current = true;
     });
-  }, [initialFocusedOrderId, mappedOrders, visible]);
+  }, [deepLinkParams.carRowId, deepLinkParams.search, findDeepLinkOrder, initialFocusedOrderId, visible]);
 
   useEffect(() => {
     startTransition(() => {

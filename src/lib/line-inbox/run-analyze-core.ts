@@ -46,6 +46,21 @@ function hasPreservedDetailToken(value: string): boolean {
   return /[\d%]|(?:km|กม\.?|กิโล|เปอร์เซ็น|นิ้ว|cm|mm|inch|วัน|เดือน|ปี)/i.test(value);
 }
 
+function hasLikelyWorkRequest(value: string): boolean {
+  return /(กรอไมล์|เลขไมล์|กุญแจ|กันสาด|กันแมลง|โรบาร์|สปอร์ตบาร์|โรลเลอร์|สติ๊กเกอร์|สติกเกอร์|ฟิล์ม|บันได|กันชน|กันแคร้ง|แร็ค|แรค|ฝาครอบ|ไฟ|กล้อง|เซ็นเซอร์|ยาง|ล้อ|แบต|แบตเตอรี่|โช้ค|ยกสูง|เอกสาร|ซ่อม|เปลี่ยน|ขาด|แตก|เสีย|หาย|ต้องสั่ง|สั่ง|ส่งอู่|ทำสี|ตรวจ|เช็ค|ติด|ติดตั้ง|เพิ่ม|ใส่|แปลง|ล้าง|ขัด|เคลือบ|เก็บงาน|ประเมิน|รับงาน|แต่งเหมือน\s*รูป|เหมือน\s*รูป|ตาม\s*(?:รูป|ภาพ)|รูปทุกอย่าง|ยกเลิก|ไม่ต้องติด|ไม่เอา|เอาออก|เบิก|รอ\s*ตรวจ|รอตรวจ|เอา\s*รถ\s*ไป\s*เช็ค)/i.test(
+    value
+  );
+}
+
+function aiWorkItemSources(aiDraft: LineInboxAiAnalyzeDraft | null): NonNullable<LineInboxAiAnalyzeDraft["items"]> {
+  if (!aiDraft) return [];
+  const out: NonNullable<LineInboxAiAnalyzeDraft["items"]> = [];
+  for (const item of aiDraft.items ?? []) out.push(item);
+  for (const item of aiDraft.actual_work_items ?? []) out.push(item);
+  for (const line of aiDraft.work_item_lines ?? []) out.push(line);
+  return out;
+}
+
 function areEquivalentWorkLines(left: string, right: string): boolean {
   const a = comparableLineKey(left);
   const b = comparableLineKey(right);
@@ -173,44 +188,19 @@ function mergeAiWithRuleGuard(
 
   for (const line of aiDraft?.ignored_vehicle_spec_lines ?? []) addUnique(ignoredVehicle, line);
   if (aiDraft?.detected_car_text) addUnique(ignoredVehicle, aiDraft.detected_car_text);
+  if (aiDraft?.target_car_reference) addUnique(ignoredVehicle, aiDraft.target_car_reference);
+  for (const line of aiDraft?.car_identity_lines ?? []) addUnique(ignoredVehicle, line);
   for (const candidate of aiDraft?.candidate_cars ?? []) {
     if (candidate.text) addUnique(ignoredVehicle, candidate.text);
   }
   for (const line of aiDraft?.ignored_mention_lines ?? []) addUnique(ignoredMention, line);
   for (const line of aiDraft?.ignored_noise_lines ?? []) addUnique(ignoredNoise, line);
 
-  const fallbackGrouped = (fallback.grouped_items ?? []).filter((item) => item.text);
-  const sourceItems = aiDraft?.items?.length
-    ? aiDraft.items
-    : fallbackGrouped.length
-      ? fallbackGrouped.map((item) => ({
-          raw_text: item.text,
-          suggested_item_name: item.text,
-          suggested_note: item.note,
-        }))
-      : fallback.items;
   const guardedLines: GuardedLine[] = [];
+  const fallbackGrouped = (fallback.grouped_items ?? []).filter((item) => item.text);
 
-  for (const source of sourceItems) {
-    const candidate = asAiItemText(source);
-    if (!candidate.text) continue;
-
-    const guarded = splitLineTextForInbox(candidate.text);
-    for (const line of guarded.ignored_vehicle_spec_lines) addUnique(ignoredVehicle, line);
-    for (const line of guarded.ignored_mention_lines) addUnique(ignoredMention, line);
-    for (const line of guarded.ignored_noise_lines) addUnique(ignoredNoise, line);
-
-    for (const [lineIndex, line] of guarded.items.entries()) {
-      const note = lineIndex === 0 ? candidate.note : undefined;
-      upsertGuardedLine(guardedLines, {
-        text: line,
-        note,
-        aiConfidence: candidate.confidence,
-        aiReason: candidate.reason,
-      });
-    }
-  }
-
+  // Keep the deterministic parser as the source of truth. AI work items are only
+  // a fallback below when the heuristic parser finds no work-like item at all.
   for (const grouped of fallbackGrouped) {
     upsertGuardedLine(guardedLines, { text: grouped.text, note: grouped.note || undefined });
   }
@@ -218,6 +208,38 @@ function mergeAiWithRuleGuard(
   if (guardedLines.length === 0 && fallback.items.length > 0) {
     for (const grouped of fallbackGrouped.length ? fallbackGrouped : fallback.items.map((text) => ({ text, note: "" }))) {
       upsertGuardedLine(guardedLines, { text: grouped.text, note: grouped.note || undefined });
+    }
+  }
+
+  if (guardedLines.length === 0 && hasLikelyWorkRequest(rawText)) {
+    for (const source of aiWorkItemSources(aiDraft)) {
+      const candidate = asAiItemText(source);
+      if (!candidate.text || !hasLikelyWorkRequest(candidate.text)) continue;
+
+      const guarded = splitLineTextForInbox(candidate.text);
+      for (const line of guarded.ignored_vehicle_spec_lines) addUnique(ignoredVehicle, line);
+      for (const line of guarded.ignored_mention_lines) addUnique(ignoredMention, line);
+      for (const line of guarded.ignored_noise_lines) addUnique(ignoredNoise, line);
+
+      if (guarded.items.length === 0) {
+        upsertGuardedLine(guardedLines, {
+          text: candidate.text,
+          note: candidate.note,
+          aiConfidence: candidate.confidence,
+          aiReason: candidate.reason,
+        });
+        continue;
+      }
+
+      for (const [lineIndex, line] of guarded.items.entries()) {
+        const note = lineIndex === 0 ? candidate.note : undefined;
+        upsertGuardedLine(guardedLines, {
+          text: line,
+          note,
+          aiConfidence: candidate.confidence,
+          aiReason: candidate.reason,
+        });
+      }
     }
   }
 
@@ -243,10 +265,24 @@ export async function runLineInboxAnalyzeCore(
   const carIdForTask = input.car_id != null && Number.isFinite(Number(input.car_id)) ? Number(input.car_id) : null;
   const attachmentsCount = Math.max(0, Math.floor(input.attachmentsCount ?? 0));
 
+  let aiDraft: LineInboxAiAnalyzeDraft | null = null;
+  if (input.useAi) {
+    try {
+      aiDraft = await runLineInboxAiAnalyze(raw_text);
+    } catch {
+      aiDraft = null;
+    }
+  }
+
   const detected = await resolveCarFromContext(supabase, {
     car_row_id: car_row_id_in || null,
     car_id: carIdForTask,
     raw_text,
+    aiTargetCarReference: aiDraft?.target_car_reference ?? null,
+    aiTargetCarReason: aiDraft?.target_car_reason ?? null,
+    aiTargetCarConfidence: aiDraft?.target_car_confidence ?? null,
+    aiCandidateCars: aiDraft?.candidate_cars ?? null,
+    carIdentityLines: aiDraft?.car_identity_lines ?? null,
   });
 
   const carResolved = Boolean(detected.car_row_id);
@@ -255,15 +291,6 @@ export async function runLineInboxAnalyzeCore(
     const taskId = await fetchOrderTaskIdForCar(supabase, detected.car_row_id, carIdForTask);
     if (taskId) {
       existing = await fetchOrderItemsForTask(supabase, taskId);
-    }
-  }
-
-  let aiDraft: LineInboxAiAnalyzeDraft | null = null;
-  if (input.useAi) {
-    try {
-      aiDraft = await runLineInboxAiAnalyze(raw_text);
-    } catch {
-      aiDraft = null;
     }
   }
 
@@ -317,6 +344,10 @@ export async function runLineInboxAnalyzeCore(
     ignored_vehicle_spec_lines: guarded.ignored_vehicle_spec_lines,
     ignored_mention_lines: guarded.ignored_mention_lines,
     ignored_noise_lines: guarded.ignored_noise_lines,
+    extractedCarCandidates: detected.extractedCarCandidates ?? [],
+    aiTargetCarReference: detected.aiTargetCarReference ?? aiDraft?.target_car_reference ?? "",
+    aiTargetCarConfidence: detected.aiTargetCarConfidence ?? aiDraft?.target_car_confidence ?? "",
+    matchReason: detected.matchReason ?? "",
     existing_items: existing,
     items,
     needs_human_review,

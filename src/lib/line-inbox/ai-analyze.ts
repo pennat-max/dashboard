@@ -16,7 +16,13 @@ type AiAnalyzeItem = Partial<
 export type LineInboxAiAnalyzeDraft = {
   detected_car?: Partial<LineInboxAnalyzeResponse["detected_car"]>;
   detected_car_text?: string;
-  candidate_cars?: Array<{ text?: string; confidence?: number; reason?: string }>;
+  target_car_reference?: string;
+  target_car_reason?: string;
+  target_car_confidence?: string;
+  car_identity_lines?: string[];
+  work_item_lines?: string[];
+  referenced_other_car_numbers?: string[];
+  candidate_cars?: Array<{ text?: string; confidence?: number | string; reason?: string }>;
   car_context?: string[];
   people_context?: string[];
   actual_work_items?: Array<string | AiAnalyzeItem>;
@@ -61,6 +67,13 @@ function asContextArray(value: unknown): string[] {
     })
     .filter(Boolean)
     .slice(0, 80);
+}
+
+function asConfidenceText(value: unknown): string {
+  const clean = safeString(value);
+  if (clean) return clean.toLowerCase();
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return "";
 }
 
 function asAiItems(value: unknown): Array<string | AiAnalyzeItem> {
@@ -110,6 +123,23 @@ function normalizeDraft(raw: unknown): LineInboxAiAnalyzeDraft | null {
         }
       : undefined;
 
+  const targetRaw =
+    input.target_car && typeof input.target_car === "object"
+      ? (input.target_car as Record<string, unknown>)
+      : null;
+  const target_car_reference =
+    safeString(input.target_car_reference) ||
+    safeString(targetRaw?.reference) ||
+    safeString(targetRaw?.text) ||
+    safeString(targetRaw?.plate) ||
+    safeString(targetRaw?.stock);
+  const target_car_reason =
+    safeString(input.target_car_reason) ||
+    safeString(targetRaw?.reason);
+  const target_car_confidence =
+    asConfidenceText(input.target_car_confidence) ||
+    asConfidenceText(targetRaw?.confidence);
+
   const actual_work_items = asAiItems(input.actual_work_items);
   const legacyItems = asAiItems(input.items);
   const items = actual_work_items.length ? actual_work_items : legacyItems;
@@ -121,6 +151,12 @@ function normalizeDraft(raw: unknown): LineInboxAiAnalyzeDraft | null {
   return {
     detected_car,
     detected_car_text: safeString(input.detected_car_text),
+    target_car_reference,
+    target_car_reason,
+    target_car_confidence,
+    car_identity_lines: asContextArray(input.car_identity_lines),
+    work_item_lines: asContextArray(input.work_item_lines),
+    referenced_other_car_numbers: asContextArray(input.referenced_other_car_numbers),
     candidate_cars: Array.isArray(input.candidate_cars)
       ? input.candidate_cars
           .map((item) => {
@@ -131,7 +167,10 @@ function normalizeDraft(raw: unknown): LineInboxAiAnalyzeDraft | null {
             if (!text) return null;
             return {
               text,
-              confidence: typeof obj.confidence === "number" ? Number(obj.confidence) : undefined,
+              confidence:
+                typeof obj.confidence === "number"
+                  ? Number(obj.confidence)
+                  : safeString(obj.confidence) || undefined,
               reason: safeString(obj.reason),
             };
           })
@@ -174,18 +213,29 @@ function buildPrompt(rawText: string): string {
     "",
     "Then separate the whole message into:",
     "1. detected_car",
-    "2. car_context",
-    "3. people_context",
-    "4. actual_work_items",
-    "5. notes",
-    "6. ignored_noise",
-    "7. ignored_mention_lines",
-    "8. ignored_vehicle_spec_lines",
-    "9. ignored_noise_lines",
-    "10. needs_human_review",
+    "2. target_car_reference",
+    "3. target_car_reason",
+    "4. car_identity_lines",
+    "5. work_item_lines",
+    "6. referenced_other_car_numbers",
+    "7. car_context",
+    "8. people_context",
+    "9. actual_work_items",
+    "10. notes",
+    "11. ignored_noise",
+    "12. ignored_mention_lines",
+    "13. ignored_vehicle_spec_lines",
+    "14. ignored_noise_lines",
+    "15. needs_human_review",
     "",
     "Rules:",
     "- AI only suggests. It never saves anything.",
+    "- The target car can appear anywhere in the message, not only the first line. Read the full text before choosing it.",
+    "- target_car_reference is the main car for this request. Prefer explicit plate/chassis/stock/reference lines such as 'ทะเบียน 51072 ...', '95295 TRAVO ...', or '1นค-8637 COMMUTER ...'.",
+    "- car_identity_lines are lines that identify the target car. work_item_lines are actionable work lines.",
+    "- If a work item references another car/stock number as a part/source, put that number in referenced_other_car_numbers and keep the line as work. Do not make it the target car when a main target exists.",
+    "- Example: target line 'ทะเบียน 51072 RAPTOR...' means target_car_reference='51072'. Work line 'สปอร์ตบาร์เอาของทะเบียน 31440 ในสติ๊ก YAHYA' stays an actual work item; 31440 is referenced_other_car_numbers, not the target car.",
+    "- target_car_confidence must be one of high, medium, low.",
     "- car_context: plate, chassis, stock number, car spec, brand/model/color/year, or car lookup clues. Never save these as order items.",
     "- people_context: mentions, tags, names, sale/staff/person clues, assignee clues, emoji/person chat context. Never save these as order items.",
     "- actual_work_items: only actionable work/request lines.",
@@ -213,6 +263,12 @@ function buildPrompt(rawText: string): string {
     "JSON schema:",
     JSON.stringify({
       detected_car: { plate_text: "", chassis: "", car_row_id: "", spec_text: "", sale: "", confidence: 0 },
+      target_car_reference: "",
+      target_car_reason: "",
+      target_car_confidence: "low",
+      car_identity_lines: [""],
+      work_item_lines: [""],
+      referenced_other_car_numbers: [""],
       candidate_cars: [{ text: "", confidence: 0, reason: "" }],
       car_context: [""],
       people_context: [""],

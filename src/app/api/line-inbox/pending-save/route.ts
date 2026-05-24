@@ -6,8 +6,15 @@ import {
   markLineInboxMessageWorkflowConfirmed,
   markLineInboxMessageWorkflowSkipped,
 } from "@/lib/line-inbox/line-inbox-messages";
+import { buildFallbackAnalyzeItemsFromRawText } from "@/lib/line-inbox/fallback-analyze-items";
+import { buildFallbackAnalyzePayloadFromRawText } from "@/lib/line-inbox/fallback-analyze-payload";
 import { pushLineTextMessage } from "@/lib/line/push-message";
-import { buildLineApprovalAcknowledgementText } from "@/lib/line-inbox/acknowledgement";
+import {
+  buildLineApprovalAcknowledgementText,
+  buildLineCarDisplayLabel,
+  buildLineOrderReviewUrl,
+  type LineApprovalAcknowledgementItem,
+} from "@/lib/line-inbox/acknowledgement";
 import type { DuplicateStatus, LineInboxAnalyzeItem, LineInboxAnalyzeResponse } from "@/lib/line-inbox/types";
 import { formatZodIssues, lineInboxPendingSaveBodySchema } from "@/lib/line-inbox/api-schemas";
 import { persistLineInboxConfirmations, type PersistConfirmRow } from "@/lib/line-inbox/persist-line-inbox-confirm";
@@ -50,8 +57,14 @@ function detectedCarTitle(payload: LineInboxAnalyzeResponse): string {
   const plate = cleanLine(payload.detected_car?.plate_text);
   const spec = cleanLine(payload.detected_car?.spec_text);
   const chassis = cleanLine(payload.detected_car?.chassis);
-  if (plate && spec && !spec.toLowerCase().startsWith(plate.toLowerCase())) return `${plate} ${spec}`;
-  return spec || plate || chassis;
+  return buildLineCarDisplayLabel({ plate, title: spec, fallback: chassis });
+}
+
+function reviewUrlForLineInbox(payload: LineInboxAnalyzeResponse, carRowId: string): string {
+  return buildLineOrderReviewUrl({
+    carRowId,
+    plate: cleanLine(payload.detected_car?.plate_text) || detectedCarTitle(payload),
+  });
 }
 
 function resolveLinePushTarget(row: {
@@ -76,11 +89,13 @@ function resolveLinePushTarget(row: {
 async function maybeSendApprovalAcknowledgement(params: {
   row: { source_type?: unknown; group_id?: unknown; user_id?: unknown };
   payload: LineInboxAnalyzeResponse;
-  approvedItemLabels: string[];
+  approvedItems: LineApprovalAcknowledgementItem[];
+  reviewUrl: string;
 }): Promise<{ autoReply: AutoReplyResult; replyText: string }> {
   const replyText = buildLineApprovalAcknowledgementText({
     carTitle: detectedCarTitle(params.payload),
-    approvedItems: params.approvedItemLabels,
+    approvedItems: params.approvedItems,
+    reviewUrl: params.reviewUrl,
   });
 
   if (!isAutoReplyAfterApproveEnabled()) {
@@ -90,7 +105,7 @@ async function maybeSendApprovalAcknowledgement(params: {
     };
   }
 
-  if (params.approvedItemLabels.length === 0) {
+  if (params.approvedItems.length === 0) {
     return {
       replyText,
       autoReply: { enabled: true, attempted: false, sent: false, skipped_reason: "no_saved_items" },
@@ -170,7 +185,14 @@ export async function POST(request: Request) {
     saved_count: number;
     skipped: boolean;
     order_task_id: string | null;
-    saved_items: Array<{ item_index: number; order_item_id: string; label: string; action: string }>;
+    saved_items: Array<{
+      item_index: number;
+      order_item_id: string;
+      label: string;
+      action: string;
+      status: string;
+      assignee_staff: string;
+    }>;
     reply_text?: string;
     auto_reply?: AutoReplyResult;
   }> = [];
@@ -180,7 +202,7 @@ export async function POST(request: Request) {
       const inboxId = block.inbox_message_id;
       const { data: row, error: selErr } = await supabase
         .from(LINE_INBOX_MESSAGES_TABLE)
-        .select("id,workflow_status,analyze_payload,car_row_id,source_type,group_id,user_id")
+        .select("id,workflow_status,raw_text,analyze_payload,car_row_id,source_type,group_id,user_id")
         .eq("id", inboxId)
         .maybeSingle();
 
@@ -203,11 +225,24 @@ export async function POST(request: Request) {
       }
 
       const payloadRaw = (row as { analyze_payload?: unknown }).analyze_payload;
-      if (!isAnalyzePayload(payloadRaw)) {
-        throw new Error(`inbox_message ${inboxId} has no analyze payload`);
-      }
+      const payload = isAnalyzePayload(payloadRaw)
+        ? payloadRaw
+        : await buildFallbackAnalyzePayloadFromRawText(supabase, {
+            raw_text: (row as { raw_text?: unknown }).raw_text,
+            car_row_id: (row as { car_row_id?: unknown }).car_row_id,
+          });
 
-      const items = payloadRaw.items ?? [];
+      const crFromPayload = String(payload.detected_car?.car_row_id ?? "").trim();
+      const crFromRow = String((row as { car_row_id?: unknown }).car_row_id ?? "").trim();
+      const car_row_id = crFromPayload || crFromRow;
+      const items =
+        (payload.items ?? []).length > 0
+          ? payload.items ?? []
+          : buildFallbackAnalyzeItemsFromRawText(
+              (row as { raw_text?: unknown }).raw_text,
+              payload.existing_items ?? [],
+              Boolean(car_row_id)
+            );
       const actionable: Array<PersistConfirmRow & { item_index: number }> = [];
 
       if (block.actions?.length) {
@@ -267,9 +302,6 @@ export async function POST(request: Request) {
         continue;
       }
 
-      const crFromPayload = String(payloadRaw.detected_car?.car_row_id ?? "").trim();
-      const crFromRow = String((row as { car_row_id?: unknown }).car_row_id ?? "").trim();
-      const car_row_id = crFromPayload || crFromRow;
       if (!car_row_id) {
         throw new Error(`This LINE inbox message is not matched to a car yet; inbox ${inboxId}`);
       }
@@ -289,18 +321,27 @@ export async function POST(request: Request) {
         line_inbox_msg_ref_for_audit: inboxId,
       });
 
-      const approvedItemLabels = saved.map((item) => item.label);
+      const approvedItems: LineApprovalAcknowledgementItem[] = saved.map((item, index) => {
+        const source = actionable[index];
+        return {
+          name: item.label,
+          assignee: String(source?.assignee_staff ?? "").trim(),
+          status: String(source?.item_status ?? "").trim(),
+        };
+      });
+      const reviewUrl = reviewUrlForLineInbox(payload, car_row_id);
       const autoReplyEnabled = isAutoReplyAfterApproveEnabled();
       let acknowledged: Awaited<ReturnType<typeof maybeSendApprovalAcknowledgement>> = {
         replyText: buildLineApprovalAcknowledgementText({
-          carTitle: detectedCarTitle(payloadRaw),
-          approvedItems: approvedItemLabels,
+          carTitle: detectedCarTitle(payload),
+          approvedItems,
+          reviewUrl,
         }),
         autoReply: {
           enabled: autoReplyEnabled,
           attempted: false,
           sent: false,
-          skipped_reason: approvedItemLabels.length === 0 ? "no_saved_items" : autoReplyEnabled ? "line_error" : "disabled",
+          skipped_reason: approvedItems.length === 0 ? "no_saved_items" : autoReplyEnabled ? "line_error" : "disabled",
         },
       };
 
@@ -314,8 +355,9 @@ export async function POST(request: Request) {
         try {
           acknowledged = await maybeSendApprovalAcknowledgement({
             row: row as { source_type?: unknown; group_id?: unknown; user_id?: unknown },
-            payload: payloadRaw,
-            approvedItemLabels,
+            payload,
+            approvedItems,
+            reviewUrl,
           });
         } catch (error) {
           const safeError = cleanErrorForLog(error);
@@ -346,6 +388,8 @@ export async function POST(request: Request) {
           order_item_id: item.order_item_id,
           label: item.label,
           action: item.action,
+          status: String(actionable[index]?.item_status ?? "").trim(),
+          assignee_staff: String(actionable[index]?.assignee_staff ?? "").trim(),
         })),
         reply_text: acknowledged.replyText,
         auto_reply: acknowledged.autoReply,

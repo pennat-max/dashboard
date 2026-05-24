@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { splitLineTextForInbox } from "@/lib/line-inbox/split-line-text";
+import type { LineInboxCarCandidate } from "@/lib/line-inbox/types";
 
 const CARS_TABLE = process.env.NEXT_PUBLIC_SUPABASE_CARS_TABLE ?? "cars";
 const CAR_MATCH_SELECT = [
@@ -24,6 +25,10 @@ export type ResolvedCar = {
   spec_text?: string;
   sale?: string;
   candidate_count?: number;
+  extractedCarCandidates?: LineInboxCarCandidate[];
+  aiTargetCarReference?: string;
+  aiTargetCarConfidence?: string;
+  matchReason?: string;
 };
 
 type CarMatchRow = {
@@ -45,7 +50,7 @@ const THAI_PLATE_RE = /(?<![\u0E00-\u0E7F])\d{0,2}[\u0E01-\u0E2E]{1,3}[-\s]?\d{2
 const THAI_STOCK_IDENTITY_RE =
   /^(?:ทะเบียน|เลขทะเบียน|stock|สต็อก|สต๊อก|ref|reference)\s*[:#：-]?\s*(\d{4,6})\b/i;
 const VEHICLE_TOKEN_RE =
-  /\b(?:TOYOTA|NISSAN|NAVARA|ISUZU|MAZDA|MITSUBISHI|FORD|HONDA|REVO|FORTUNER|HILUX|VIGO|RANGER|D-?MAX|DMAX|TRITON|CAMRY|ALTIS|YARIS|VIOS|MU-?X|EVEREST|PAJERO|PRO-?4X|RAPTOR|D-?CAB|DOUBLE|SMART|CAB|DC|2WD|4WD|AT|MT|7AT|6AT|STANDARD|WHITE|BLACK|GRAY|GREY|SILVER|BLUE|RED|GREEN|ORANGE|BRONZE|BROWN|GOLD|PEARL)\b/gi;
+  /\b(?:TOYOTA|NISSAN|NAVARA|ISUZU|MAZDA|MITSUBISHI|FORD|HONDA|REVO|FORTUNER|HILUX|VIGO|RANGER|D-?MAX|DMAX|TRITON|CAMRY|ALTIS|YARIS|VIOS|MU-?X|EVEREST|PAJERO|PRO-?4X|RAPTOR|TRAVO|COMMUTER|OVERLAND|4TREX|HIGHT|HIGH|D-?CAB|DOUBLE|SMART|CAB|VAN|DC|2WD|4WD|AT|MT|7AT|6AT|STANDARD|WHITE|BLACK|GRAY|GREY|SILVER|BLUE|RED|GREEN|ORANGE|BRONZE|BROWN|GOLD|PEARL)\b/gi;
 const COMMON_TOKEN_RE = /^(?:THE|AND|FOR|WITH|CAR|AUTO|ป้ายแดง)$/i;
 
 function safeString(value: unknown): string {
@@ -111,6 +116,164 @@ function prioritizeIdentityContextLines(raw: string, contextLines: string[]): st
     .map((line) => line.replace(/\s+/g, " ").trim())
     .filter((line) => Boolean(extractThaiStockIdentity(line)));
   return uniqueContextLines([...explicitIdentityLines, ...contextLines]);
+}
+
+function candidateKey(value: string): string {
+  return normalizeSearch(value);
+}
+
+function addCarCandidate(
+  target: LineInboxCarCandidate[],
+  candidate: LineInboxCarCandidate
+): void {
+  const text = safeString(candidate.text);
+  if (!text) return;
+  const key = candidateKey(`${candidate.kind ?? ""}:${text}:${candidate.line ?? ""}`);
+  if (!key || target.some((item) => candidateKey(`${item.kind ?? ""}:${item.text}:${item.line ?? ""}`) === key)) {
+    return;
+  }
+  target.push({
+    ...candidate,
+    text,
+    line: safeString(candidate.line) || undefined,
+  });
+}
+
+function hasThaiPlateCandidate(line: string): boolean {
+  const found = Boolean(line.match(THAI_PLATE_RE)?.[0]);
+  THAI_PLATE_RE.lastIndex = 0;
+  return found;
+}
+
+function vehicleSignalScoreForCandidate(line: string): number {
+  let score = 0;
+  if (extractThaiStockIdentity(line)) score += 5;
+  if (hasThaiPlateCandidate(line)) score += 4;
+  if (extractChassisCandidates(line).length > 0) score += 5;
+  if (extractStockNumbers(line).length > 0) score += 2;
+  if (extractVehicleTokens(line).length > 0) score += 2;
+  if (/\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\d{2}\b/i.test(line)) score += 1;
+  return score;
+}
+
+function isWorkItemLine(line: string, split: ReturnType<typeof splitLineTextForInbox>): boolean {
+  const key = candidateKey(line);
+  if (!key) return false;
+  const workLines = [
+    ...split.items,
+    ...(split.grouped_items ?? []).map((item) => item.text),
+  ];
+  return workLines.some((work) => {
+    const workKey = candidateKey(work);
+    return Boolean(workKey) && (workKey === key || workKey.includes(key) || key.includes(workKey));
+  });
+}
+
+function collectCarCandidates(
+  raw: string,
+  opts: {
+    aiTargetCarReference?: string | null;
+    aiTargetCarConfidence?: string | null;
+    aiTargetCarReason?: string | null;
+    aiCandidateCars?: Array<{ text?: string; confidence?: number | string; reason?: string }> | null;
+    carIdentityLines?: string[] | null;
+  }
+): LineInboxCarCandidate[] {
+  const split = splitLineTextForInbox(raw);
+  const out: LineInboxCarCandidate[] = [];
+
+  const aiTarget = safeString(opts.aiTargetCarReference);
+  if (aiTarget) {
+    addCarCandidate(out, {
+      text: aiTarget,
+      source: "ai",
+      kind: "target_reference",
+      confidence: safeString(opts.aiTargetCarConfidence) || undefined,
+      reason: safeString(opts.aiTargetCarReason) || "AI target car reference",
+    });
+  }
+
+  for (const line of opts.carIdentityLines ?? []) {
+    addCarCandidate(out, {
+      text: line,
+      source: "ai",
+      kind: "identity_line",
+      confidence: safeString(opts.aiTargetCarConfidence) || undefined,
+      reason: "AI car identity line",
+      line,
+    });
+  }
+
+  for (const candidate of opts.aiCandidateCars ?? []) {
+    if (!candidate?.text) continue;
+    addCarCandidate(out, {
+      text: candidate.text,
+      source: "ai",
+      kind: "candidate_car",
+      confidence: candidate.confidence,
+      reason: candidate.reason || "AI candidate car",
+      line: candidate.text,
+    });
+  }
+
+  const allLines = raw
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  const explicitIdentityLines = allLines.filter(
+    (line) => Boolean(extractThaiStockIdentity(line)) || hasThaiPlateCandidate(line) || extractChassisCandidates(line).length > 0
+  );
+  const contextLines = uniqueContextLines([
+    ...split.ignored_vehicle_spec_lines,
+    ...explicitIdentityLines,
+  ]);
+
+  for (const line of contextLines) {
+    if (vehicleSignalScoreForCandidate(line) < 2) continue;
+    addCarCandidate(out, {
+      text: extractThaiStockIdentity(line) || line,
+      source: "rule",
+      kind: extractThaiStockIdentity(line) ? "stock_or_plate" : "vehicle_context",
+      confidence: "high",
+      reason: "vehicle context line",
+      line,
+    });
+  }
+
+  // Fallback only when no stronger car-context line exists. This prevents numbers
+  // inside real work items (for example 31440/41252 part-source references) from
+  // overriding the main target car.
+  if (out.length === 0) {
+    for (const line of allLines) {
+      if (isWorkItemLine(line, split)) continue;
+      if (vehicleSignalScoreForCandidate(line) < 3) continue;
+      addCarCandidate(out, {
+        text: extractThaiStockIdentity(line) || line,
+        source: "rule",
+        kind: "fallback_vehicle_context",
+        confidence: "medium",
+        reason: "fallback vehicle signal",
+        line,
+      });
+    }
+  }
+
+  return out.slice(0, 20);
+}
+
+function candidateMatchLines(raw: string, candidates: LineInboxCarCandidate[]): string[] {
+  const lines = uniqueContextLines(
+    candidates.flatMap((candidate) => [
+      safeString(candidate.text),
+      safeString(candidate.line),
+    ])
+  );
+  if (lines.length > 0) return lines.slice(0, 10);
+  return raw
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .slice(0, 8);
 }
 
 function extractVehicleTokens(text: string): string[] {
@@ -214,6 +377,24 @@ function resolvedFromRow(row: CarMatchRow, confidence: number, candidateCount?: 
   };
 }
 
+function withResolveMeta(
+  result: ResolvedCar,
+  meta: {
+    extractedCarCandidates: LineInboxCarCandidate[];
+    aiTargetCarReference?: string;
+    aiTargetCarConfidence?: string;
+    matchReason?: string;
+  }
+): ResolvedCar {
+  return {
+    ...result,
+    extractedCarCandidates: meta.extractedCarCandidates,
+    aiTargetCarReference: meta.aiTargetCarReference,
+    aiTargetCarConfidence: meta.aiTargetCarConfidence,
+    matchReason: meta.matchReason,
+  };
+}
+
 export function extractChassisCandidates(text: string): string[] {
   const out: string[] = [];
   const re = /\b([A-HJ-NPR-Z0-9]{17})\b/gi;
@@ -230,9 +411,30 @@ export async function resolveCarFromContext(
     car_row_id?: string | null;
     car_id?: number | null;
     raw_text: string;
+    aiTargetCarReference?: string | null;
+    aiTargetCarReason?: string | null;
+    aiTargetCarConfidence?: string | null;
+    aiCandidateCars?: Array<{ text?: string; confidence?: number | string; reason?: string }> | null;
+    carIdentityLines?: string[] | null;
   }
 ): Promise<ResolvedCar> {
-  const empty: ResolvedCar = { car_row_id: "", plate_text: "", chassis: "", confidence: 0 };
+  const raw = String(opts.raw_text ?? "");
+  const extractedCarCandidates = collectCarCandidates(raw, {
+    aiTargetCarReference: opts.aiTargetCarReference,
+    aiTargetCarReason: opts.aiTargetCarReason,
+    aiTargetCarConfidence: opts.aiTargetCarConfidence,
+    aiCandidateCars: opts.aiCandidateCars,
+    carIdentityLines: opts.carIdentityLines,
+  });
+  const meta = {
+    extractedCarCandidates,
+    aiTargetCarReference: safeString(opts.aiTargetCarReference),
+    aiTargetCarConfidence: safeString(opts.aiTargetCarConfidence),
+  };
+  const empty: ResolvedCar = withResolveMeta(
+    { car_row_id: "", plate_text: "", chassis: "", confidence: 0 },
+    { ...meta, matchReason: extractedCarCandidates.length ? "No confident car match" : "No car candidates found" }
+  );
 
   const rowIdIn = String(opts.car_row_id ?? "").trim();
   if (rowIdIn) {
@@ -243,7 +445,7 @@ export async function resolveCarFromContext(
       .maybeSingle();
     const row = data as CarMatchRow | null;
     if (row?.row_id) {
-      return resolvedFromRow(row, 1);
+      return withResolveMeta(resolvedFromRow(row, 1), { ...meta, matchReason: "Explicit car_row_id" });
     }
   }
 
@@ -256,11 +458,10 @@ export async function resolveCarFromContext(
       .maybeSingle();
     const row = data as CarMatchRow | null;
     if (row?.row_id) {
-      return resolvedFromRow(row, 0.95);
+      return withResolveMeta(resolvedFromRow(row, 0.95), { ...meta, matchReason: "Explicit car id" });
     }
   }
 
-  const raw = String(opts.raw_text ?? "");
   const chassisList = extractChassisCandidates(raw);
   for (const ch of chassisList) {
     const { data } = await supabase
@@ -271,7 +472,7 @@ export async function resolveCarFromContext(
     const rows = data ?? [];
     const row = rows[0] as CarMatchRow | undefined;
     if (rows.length === 1 && row?.row_id) {
-      return resolvedFromRow(row, 0.85);
+      return withResolveMeta(resolvedFromRow(row, 0.85), { ...meta, matchReason: `Matched chassis ${ch}` });
     }
   }
 
@@ -286,19 +487,14 @@ export async function resolveCarFromContext(
     const rows = data ?? [];
     const row = rows[0] as CarMatchRow | undefined;
     if (rows.length === 1 && row?.row_id) {
-      return resolvedFromRow(row, 0.55);
+      return withResolveMeta(resolvedFromRow(row, 0.55), {
+        ...meta,
+        matchReason: `Matched Thai plate ${compact}`,
+      });
     }
   }
 
-  const split = splitLineTextForInbox(raw);
-  const contextLines = split.ignored_vehicle_spec_lines.length
-    ? split.ignored_vehicle_spec_lines
-    : raw
-        .split(/\r?\n/)
-        .map((line) => line.replace(/\s+/g, " ").trim())
-        .filter(Boolean);
-
-  for (const line of prioritizeIdentityContextLines(raw, contextLines).slice(0, 8)) {
+  for (const line of prioritizeIdentityContextLines(raw, candidateMatchLines(raw, extractedCarCandidates)).slice(0, 10)) {
     const identityStock = extractThaiStockIdentity(line);
     if (identityStock) {
       const { data } = await supabase
@@ -309,7 +505,10 @@ export async function resolveCarFromContext(
       const rows = data ?? [];
       const row = rows[0] as CarMatchRow | undefined;
       if (rows.length === 1 && row?.row_id) {
-        return resolvedFromRow(row, 0.93, 1);
+        return withResolveMeta(resolvedFromRow(row, 0.93, 1), {
+          ...meta,
+          matchReason: `Matched explicit stock/plate ${identityStock}`,
+        });
       }
     }
 
@@ -323,7 +522,12 @@ export async function resolveCarFromContext(
     const byStock = await queryCarCandidates(supabase, stockOrParts, 20);
     const stockMatch = chooseScoredCandidate(byStock, line);
     if (stockMatch && (stockMatch.car_row_id || (stockMatch.candidate_count ?? 0) > 1)) {
-      return stockMatch;
+      return withResolveMeta(stockMatch, {
+        ...meta,
+        matchReason: stockMatch.car_row_id
+          ? `Matched stock/ref candidate from "${line.slice(0, 80)}"`
+          : `Multiple stock/ref candidates from "${line.slice(0, 80)}"`,
+      });
     }
 
     const tokens = extractVehicleTokens(line).map(likeToken).filter(Boolean);
@@ -341,7 +545,12 @@ export async function resolveCarFromContext(
     const bySpec = await queryCarCandidates(supabase, tokenOrParts, 50);
     const specMatch = chooseScoredCandidate(bySpec, line);
     if (specMatch && (specMatch.car_row_id || (specMatch.candidate_count ?? 0) > 1)) {
-      return specMatch;
+      return withResolveMeta(specMatch, {
+        ...meta,
+        matchReason: specMatch.car_row_id
+          ? `Matched spec/model candidate from "${line.slice(0, 80)}"`
+          : `Multiple spec/model candidates from "${line.slice(0, 80)}"`,
+      });
     }
   }
 

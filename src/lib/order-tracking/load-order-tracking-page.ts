@@ -26,7 +26,14 @@ function parseOrderSearchParam(order: string | string[] | undefined): string | n
   return null;
 }
 
-export type OrderTrackingSearchParams = { order?: string | string[] };
+export type OrderTrackingSearchParams = {
+  order?: string | string[];
+  carRowId?: string | string[];
+  focusCar?: string | string[];
+  car_row_id?: string | string[];
+  search?: string | string[];
+  plate?: string | string[];
+};
 type LoadOrderTrackingPageOptions = {
   /** โหมดทดลองความเร็ว: โหลดเฉพาะสรุป ไม่โหลดรถ/รายการ */
   summaryOnly?: boolean;
