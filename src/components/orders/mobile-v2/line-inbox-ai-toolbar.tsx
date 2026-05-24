@@ -42,6 +42,12 @@ type PendingQueueNewLine = {
   suggested_item_name: string;
   suggested_status: string;
   reason: string;
+  related_photo_ids?: string[];
+  relatedPhotoIds?: string[];
+  line_photo_count?: number;
+  linePhotoCount?: number;
+  has_photo_reference?: boolean;
+  hasPhotoReference?: boolean;
 };
 
 type PendingQueueActionLine = PendingQueueNewLine & {
@@ -87,6 +93,11 @@ type PendingQueueMessage = {
   aiTargetCarConfidence?: string;
   matchReason?: string;
   inheritedCarRowId?: string;
+  related_photo_ids?: string[];
+  relatedPhotoIds?: string[];
+  suggestedItems?: string[];
+  extractionStatus?: "ok" | "no_items" | "needs_manual_review";
+  matchStatus?: "matched" | "unresolved";
   car_row_id: string;
   sale?: string;
   raw_text?: string;
@@ -158,6 +169,11 @@ type PendingQueueGroup = {
   aiTargetCarConfidence?: string;
   matchReason?: string;
   inheritedCarRowId?: string;
+  related_photo_ids?: string[];
+  relatedPhotoIds?: string[];
+  suggestedItems?: string[];
+  extractionStatus?: "ok" | "no_items" | "needs_manual_review";
+  matchStatus?: "matched" | "unresolved";
   sale: string;
   source_label?: string;
   source_type?: string;
@@ -397,6 +413,14 @@ function queueMessageNeedsManualReview(message: PendingQueueMessage): boolean {
   return Boolean(message.needs_human_review) && queueMessageActionCount(message) === 0;
 }
 
+function queueMessageHasMatchedCar(message: PendingQueueMessage): boolean {
+  return (
+    String(message.car_row_id ?? "").trim().length > 0 ||
+    String(message.detected_car?.car_row_id ?? "").trim().length > 0 ||
+    String(message.matchStatus ?? "").trim() === "matched"
+  );
+}
+
 function queueMessageRawText(message: PendingQueueMessage): string {
   return String(message.raw_text || message.raw_text_preview || "").trim();
 }
@@ -408,6 +432,11 @@ function queueMessageManualReviewTitle(uiLang: UiLang): string {
 function queueMessageManualReviewReason(message: PendingQueueMessage, uiLang: UiLang): string {
   const reason = String(message.manual_review_reason ?? "").trim();
   if (reason) return reason;
+  if (queueMessageHasMatchedCar(message)) {
+    return uiLang === "en"
+      ? "AI could not split work items yet - manual review needed."
+      : "AI ยังแยกงานไม่ได้ — รอตรวจด้วยมือ";
+  }
   return uiLang === "en" ? "AI could not split work items yet." : "AI ยังแยกงานไม่ได้";
 }
 
@@ -423,7 +452,16 @@ function queueDetectedCarLabel(message: PendingQueueMessage): string {
   const spec = String(detected?.spec_text ?? message.car_title ?? "").trim();
   const chassis = String(detected?.chassis ?? "").trim();
   const parts = [plate && plate !== "-" ? plate : "", spec, chassis].filter(Boolean);
-  return parts.join(" ").trim();
+  const label = parts.join(" ").trim();
+  if (label) return label;
+  if (String(message.car_row_id ?? "").trim()) {
+    return (
+      String(message.car_title ?? "").trim() ||
+      String(message.fallback_title ?? message.fallbackTitle ?? "").trim() ||
+      `car_row_id: ${message.car_row_id}`
+    );
+  }
+  return "";
 }
 
 function queueCandidateLabels(candidates: LineInboxCarCandidate[] | undefined): string[] {
@@ -2068,6 +2106,11 @@ function useLineInboxBridgeState({
                 ) : row.isUnresolved ? (
                   <p className="mt-1 text-rose-700">{uiLang === "en" ? "Car is still unclear." : "ยังจับรถไม่ชัด"}</p>
                 ) : null}
+                {!row.isUnresolved ? (
+                  <p className="mt-1 font-semibold text-emerald-800">
+                    {uiLang === "en" ? "Car matched - review work manually." : "จับรถได้แล้ว — รอตรวจงาน"}
+                  </p>
+                ) : null}
                 {row.carRowId ? (
                   <p className="mt-1 break-all text-[10px] text-slate-500">car_row_id: {row.carRowId}</p>
                 ) : null}
@@ -2253,11 +2296,16 @@ function useLineInboxBridgeState({
                     {uiLang === "en" ? "Detected car: " : "รถที่จับได้: "}
                     {queueDetectedCarLabel(m)}
                   </p>
-                ) : (
+                ) : !queueMessageHasMatchedCar(m) ? (
                   <p className="mt-2 font-semibold text-rose-700">
                     {uiLang === "en" ? "Car is still unclear." : "ยังจับรถไม่ชัด"}
                   </p>
-                )}
+                ) : null}
+                {queueMessageHasMatchedCar(m) ? (
+                  <p className="mt-1 font-semibold text-emerald-800">
+                    {uiLang === "en" ? "Car matched - review work manually." : "จับรถได้แล้ว — รอตรวจงาน"}
+                  </p>
+                ) : null}
                 {m.car_row_id ? (
                   <p className="mt-1 break-all text-[10px] font-medium text-slate-500">car_row_id: {m.car_row_id}</p>
                 ) : null}

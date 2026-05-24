@@ -31,6 +31,8 @@ const WORK_INTENT_RE =
   /(กรอไมล์|เลขไมล์|กันสาด|โรบาร์|สติ๊กเกอร์|ฟิล์ม|บันได|กันชน|แร็ค|แรค|ฝาครอบ|ไฟ|กล้อง|เซ็นเซอร์|ยาง|ล้อ|แบต|แบตเตอรี่|โช้ค|ยกสูง|ป้าย|เอกสาร|ซ่อม|เปลี่ยน|ขาด|แตก|เสีย|หาย|ต้องสั่ง|ส่งอู่|ทำสี|ตรวจ|เช็ค|ติด|ติดตั้ง|เพิ่ม|ใส่|แปลง|ล้าง|ขัด|เคลือบ|เก็บงาน|ประเมิน|รับงาน|งาน)/i;
 const STRONG_WORK_INTENT_RE =
   /(กรอไมล์|เลขไมล์|กุญแจ|กันสาด|โรบาร์|สติ๊กเกอร์|ฟิล์ม|บันได|กันชน|แร็ค|แรค|ฝาครอบ|ไฟ|กล้อง|เซ็นเซอร์|ยาง|ล้อ|แบต|แบตเตอรี่|โช้ค|ยกสูง|เอกสาร|ซ่อม|เปลี่ยน|ขาด|แตก|เสีย|หาย|ต้องสั่ง|สั่ง|ส่งอู่|ทำสี|ตรวจ|เช็ค|ติด|ติดตั้ง|เพิ่ม|ใส่|แปลง|ล้าง|ขัด|เคลือบ|เก็บงาน|ประเมิน|รับงาน|งาน)/i;
+const LINE_PHOTO_WORK_INTENT_RE =
+  /(แต่ง|เหมือน\s*รูป|ตาม\s*(?:รูป|ภาพ)|รูปทุกอย่าง|ยกเลิก|ไม่ต้อง|เบิก|รอ\s*ตรวจ|รอตรวจ|เอา\s*รถ\s*ไป\s*เช็ค)/i;
 const STANDALONE_CONTROL_LINE_RE = /^(?:เพิ่ม|เพิ่มงาน|งานใหม่)$/i;
 const CAR_REFERENCE_META_RE =
   /(ใส่\s*ปี.*(?:chassis|chasis|เลขถัง|ตัวถัง)|(?:chassis|chasis|เลขถัง|ตัวถัง).*(?:ปี|link|ลิงก์|ถูก|ทุกครั้ง|หลายที่)|(?:ปี|link|ลิงก์).*(?:chassis|chasis|เลขถัง|ตัวถัง))/i;
@@ -49,7 +51,7 @@ const DETAIL_PARENT_RE =
 function sanitizeLine(raw: string): string {
   return raw
     .replace(/^[\s\-•*]+/, "")
-    .replace(/[\s*•]+$/, "")
+    .replace(/[\s*•!！]+$/, "")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -79,9 +81,17 @@ function semanticTokens(raw: string): string[] {
   return raw.match(/[A-Za-zก-ฮ0-9]+/g) ?? [];
 }
 
+function hasWorkIntent(raw: string): boolean {
+  return WORK_INTENT_RE.test(raw) || LINE_PHOTO_WORK_INTENT_RE.test(raw);
+}
+
+function hasStrongWorkIntent(raw: string): boolean {
+  return STRONG_WORK_INTENT_RE.test(raw) || LINE_PHOTO_WORK_INTENT_RE.test(raw);
+}
+
 function looksLikeMentionOnly(raw: string): boolean {
   const mentions = raw.match(MENTION_RE) ?? [];
-  if (mentions.length === 0 || WORK_INTENT_RE.test(raw)) return false;
+  if (mentions.length === 0 || hasWorkIntent(raw)) return false;
 
   const withoutMentions = removeMentions(raw);
   const tokens = semanticTokens(withoutMentions);
@@ -95,7 +105,7 @@ function looksLikeMentionOnly(raw: string): boolean {
 }
 
 function looksLikeLinePersonContext(raw: string): boolean {
-  if (STRONG_WORK_INTENT_RE.test(raw)) return false;
+  if (hasStrongWorkIntent(raw)) return false;
   if (looksLikeStockSpecContext(raw)) return false;
 
   const noMentions = removeMentions(raw);
@@ -117,7 +127,7 @@ function looksLikeLinePersonContext(raw: string): boolean {
 
 function looksLikeNoiseOnly(raw: string): boolean {
   if (looksLikeLinePersonContext(raw)) return true;
-  if (WORK_INTENT_RE.test(raw)) return false;
+  if (hasWorkIntent(raw)) return false;
   const noMentions = removeMentions(raw);
   const tokens = semanticTokens(noMentions);
   if (tokens.length === 0) return true;
@@ -154,7 +164,7 @@ function looksLikeStockSpecContext(raw: string): boolean {
 
   // "ป้ายแดง" is vehicle context, not the actionable "ป้าย" task.
   const withoutRedPlate = raw.replace(/ป้ายแดง/gi, " ");
-  const hasStrongWork = STRONG_WORK_INTENT_RE.test(withoutRedPlate);
+  const hasStrongWork = hasStrongWorkIntent(withoutRedPlate);
   if (hasStrongWork && score < 6) return false;
 
   return true;
@@ -168,7 +178,7 @@ function looksLikeVehicleContext(raw: string): boolean {
   if (RED_PLATE_CONTEXT_RE.test(raw)) return true;
   if (looksLikeThaiStockIdentityContext(raw)) return true;
   if (looksLikeStockSpecContext(raw)) return true;
-  if (STRONG_WORK_INTENT_RE.test(raw)) return false;
+  if (hasStrongWorkIntent(raw)) return false;
   const hasThaiPlateLike = THAI_PLATE_RE.test(raw);
   THAI_PLATE_RE.lastIndex = 0;
   if (hasThaiPlateLike && VEHICLE_SPEC_RE.test(raw)) return true;
@@ -200,7 +210,7 @@ function canAcceptDetail(raw: string): boolean {
 
 function looksLikeDetailLine(raw: string): boolean {
   if (!raw) return false;
-  if (STRONG_WORK_INTENT_RE.test(raw)) return false;
+  if (hasStrongWorkIntent(raw)) return false;
   if (looksLikeVehicleContext(raw) || looksLikeLinePersonContext(raw) || looksLikeCarReferenceMeta(raw)) return false;
   if (DETAIL_LINE_RE.test(raw)) return true;
   return /[0-9]/.test(raw) && /[ก-ฮ]/.test(raw) && semanticTokens(raw).length <= 6;
@@ -208,7 +218,7 @@ function looksLikeDetailLine(raw: string): boolean {
 
 function looksLikeShortContinuationLine(raw: string): boolean {
   if (!raw || raw.length > 32) return false;
-  if (STRONG_WORK_INTENT_RE.test(raw) || looksLikeVehicleContext(raw) || looksLikeMentionOnly(raw)) return false;
+  if (hasStrongWorkIntent(raw) || looksLikeVehicleContext(raw) || looksLikeMentionOnly(raw)) return false;
   const tokens = semanticTokens(raw);
   if (tokens.length === 0 || tokens.length > 3) return false;
   return /^[A-Za-z0-9&.'\-\s]+$/.test(raw);
@@ -226,14 +236,21 @@ function splitCompoundWorkLine(value: string): string[] {
   const clean = normalizeWorkItemText(value);
   if (!clean || STANDALONE_CONTROL_LINE_RE.test(clean)) return [];
 
-  const segmented = clean
-    .replace(/\s+(รถมีตรวจ)/gi, "|||$1")
-    .replace(/\s+(รอแจ้งกรอไมล์)/gi, "|||$1")
-    .replace(/\s+(เอารถไปเช็ค)/gi, "|||$1")
-    .replace(/\s+(ถ้ามีอะไรเสีย)/gi, "|||$1");
+  const hardSegments = clean
+    .split(/\s*(?:\/|\\|\|)\s*/g)
+    .map((part) => normalizeWorkItemText(part))
+    .filter(Boolean);
 
-  return segmented
-    .split("|||")
+  return hardSegments
+    .flatMap((part) =>
+      part
+        .replace(/\s+(รถมีตรวจ)/gi, "|||$1")
+        .replace(/\s+(รอแจ้งกรอไมล์)/gi, "|||$1")
+        .replace(/\s+(เอา\s*รถ\s*ไป\s*เช็ค|เอารถไปเช็ค)/gi, "|||$1")
+        .replace(/\s+(ถ้ามีอะไรเสีย)/gi, "|||$1")
+        .replace(/\s+(ยกเลิก|ไม่ต้อง|เบิก|รอ\s*ตรวจ|รอตรวจ|ใส่|เปลี่ยน)/gi, "|||$1")
+        .split("|||")
+    )
     .map((part) => normalizeWorkItemText(part))
     .filter(Boolean);
 }

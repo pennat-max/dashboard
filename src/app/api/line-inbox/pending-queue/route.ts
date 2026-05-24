@@ -28,6 +28,12 @@ type PendingQueueActionLine = PendingQueueNewLine & {
   matched_order_item_id: string;
   matched_item_name: string;
   confidence: number;
+  related_photo_ids: string[];
+  relatedPhotoIds: string[];
+  line_photo_count: number;
+  linePhotoCount: number;
+  has_photo_reference: boolean;
+  hasPhotoReference: boolean;
   default_action: "create" | "merge" | "skip";
   included_by_default: boolean;
 };
@@ -100,6 +106,11 @@ type PendingQueueMsg = {
   aiTargetCarConfidence: string;
   matchReason: string;
   inheritedCarRowId: string;
+  related_photo_ids: string[];
+  relatedPhotoIds: string[];
+  suggestedItems: string[];
+  extractionStatus: "ok" | "no_items" | "needs_manual_review";
+  matchStatus: "matched" | "unresolved";
   car_row_id: string;
   sale: string;
   raw_text: string;
@@ -137,6 +148,11 @@ type PendingQueueGroup = {
   aiTargetCarConfidence: string;
   matchReason: string;
   inheritedCarRowId: string;
+  related_photo_ids: string[];
+  relatedPhotoIds: string[];
+  suggestedItems: string[];
+  extractionStatus: "ok" | "no_items" | "needs_manual_review";
+  matchStatus: "matched" | "unresolved";
   sale: string;
   source_label: string;
   source_type: string;
@@ -290,6 +306,28 @@ function findNearbyTextContext(row: PendingQueueDbRow, rows: PendingQueueDbRow[]
   return best ? { row: best.row, payload: best.payload } : null;
 }
 
+function findFollowingImageContexts(row: PendingQueueDbRow, rows: PendingQueueDbRow[]): RelatedTextContext[] {
+  const raw = cleanString(row.raw_text);
+  const rowTime = lineMessageTimeMs(row);
+  const sourceKey = sourceScopeKey(row);
+  if (isLineImageOnlyText(raw) || !rowTime || sourceKey.endsWith(":")) return [];
+
+  return rows
+    .filter((candidate) => {
+      if (candidate.id === row.id) return false;
+      if (sourceScopeKey(candidate) !== sourceKey) return false;
+      if (!isLineImageOnlyText(candidate.raw_text)) return false;
+      const t = lineMessageTimeMs(candidate);
+      if (!t) return false;
+      const delta = t - rowTime;
+      return delta >= 0 && delta <= LINE_IMAGE_AFTER_TEXT_WINDOW_MS;
+    })
+    .map((candidate) => ({ row: candidate, payload: analyzePayloadOrNull(candidate.analyze_payload) }))
+    .filter((context): context is RelatedTextContext => Boolean(context.payload))
+    .sort((a, b) => lineMessageTimeMs(a.row) - lineMessageTimeMs(b.row))
+    .slice(0, 20);
+}
+
 function fallbackTitleForQueue(input: {
   row: PendingQueueDbRow;
   related: RelatedTextContext | null;
@@ -437,6 +475,21 @@ function queueItemDisplayName(item: LineInboxAnalyzeItem): string {
   return suggested;
 }
 
+function hasLinePhotoReference(value: unknown): boolean {
+  return /ตาม\s*(?:รูป|ภาพ)|เหมือน\s*รูป|รูปทุกอย่าง|\b(?:photo|image|pic|picture)\b/i.test(
+    cleanString(value)
+  );
+}
+
+function attachmentIds(items: PendingQueueAttachment[]): string[] {
+  const out: string[] = [];
+  for (const item of items) {
+    const id = cleanString(item.line_message_id) || cleanString(item.inbox_id);
+    if (id && !out.includes(id)) out.push(id);
+  }
+  return out;
+}
+
 function defaultActionForItem(item: LineInboxAnalyzeItem): PendingQueueActionLine["default_action"] {
   const matchedId = String(item.matched_order_item_id ?? "").trim();
   if (item.duplicate_status === "duplicate" && matchedId) return "merge";
@@ -561,6 +614,16 @@ function groupMessages(messages: PendingQueueMsg[]): PendingQueueGroup[] {
       if (!existing.aiTargetCarConfidence) existing.aiTargetCarConfidence = message.aiTargetCarConfidence;
       if (!existing.matchReason) existing.matchReason = message.matchReason;
       if (!existing.inheritedCarRowId) existing.inheritedCarRowId = message.inheritedCarRowId;
+      existing.related_photo_ids = attachmentIds(existing.attachments);
+      existing.relatedPhotoIds = existing.related_photo_ids;
+      existing.suggestedItems = Array.from(new Set([...existing.suggestedItems, ...message.suggestedItems]));
+      existing.extractionStatus =
+        existing.extractionStatus === "ok" || message.extractionStatus === "ok"
+          ? "ok"
+          : existing.extractionStatus === "needs_manual_review" || message.extractionStatus === "needs_manual_review"
+            ? "needs_manual_review"
+            : "no_items";
+      existing.matchStatus = existing.car_row_id ? "matched" : "unresolved";
       continue;
     }
 
@@ -585,6 +648,11 @@ function groupMessages(messages: PendingQueueMsg[]): PendingQueueGroup[] {
       aiTargetCarConfidence: message.aiTargetCarConfidence,
       matchReason: message.matchReason,
       inheritedCarRowId: message.inheritedCarRowId,
+      related_photo_ids: message.related_photo_ids,
+      relatedPhotoIds: message.relatedPhotoIds,
+      suggestedItems: message.suggestedItems,
+      extractionStatus: message.extractionStatus,
+      matchStatus: message.matchStatus,
       sale: message.sale,
       source_label: message.source_label,
       source_type: message.source_type,
@@ -601,11 +669,14 @@ function groupMessages(messages: PendingQueueMsg[]): PendingQueueGroup[] {
 
   return Array.from(map.values()).map((group) => {
     const attachments = uniqueAttachments(group.attachments).slice(0, 20);
+    const relatedPhotoIds = attachmentIds(attachments);
     return {
       ...group,
       attachments,
       line_photo_count: attachments.length,
       linePhotoCount: attachments.length,
+      related_photo_ids: relatedPhotoIds,
+      relatedPhotoIds,
     };
   });
 }
@@ -667,6 +738,7 @@ export async function GET() {
       }
 
       const related = findNearbyTextContext(row, rows);
+      const followingImages = findFollowingImageContexts(row, rows);
       const rowNeedsHumanReview = Boolean(row.needs_human_review);
 
       const newEntries: PendingQueueNewLine[] = [];
@@ -685,6 +757,7 @@ export async function GET() {
         }
 
         const defaultAction = defaultActionForItem(item);
+        const hasPhotoReference = hasLinePhotoReference(displayName) || hasLinePhotoReference(item.raw_text);
         actionEntries.push({
           item_index: idx,
           raw_text: item.raw_text ?? "",
@@ -696,6 +769,12 @@ export async function GET() {
           matched_item_name: item.matched_item_name ?? "",
           confidence: Number.isFinite(item.confidence) ? item.confidence : 0,
           reason: item.reason ?? "",
+          related_photo_ids: [],
+          relatedPhotoIds: [],
+          line_photo_count: 0,
+          linePhotoCount: 0,
+          has_photo_reference: hasPhotoReference,
+          hasPhotoReference,
           default_action: defaultAction,
           included_by_default: st === "new",
         });
@@ -725,7 +804,7 @@ export async function GET() {
 
       if (actionEntries.length === 0 && !manualReviewOnly) continue;
 
-      const messageAttachments = extractStoredAttachments(payload, row, {
+      const attachmentOverrides = {
         carRowId: car_row_id,
         plateText,
         carTitle,
@@ -741,11 +820,39 @@ export async function GET() {
         aiTargetCarConfidence,
         matchReason,
         inheritedCarRowId,
-      });
+      };
+      const messageAttachments = uniqueAttachments([
+        ...extractStoredAttachments(payload, row, attachmentOverrides),
+        ...followingImages.flatMap((context) =>
+          context.payload
+            ? extractStoredAttachments(context.payload, context.row, {
+            ...attachmentOverrides,
+            relatedTextMessageId: id,
+            linePhotoCount: context.payload.line_attachments?.length ?? 0,
+          })
+            : []
+        ),
+      ]);
       recentAttachments.push(...messageAttachments);
+      const relatedPhotoIds = attachmentIds(messageAttachments);
+      const actionEntriesForMessage = actionEntries.map((entry) =>
+        entry.has_photo_reference
+          ? {
+              ...entry,
+              related_photo_ids: relatedPhotoIds,
+              relatedPhotoIds,
+              line_photo_count: relatedPhotoIds.length,
+              linePhotoCount: relatedPhotoIds.length,
+            }
+          : entry
+      );
+      const suggestedItems = actionEntriesForMessage.map((entry) => entry.suggested_item_name).filter(Boolean);
+      const extractionStatus =
+        actionEntriesForMessage.length > 0 ? "ok" : needsHumanReview ? "needs_manual_review" : "no_items";
+      const matchStatus = car_row_id ? "matched" : "unresolved";
 
       totalNew += newEntries.length;
-      totalAction += actionEntries.length;
+      totalAction += actionEntriesForMessage.length;
       totalManualReview += manualReviewOnly ? 1 : 0;
       messages.push({
         inbox_id: id,
@@ -771,16 +878,25 @@ export async function GET() {
         aiTargetCarConfidence,
         matchReason,
         inheritedCarRowId,
+        related_photo_ids: relatedPhotoIds,
+        relatedPhotoIds,
+        suggestedItems,
+        extractionStatus,
+        matchStatus,
         car_row_id: car_row_id || "",
         sale,
         raw_text: String(row.raw_text ?? "").trim(),
         raw_text_preview: fallbackDescription.slice(0, 120),
         detected_car: detectedCarForQueue(payload, car_row_id || "", related),
-        manual_review_reason: manualReviewOnly ? "AI ยังแยกงานไม่ได้" : "",
+        manual_review_reason: manualReviewOnly
+          ? car_row_id
+            ? "AI ยังแยกงานไม่ได้ — รอตรวจด้วยมือ"
+            : "AI ยังแยกงานไม่ได้"
+          : "",
         new_lines: newEntries,
         new_line_count: newEntries.length,
-        action_lines: actionEntries,
-        action_line_count: actionEntries.length,
+        action_lines: actionEntriesForMessage,
+        action_line_count: actionEntriesForMessage.length,
         existing_items: uniqueExistingItems(payload.existing_items ?? []),
         attachments: messageAttachments,
         needs_human_review: needsHumanReview,
