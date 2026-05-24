@@ -65,9 +65,15 @@ type PendingQueueDetectedCar = {
 type PendingQueueMessage = {
   inbox_id: string;
   received_at: string;
+  source_type?: string;
+  group_id_display?: string;
   source_label?: string;
   plate_display: string;
   car_title?: string;
+  fallback_title?: string;
+  fallback_description?: string;
+  fallbackTitle?: string;
+  fallbackDescription?: string;
   car_row_id: string;
   sale?: string;
   raw_text?: string;
@@ -90,11 +96,17 @@ type PendingQueueAttachment = {
   file_name: string | null;
   mime_type: string | null;
   received_at: string;
+  source_type?: string;
+  group_id_display?: string;
   source_label?: string;
   raw_text_preview?: string;
   car_row_id?: string;
   plate_display?: string;
   car_title?: string;
+  fallback_title?: string;
+  fallback_description?: string;
+  fallbackTitle?: string;
+  fallbackDescription?: string;
   sale?: string;
   needs_human_review?: boolean;
   status?: "not_linked" | "attached" | "ignored" | string;
@@ -105,7 +117,14 @@ type PendingQueueGroup = {
   car_row_id: string;
   plate_display: string;
   car_title: string;
+  fallback_title?: string;
+  fallback_description?: string;
+  fallbackTitle?: string;
+  fallbackDescription?: string;
   sale: string;
+  source_label?: string;
+  source_type?: string;
+  group_id_display?: string;
   is_unresolved: boolean;
   total_action_lines: number;
   total_new_lines: number;
@@ -357,7 +376,13 @@ function queueMessageManualReviewReason(message: PendingQueueMessage, uiLang: Ui
 
 function queueDetectedCarLabel(message: PendingQueueMessage): string {
   const detected = message.detected_car ?? null;
-  const plate = String(detected?.plate_text ?? message.plate_display ?? "").trim();
+  const hasDetectedCar =
+    Boolean(String(detected?.car_row_id ?? "").trim()) ||
+    Boolean(String(detected?.plate_text ?? "").trim()) ||
+    Boolean(String(detected?.spec_text ?? "").trim()) ||
+    Boolean(String(message.car_row_id ?? "").trim());
+  if (!hasDetectedCar) return "";
+  const plate = String(detected?.plate_text ?? "").trim();
   const spec = String(detected?.spec_text ?? message.car_title ?? "").trim();
   const chassis = String(detected?.chassis ?? "").trim();
   const parts = [plate && plate !== "-" ? plate : "", spec, chassis].filter(Boolean);
@@ -395,11 +420,13 @@ function duplicateLabel(uiLang: UiLang, status: DuplicateStatus): string {
 function queueGroupDisplayTitle(group: PendingQueueGroup, uiLang: UiLang): string {
   const plate = String(group.plate_display ?? "").trim();
   const title = String(group.car_title ?? "").trim();
+  const fallback = String(group.fallback_title ?? group.fallbackTitle ?? "").trim();
   if (title && plate && plate !== "-" && normalizeLookup(title).includes(normalizeLookup(plate))) {
     return title;
   }
-  if (title) return title;
+  if (title && title !== "-") return title;
   if (plate && plate !== "-") return plate;
+  if (fallback && fallback !== "-") return fallback;
   return uiLang === "en" ? "Unmatched car" : "ยังไม่จับรถ";
 }
 
@@ -444,8 +471,9 @@ function formatQueueAttachmentTime(value: string): string {
 function queueAttachmentCarLabel(attachment: PendingQueueAttachment, uiLang: UiLang): string {
   const carTitle = String(attachment.car_title ?? "").trim();
   const plate = String(attachment.plate_display ?? "").trim();
+  const fallback = String(attachment.fallback_title ?? attachment.fallbackTitle ?? "").trim();
   const sale = String(attachment.sale ?? "").trim();
-  const base = carTitle || plate;
+  const base = (carTitle && carTitle !== "-" ? carTitle : "") || (plate && plate !== "-" ? plate : "") || fallback;
   if (!base) return uiLang === "en" ? "No car selected yet" : "ยังไม่ได้เลือกรถ";
   return sale ? `${base} · ${sale}` : base;
 }
@@ -660,6 +688,8 @@ type LineInboxCarPickerRow = {
   isUnresolved: boolean;
   manualReviewPreview: string;
   detectedCarLabel: string;
+  sourceLabel: string;
+  groupIdDisplay: string;
   latestMessageAt: number;
 };
 
@@ -1124,13 +1154,16 @@ function useLineInboxBridgeState({
       const jobCount = Math.max(0, group.total_action_lines) + Math.max(0, group.total_new_lines) + manualReviewCount;
       const photoCount = group.attachments?.length ?? 0;
       const manualReviewMessage = group.messages.find(queueMessageNeedsManualReview) ?? null;
+      const fallbackTitle = String(group.fallback_title ?? group.fallbackTitle ?? "").trim();
+      const fallbackDescription = String(group.fallback_description ?? group.fallbackDescription ?? "").trim();
+      const displayTitle = queueGroupDisplayTitle(group, uiLang);
       if (jobCount === 0 && photoCount === 0) continue;
       rows.push({
         groupKey: group.group_key,
         orderId: matched?.id ?? null,
         carRowId,
-        plate: String(group.plate_display ?? "").trim() || matched?.fullPlate || "-",
-        spec: String(group.car_title ?? "").trim() || matched?.car || "",
+        plate: (matched?.fullPlate || displayTitle || fallbackTitle || "").trim(),
+        spec: String(group.car_title ?? "").trim() || matched?.car || fallbackDescription || "",
         sale: String(group.sale ?? "").trim() || String(matched?.sale ?? "").trim(),
         jobCount,
         manualReviewCount,
@@ -1138,11 +1171,13 @@ function useLineInboxBridgeState({
         isUnresolved: group.is_unresolved,
         manualReviewPreview: manualReviewMessage ? queueMessageRawText(manualReviewMessage).slice(0, 180) : "",
         detectedCarLabel: manualReviewMessage ? queueDetectedCarLabel(manualReviewMessage) : "",
+        sourceLabel: String(group.source_label ?? manualReviewMessage?.source_label ?? "").trim(),
+        groupIdDisplay: String(group.group_id_display ?? manualReviewMessage?.group_id_display ?? "").trim(),
         latestMessageAt: groupLatestReceivedMs(group),
       });
     }
     return rows.sort((a, b) => b.latestMessageAt - a.latestMessageAt);
-  }, [orders, queueGroups]);
+  }, [orders, queueGroups, uiLang]);
 
   /** Badge = number of cars with LINE/AI work today (not line count). */
   const lineInboxCarCountToday = carPickerRows.length;
@@ -1948,10 +1983,15 @@ function useLineInboxBridgeState({
               ) : null}
               {row.isUnresolved ? (
                 <span className="rounded-full bg-rose-50 px-1.5 py-0.5 text-rose-800 ring-1 ring-rose-200">
-                  {uiLang === "en" ? "Needs car match" : "ยังจับรถไม่ได้"}
+                  {uiLang === "en" ? "Needs car match - manual review" : "ยังจับรถไม่ได้ — รอตรวจด้วยมือ"}
                 </span>
               ) : null}
             </div>
+            {row.sourceLabel || row.groupIdDisplay ? (
+              <p className="mt-1 text-[10px] font-semibold text-slate-500">
+                {[row.sourceLabel, row.groupIdDisplay ? `group: ${row.groupIdDisplay}` : ""].filter(Boolean).join(" · ")}
+              </p>
+            ) : null}
             {row.manualReviewCount > 0 ? (
               <div className="mt-2 rounded-xl bg-amber-50 px-2 py-2 text-[11px] font-medium leading-relaxed text-amber-950 ring-1 ring-amber-100">
                 <p className="font-bold">
@@ -2121,6 +2161,11 @@ function useLineInboxBridgeState({
                     </span>
                   ) : null}
                 </div>
+                {m.source_label || m.group_id_display ? (
+                  <p className="mt-2 text-[10px] font-semibold text-slate-500">
+                    {[m.source_label, m.group_id_display ? `group: ${m.group_id_display}` : ""].filter(Boolean).join(" · ")}
+                  </p>
+                ) : null}
                 {queueDetectedCarLabel(m) ? (
                   <p className="mt-2 font-semibold text-slate-800">
                     {uiLang === "en" ? "Detected car: " : "รถที่จับได้: "}

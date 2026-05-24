@@ -37,11 +37,17 @@ type PendingQueueAttachment = {
   file_name: string | null;
   mime_type: string | null;
   received_at: string;
+  source_type: string;
+  group_id_display: string;
   source_label: string;
   raw_text_preview: string;
   car_row_id: string;
   plate_display: string;
   car_title: string;
+  fallback_title: string;
+  fallback_description: string;
+  fallbackTitle: string;
+  fallbackDescription: string;
   sale: string;
   needs_human_review: boolean;
   status: "not_linked";
@@ -59,9 +65,15 @@ type PendingQueueDetectedCar = {
 type PendingQueueMsg = {
   inbox_id: string;
   received_at: string;
+  source_type: string;
+  group_id_display: string;
   source_label: string;
   plate_display: string;
   car_title: string;
+  fallback_title: string;
+  fallback_description: string;
+  fallbackTitle: string;
+  fallbackDescription: string;
   car_row_id: string;
   sale: string;
   raw_text: string;
@@ -75,6 +87,7 @@ type PendingQueueMsg = {
   existing_items: ExistingOrderItemRow[];
   attachments: PendingQueueAttachment[];
   needs_human_review: boolean;
+  group_anchor_id: string;
 };
 
 type PendingQueueGroup = {
@@ -82,7 +95,14 @@ type PendingQueueGroup = {
   car_row_id: string;
   plate_display: string;
   car_title: string;
+  fallback_title: string;
+  fallback_description: string;
+  fallbackTitle: string;
+  fallbackDescription: string;
   sale: string;
+  source_label: string;
+  source_type: string;
+  group_id_display: string;
   is_unresolved: boolean;
   total_action_lines: number;
   total_new_lines: number;
@@ -92,24 +112,193 @@ type PendingQueueGroup = {
   messages: PendingQueueMsg[];
 };
 
+type PendingQueueDbRow = {
+  id?: unknown;
+  line_message_id?: unknown;
+  received_at?: unknown;
+  raw_text?: unknown;
+  source_type?: unknown;
+  group_id?: unknown;
+  user_id?: unknown;
+  workflow_status?: unknown;
+  analyze_status?: unknown;
+  analyze_payload?: unknown;
+  car_row_id?: unknown;
+  needs_human_review?: unknown;
+};
+
+type RelatedTextContext = {
+  row: PendingQueueDbRow;
+  payload: LineInboxAnalyzeResponse | null;
+};
+
 function isAnalyzePayload(body: unknown): body is LineInboxAnalyzeResponse {
   if (!body || typeof body !== "object") return false;
   const o = body as Record<string, unknown>;
   return Boolean(o.detected_car && typeof o.detected_car === "object" && Array.isArray(o.items));
 }
 
+function analyzePayloadOrNull(body: unknown): LineInboxAnalyzeResponse | null {
+  return isAnalyzePayload(body) ? body : null;
+}
+
+function cleanString(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
+function lineMessageTimeMs(row: Pick<PendingQueueDbRow, "received_at">): number {
+  const t = Date.parse(cleanString(row.received_at));
+  return Number.isFinite(t) ? t : 0;
+}
+
+function sourceScopeKey(row: Pick<PendingQueueDbRow, "source_type" | "group_id" | "user_id">): string {
+  const sourceType = cleanString(row.source_type) || "unknown";
+  const id = cleanString(row.group_id) || cleanString(row.user_id);
+  return `${sourceType}:${id}`;
+}
+
+function maskLineSourceId(value: unknown): string {
+  const clean = cleanString(value);
+  if (!clean) return "";
+  if (clean.length <= 8) return clean;
+  return `${clean.slice(0, 4)}…${clean.slice(-4)}`;
+}
+
+function groupIdDisplay(row: Pick<PendingQueueDbRow, "group_id" | "user_id" | "source_type">): string {
+  const sourceType = cleanString(row.source_type);
+  if (sourceType === "group") return maskLineSourceId(row.group_id);
+  if (sourceType === "user") return maskLineSourceId(row.user_id);
+  return maskLineSourceId(row.group_id) || maskLineSourceId(row.user_id);
+}
+
+function isLineImageOnlyText(value: unknown): boolean {
+  return /^\[LINE\s+(?:image|file)\]$/i.test(cleanString(value));
+}
+
+function firstRawTextLine(value: unknown): string {
+  return cleanString(value)
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .find((line) => line && !isLineImageOnlyText(line)) ?? "";
+}
+
+function linePreview(value: unknown, max = 160): string {
+  const clean = cleanString(value).replace(/\r?\n+/g, " / ").replace(/\s+/g, " ").trim();
+  return clean.slice(0, max);
+}
+
+function detectedCarTitle(payload: LineInboxAnalyzeResponse | null, storedCarRowId: string): string {
+  const plate = cleanString(payload?.detected_car?.plate_text);
+  const spec = cleanString(payload?.detected_car?.spec_text);
+  const title = [plate && plate !== "-" ? plate : "", spec].filter(Boolean).join(" ").trim();
+  if (title) return title;
+  return storedCarRowId ? `car_row_id: ${storedCarRowId}` : "";
+}
+
+function effectiveCarRowId(
+  payload: LineInboxAnalyzeResponse,
+  row: PendingQueueDbRow,
+  related: RelatedTextContext | null
+): string {
+  return (
+    cleanString(payload.detected_car?.car_row_id) ||
+    cleanString(row.car_row_id) ||
+    cleanString(related?.payload?.detected_car?.car_row_id) ||
+    cleanString(related?.row.car_row_id)
+  );
+}
+
+function findNearbyTextContext(row: PendingQueueDbRow, rows: PendingQueueDbRow[]): RelatedTextContext | null {
+  const raw = cleanString(row.raw_text);
+  const isImageRow = isLineImageOnlyText(raw);
+  const rowTime = lineMessageTimeMs(row);
+  const sourceKey = sourceScopeKey(row);
+  if (!isImageRow || !rowTime || sourceKey.endsWith(":")) return null;
+
+  const candidates = rows
+    .filter((candidate) => {
+      if (candidate.id === row.id) return false;
+      if (sourceScopeKey(candidate) !== sourceKey) return false;
+      if (isLineImageOnlyText(candidate.raw_text)) return false;
+      const t = lineMessageTimeMs(candidate);
+      if (!t) return false;
+      return Math.abs(t - rowTime) <= 3 * 60 * 1000;
+    })
+    .map((candidate) => {
+      const payload = analyzePayloadOrNull(candidate.analyze_payload);
+      const hasCar =
+        Boolean(cleanString(candidate.car_row_id)) ||
+        Boolean(cleanString(payload?.detected_car?.car_row_id)) ||
+        Boolean(cleanString(payload?.detected_car?.plate_text));
+      const pendingWeight = cleanString(candidate.workflow_status) === "pending" ? 0 : 20_000;
+      const carWeight = hasCar ? -10_000 : 0;
+      return {
+        row: candidate,
+        payload,
+        score: Math.abs(lineMessageTimeMs(candidate) - rowTime) + pendingWeight + carWeight,
+      };
+    })
+    .sort((a, b) => a.score - b.score);
+
+  const best = candidates[0];
+  return best ? { row: best.row, payload: best.payload } : null;
+}
+
+function fallbackTitleForQueue(input: {
+  row: PendingQueueDbRow;
+  related: RelatedTextContext | null;
+  carTitle: string;
+  carRowId: string;
+}): string {
+  const carTitle = cleanString(input.carTitle);
+  if (carTitle && carTitle !== "-") return carTitle;
+
+  const relatedTitle = firstRawTextLine(input.related?.row.raw_text);
+  if (relatedTitle) return relatedTitle.slice(0, 120);
+
+  const ownTitle = firstRawTextLine(input.row.raw_text);
+  if (ownTitle) return ownTitle.slice(0, 120);
+
+  if (isLineImageOnlyText(input.row.raw_text)) return "รูปจาก LINE ยังไม่ผูกกับข้อความ/รถ";
+  return input.carRowId ? `car_row_id: ${input.carRowId}` : "ข้อความ LINE รอตรวจด้วยมือ";
+}
+
+function fallbackDescriptionForQueue(input: {
+  row: PendingQueueDbRow;
+  related: RelatedTextContext | null;
+  fallbackTitle: string;
+}): string {
+  const relatedText = linePreview(input.related?.row.raw_text, 220);
+  if (relatedText) return relatedText;
+  const ownText = linePreview(input.row.raw_text, 220);
+  if (ownText && ownText !== input.fallbackTitle) return ownText;
+  if (isLineImageOnlyText(input.row.raw_text)) return "มีรูปจาก LINE รอให้พนักงานเลือกข้อความ/รถที่เกี่ยวข้อง";
+  return "รอตรวจด้วยมือ";
+}
+
 function extractStoredAttachments(
   payload: LineInboxAnalyzeResponse,
-  row: { id?: unknown; received_at?: unknown; source_type?: unknown; raw_text?: unknown; car_row_id?: unknown }
+  row: PendingQueueDbRow,
+  overrides: {
+    carRowId?: string;
+    plateText?: string;
+    carTitle?: string;
+    sale?: string;
+    fallbackTitle?: string;
+    fallbackDescription?: string;
+    rawTextPreview?: string;
+  } = {}
 ): PendingQueueAttachment[] {
   const inboxId = String(row.id ?? "").trim();
   const receivedAt = String(row.received_at ?? "");
   const crPayload = String(payload.detected_car?.car_row_id ?? "").trim();
   const crStored = String(row.car_row_id ?? "").trim();
-  const carRowId = crPayload || crStored;
-  const plateText = String(payload.detected_car?.plate_text ?? "").trim();
+  const carRowId = cleanString(overrides.carRowId) || crPayload || crStored;
+  const plateText = cleanString(overrides.plateText) || String(payload.detected_car?.plate_text ?? "").trim();
   const specText = String(payload.detected_car?.spec_text ?? "").trim();
-  const carTitle = [plateText, specText].filter(Boolean).join(" ").trim();
+  const carTitle = cleanString(overrides.carTitle) || [plateText, specText].filter(Boolean).join(" ").trim();
+  const fallbackTitle = cleanString(overrides.fallbackTitle) || carTitle || "รูปจาก LINE ยังไม่ผูกกับข้อความ/รถ";
+  const fallbackDescription = cleanString(overrides.fallbackDescription) || linePreview(row.raw_text);
   return (payload.line_attachments ?? [])
     .filter((attachment: LineInboxAttachmentMeta) => {
       return attachment.status === "stored" && Boolean(String(attachment.public_url ?? "").trim());
@@ -121,12 +310,18 @@ function extractStoredAttachments(
       file_name: attachment.file_name ?? null,
       mime_type: attachment.mime_type ?? null,
       received_at: receivedAt || attachment.captured_at || "",
+      source_type: cleanString(row.source_type),
+      group_id_display: groupIdDisplay(row),
       source_label: sourceLabel(row.source_type),
-      raw_text_preview: String(row.raw_text ?? "").trim().slice(0, 120),
+      raw_text_preview: cleanString(overrides.rawTextPreview) || String(row.raw_text ?? "").trim().slice(0, 120),
       car_row_id: carRowId,
-      plate_display: plateText,
+      plate_display: plateText || fallbackTitle,
       car_title: carTitle,
-      sale: String(payload.detected_car?.sale ?? "").trim(),
+      fallback_title: fallbackTitle,
+      fallback_description: fallbackDescription,
+      fallbackTitle,
+      fallbackDescription,
+      sale: cleanString(overrides.sale) || String(payload.detected_car?.sale ?? "").trim(),
       needs_human_review: Boolean(payload.needs_human_review),
       status: "not_linked" as const,
     }))
@@ -212,11 +407,13 @@ function uniqueAttachments(items: PendingQueueAttachment[]): PendingQueueAttachm
   return out;
 }
 
-function groupMessages(messages: PendingQueueMsg[], recentAttachments: PendingQueueAttachment[]): PendingQueueGroup[] {
+function groupMessages(messages: PendingQueueMsg[]): PendingQueueGroup[] {
   const map = new Map<string, PendingQueueGroup>();
 
   for (const message of messages) {
-    const carKey = message.car_row_id ? `car:${message.car_row_id}` : `unresolved:${message.inbox_id}`;
+    const carKey = message.car_row_id
+      ? `car:${message.car_row_id}`
+      : `unresolved:${message.group_anchor_id || message.inbox_id}`;
     const existing = map.get(carKey);
     if (existing) {
       existing.messages.push(message);
@@ -225,6 +422,10 @@ function groupMessages(messages: PendingQueueMsg[], recentAttachments: PendingQu
       existing.total_manual_reviews += message.needs_human_review && message.action_line_count === 0 ? 1 : 0;
       existing.existing_items = uniqueExistingItems([...existing.existing_items, ...message.existing_items]);
       existing.attachments = uniqueAttachments([...existing.attachments, ...message.attachments]);
+      if (!existing.fallback_title || existing.fallback_title === "-") existing.fallback_title = message.fallback_title;
+      if (!existing.fallbackTitle || existing.fallbackTitle === "-") existing.fallbackTitle = message.fallbackTitle;
+      if (!existing.fallback_description) existing.fallback_description = message.fallback_description;
+      if (!existing.fallbackDescription) existing.fallbackDescription = message.fallbackDescription;
       continue;
     }
 
@@ -233,7 +434,14 @@ function groupMessages(messages: PendingQueueMsg[], recentAttachments: PendingQu
       car_row_id: message.car_row_id,
       plate_display: message.plate_display,
       car_title: message.car_title,
+      fallback_title: message.fallback_title,
+      fallback_description: message.fallback_description,
+      fallbackTitle: message.fallbackTitle,
+      fallbackDescription: message.fallbackDescription,
       sale: message.sale,
+      source_label: message.source_label,
+      source_type: message.source_type,
+      group_id_display: message.group_id_display,
       is_unresolved: !message.car_row_id,
       total_action_lines: message.action_line_count,
       total_new_lines: message.new_line_count,
@@ -246,7 +454,7 @@ function groupMessages(messages: PendingQueueMsg[], recentAttachments: PendingQu
 
   return Array.from(map.values()).map((group) => ({
     ...group,
-    attachments: uniqueAttachments([...group.attachments, ...recentAttachments]).slice(0, 20),
+    attachments: uniqueAttachments(group.attachments).slice(0, 20),
   }));
 }
 
@@ -262,11 +470,12 @@ export async function GET() {
     const supabase = createServiceRoleClient();
     const { data, error } = await supabase
       .from(LINE_INBOX_MESSAGES_TABLE)
-      .select("id,received_at,raw_text,source_type,analyze_payload,car_row_id,needs_human_review")
-      .eq("workflow_status", "pending")
-      .eq("analyze_status", "ok")
+      .select(
+        "id,line_message_id,received_at,raw_text,source_type,group_id,user_id,workflow_status,analyze_status,analyze_payload,car_row_id,needs_human_review"
+      )
+      .in("workflow_status", ["pending", "confirmed"])
       .order("received_at", { ascending: false })
-      .limit(80);
+      .limit(160);
 
     if (error) {
       const m = error.message.toLowerCase();
@@ -294,24 +503,19 @@ export async function GET() {
     let totalAction = 0;
     let totalManualReview = 0;
 
-    for (const row of data ?? []) {
-      const id = String((row as { id?: unknown }).id ?? "").trim();
-      const payloadRaw = (row as { analyze_payload?: unknown }).analyze_payload;
-      if (!id || !isAnalyzePayload(payloadRaw)) continue;
+    const rows = (data ?? []) as PendingQueueDbRow[];
 
-      const payload = payloadRaw;
-      const rowNeedsHumanReview = Boolean((row as { needs_human_review?: unknown }).needs_human_review);
-      const messageAttachments = extractStoredAttachments(
-        payload,
-        row as {
-          id?: unknown;
-          received_at?: unknown;
-          source_type?: unknown;
-          raw_text?: unknown;
-          car_row_id?: unknown;
-        }
-      );
-      recentAttachments.push(...messageAttachments);
+    for (const row of rows) {
+      const id = String(row.id ?? "").trim();
+      const payloadRaw = row.analyze_payload;
+      const payload = analyzePayloadOrNull(payloadRaw);
+      if (!id || !payload) continue;
+      if (cleanString(row.workflow_status) !== "pending" || cleanString(row.analyze_status) !== "ok") {
+        continue;
+      }
+
+      const related = findNearbyTextContext(row, rows);
+      const rowNeedsHumanReview = Boolean(row.needs_human_review);
 
       const newEntries: PendingQueueNewLine[] = [];
       const actionEntries: PendingQueueActionLine[] = [];
@@ -345,31 +549,51 @@ export async function GET() {
         });
       });
 
-      const crPayload = String(payload.detected_car?.car_row_id ?? "").trim();
-      const crStored = String((row as { car_row_id?: unknown }).car_row_id ?? "").trim();
-      const car_row_id = crPayload || crStored;
-      const plateText = String(payload.detected_car?.plate_text ?? "").trim() || "-";
+      const car_row_id = effectiveCarRowId(payload, row, related);
+      const relatedCarTitle = detectedCarTitle(related?.payload ?? null, cleanString(related?.row.car_row_id));
+      const plateTextRaw = String(payload.detected_car?.plate_text ?? "").trim();
       const specText = String(payload.detected_car?.spec_text ?? "").trim();
-      const carTitle = [plateText === "-" ? "" : plateText, specText].filter(Boolean).join(" ").trim() || plateText;
-      const sale = String(payload.detected_car?.sale ?? "").trim();
+      const carTitleRaw = [plateTextRaw, specText].filter(Boolean).join(" ").trim();
+      const carTitle = carTitleRaw || relatedCarTitle;
+      const fallbackTitle = fallbackTitleForQueue({ row, related, carTitle, carRowId: car_row_id });
+      const fallbackDescription = fallbackDescriptionForQueue({ row, related, fallbackTitle });
+      const plateText = plateTextRaw || fallbackTitle;
+      const sale = String(payload.detected_car?.sale ?? related?.payload?.detected_car?.sale ?? "").trim();
       const needsHumanReview = Boolean(payload.needs_human_review || rowNeedsHumanReview);
       const manualReviewOnly = needsHumanReview && actionEntries.length === 0;
 
       if (actionEntries.length === 0 && !manualReviewOnly) continue;
+
+      const messageAttachments = extractStoredAttachments(payload, row, {
+        carRowId: car_row_id,
+        plateText,
+        carTitle,
+        sale,
+        fallbackTitle,
+        fallbackDescription,
+        rawTextPreview: fallbackDescription.slice(0, 120),
+      });
+      recentAttachments.push(...messageAttachments);
 
       totalNew += newEntries.length;
       totalAction += actionEntries.length;
       totalManualReview += manualReviewOnly ? 1 : 0;
       messages.push({
         inbox_id: id,
-        received_at: String((row as { received_at?: unknown }).received_at ?? ""),
-        source_label: sourceLabel((row as { source_type?: unknown }).source_type),
+        received_at: String(row.received_at ?? ""),
+        source_type: cleanString(row.source_type),
+        group_id_display: groupIdDisplay(row),
+        source_label: sourceLabel(row.source_type),
         plate_display: plateText,
         car_title: carTitle,
+        fallback_title: fallbackTitle,
+        fallback_description: fallbackDescription,
+        fallbackTitle,
+        fallbackDescription,
         car_row_id: car_row_id || "",
         sale,
-        raw_text: String((row as { raw_text?: unknown }).raw_text ?? "").trim(),
-        raw_text_preview: String((row as { raw_text?: unknown }).raw_text ?? "").trim().slice(0, 120),
+        raw_text: String(row.raw_text ?? "").trim(),
+        raw_text_preview: fallbackDescription.slice(0, 120),
         detected_car: detectedCarForQueue(payload, car_row_id || ""),
         manual_review_reason: manualReviewOnly ? "AI ยังแยกงานไม่ได้" : "",
         new_lines: newEntries,
@@ -379,11 +603,12 @@ export async function GET() {
         existing_items: uniqueExistingItems(payload.existing_items ?? []),
         attachments: messageAttachments,
         needs_human_review: needsHumanReview,
+        group_anchor_id: related?.row.id ? cleanString(related.row.id) : id,
       });
     }
 
     const recentUniqueAttachments = uniqueAttachments(recentAttachments).slice(0, 40);
-    const groups = groupMessages(messages, recentUniqueAttachments);
+    const groups = groupMessages(messages);
 
     return NextResponse.json({
       ok: true,
