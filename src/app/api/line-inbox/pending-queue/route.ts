@@ -47,6 +47,15 @@ type PendingQueueAttachment = {
   status: "not_linked";
 };
 
+type PendingQueueDetectedCar = {
+  plate_text: string;
+  spec_text: string;
+  chassis: string;
+  car_row_id: string;
+  sale: string;
+  confidence: number;
+};
+
 type PendingQueueMsg = {
   inbox_id: string;
   received_at: string;
@@ -55,7 +64,10 @@ type PendingQueueMsg = {
   car_title: string;
   car_row_id: string;
   sale: string;
+  raw_text: string;
   raw_text_preview: string;
+  detected_car: PendingQueueDetectedCar | null;
+  manual_review_reason: string;
   new_lines: PendingQueueNewLine[];
   new_line_count: number;
   action_lines: PendingQueueActionLine[];
@@ -74,6 +86,7 @@ type PendingQueueGroup = {
   is_unresolved: boolean;
   total_action_lines: number;
   total_new_lines: number;
+  total_manual_reviews: number;
   existing_items: ExistingOrderItemRow[];
   attachments: PendingQueueAttachment[];
   messages: PendingQueueMsg[];
@@ -153,6 +166,28 @@ function sourceLabel(sourceType: unknown): string {
   return "LINE";
 }
 
+function detectedCarForQueue(
+  payload: LineInboxAnalyzeResponse,
+  storedCarRowId: string
+): PendingQueueDetectedCar | null {
+  const detected = payload.detected_car;
+  const plate = String(detected?.plate_text ?? "").trim();
+  const spec = String(detected?.spec_text ?? "").trim();
+  const chassis = String(detected?.chassis ?? "").trim();
+  const carRowId = String(detected?.car_row_id ?? "").trim() || storedCarRowId;
+  const sale = String(detected?.sale ?? "").trim();
+  const confidence = Number(detected?.confidence ?? 0);
+  if (!plate && !spec && !chassis && !carRowId && !sale) return null;
+  return {
+    plate_text: plate,
+    spec_text: spec,
+    chassis,
+    car_row_id: carRowId,
+    sale,
+    confidence: Number.isFinite(confidence) ? confidence : 0,
+  };
+}
+
 function uniqueExistingItems(items: ExistingOrderItemRow[]): ExistingOrderItemRow[] {
   const seen = new Set<string>();
   const out: ExistingOrderItemRow[] = [];
@@ -187,6 +222,7 @@ function groupMessages(messages: PendingQueueMsg[], recentAttachments: PendingQu
       existing.messages.push(message);
       existing.total_action_lines += message.action_line_count;
       existing.total_new_lines += message.new_line_count;
+      existing.total_manual_reviews += message.needs_human_review && message.action_line_count === 0 ? 1 : 0;
       existing.existing_items = uniqueExistingItems([...existing.existing_items, ...message.existing_items]);
       existing.attachments = uniqueAttachments([...existing.attachments, ...message.attachments]);
       continue;
@@ -201,6 +237,7 @@ function groupMessages(messages: PendingQueueMsg[], recentAttachments: PendingQu
       is_unresolved: !message.car_row_id,
       total_action_lines: message.action_line_count,
       total_new_lines: message.new_line_count,
+      total_manual_reviews: message.needs_human_review && message.action_line_count === 0 ? 1 : 0,
       existing_items: uniqueExistingItems(message.existing_items),
       attachments: uniqueAttachments(message.attachments),
       messages: [message],
@@ -225,7 +262,7 @@ export async function GET() {
     const supabase = createServiceRoleClient();
     const { data, error } = await supabase
       .from(LINE_INBOX_MESSAGES_TABLE)
-      .select("id,received_at,raw_text,source_type,analyze_payload,car_row_id")
+      .select("id,received_at,raw_text,source_type,analyze_payload,car_row_id,needs_human_review")
       .eq("workflow_status", "pending")
       .eq("analyze_status", "ok")
       .order("received_at", { ascending: false })
@@ -241,6 +278,7 @@ export async function GET() {
           ok: true,
           total_new_lines: 0,
           total_action_lines: 0,
+          total_manual_reviews: 0,
           messages: [] as PendingQueueMsg[],
           groups: [] as PendingQueueGroup[],
           recent_attachments: [] as PendingQueueAttachment[],
@@ -254,6 +292,7 @@ export async function GET() {
     const recentAttachments: PendingQueueAttachment[] = [];
     let totalNew = 0;
     let totalAction = 0;
+    let totalManualReview = 0;
 
     for (const row of data ?? []) {
       const id = String((row as { id?: unknown }).id ?? "").trim();
@@ -261,6 +300,7 @@ export async function GET() {
       if (!id || !isAnalyzePayload(payloadRaw)) continue;
 
       const payload = payloadRaw;
+      const rowNeedsHumanReview = Boolean((row as { needs_human_review?: unknown }).needs_human_review);
       const messageAttachments = extractStoredAttachments(
         payload,
         row as {
@@ -305,8 +345,6 @@ export async function GET() {
         });
       });
 
-      if (actionEntries.length === 0) continue;
-
       const crPayload = String(payload.detected_car?.car_row_id ?? "").trim();
       const crStored = String((row as { car_row_id?: unknown }).car_row_id ?? "").trim();
       const car_row_id = crPayload || crStored;
@@ -314,9 +352,14 @@ export async function GET() {
       const specText = String(payload.detected_car?.spec_text ?? "").trim();
       const carTitle = [plateText === "-" ? "" : plateText, specText].filter(Boolean).join(" ").trim() || plateText;
       const sale = String(payload.detected_car?.sale ?? "").trim();
+      const needsHumanReview = Boolean(payload.needs_human_review || rowNeedsHumanReview);
+      const manualReviewOnly = needsHumanReview && actionEntries.length === 0;
+
+      if (actionEntries.length === 0 && !manualReviewOnly) continue;
 
       totalNew += newEntries.length;
       totalAction += actionEntries.length;
+      totalManualReview += manualReviewOnly ? 1 : 0;
       messages.push({
         inbox_id: id,
         received_at: String((row as { received_at?: unknown }).received_at ?? ""),
@@ -325,14 +368,17 @@ export async function GET() {
         car_title: carTitle,
         car_row_id: car_row_id || "",
         sale,
+        raw_text: String((row as { raw_text?: unknown }).raw_text ?? "").trim(),
         raw_text_preview: String((row as { raw_text?: unknown }).raw_text ?? "").trim().slice(0, 120),
+        detected_car: detectedCarForQueue(payload, car_row_id || ""),
+        manual_review_reason: manualReviewOnly ? "AI ยังแยกงานไม่ได้" : "",
         new_lines: newEntries,
         new_line_count: newEntries.length,
         action_lines: actionEntries,
         action_line_count: actionEntries.length,
         existing_items: uniqueExistingItems(payload.existing_items ?? []),
         attachments: messageAttachments,
-        needs_human_review: Boolean(payload.needs_human_review),
+        needs_human_review: needsHumanReview,
       });
     }
 
@@ -343,6 +389,7 @@ export async function GET() {
       ok: true,
       total_new_lines: totalNew,
       total_action_lines: totalAction,
+      total_manual_reviews: totalManualReview,
       messages,
       groups,
       recent_attachments: recentUniqueAttachments,
