@@ -74,6 +74,13 @@ type PendingQueueMessage = {
   fallback_description?: string;
   fallbackTitle?: string;
   fallbackDescription?: string;
+  fallback_subtitle?: string;
+  fallbackSubtitle?: string;
+  rawTextPreview?: string;
+  related_text_message_id?: string;
+  relatedTextMessageId?: string;
+  line_photo_count?: number;
+  linePhotoCount?: number;
   car_row_id: string;
   sale?: string;
   raw_text?: string;
@@ -107,6 +114,13 @@ type PendingQueueAttachment = {
   fallback_description?: string;
   fallbackTitle?: string;
   fallbackDescription?: string;
+  fallback_subtitle?: string;
+  fallbackSubtitle?: string;
+  rawTextPreview?: string;
+  related_text_message_id?: string;
+  relatedTextMessageId?: string;
+  line_photo_count?: number;
+  linePhotoCount?: number;
   sale?: string;
   needs_human_review?: boolean;
   status?: "not_linked" | "attached" | "ignored" | string;
@@ -121,6 +135,13 @@ type PendingQueueGroup = {
   fallback_description?: string;
   fallbackTitle?: string;
   fallbackDescription?: string;
+  fallback_subtitle?: string;
+  fallbackSubtitle?: string;
+  rawTextPreview?: string;
+  related_text_message_id?: string;
+  relatedTextMessageId?: string;
+  line_photo_count?: number;
+  linePhotoCount?: number;
   sale: string;
   source_label?: string;
   source_type?: string;
@@ -690,6 +711,7 @@ type LineInboxCarPickerRow = {
   detectedCarLabel: string;
   sourceLabel: string;
   groupIdDisplay: string;
+  fallbackSubtitle: string;
   latestMessageAt: number;
 };
 
@@ -1173,6 +1195,7 @@ function useLineInboxBridgeState({
         detectedCarLabel: manualReviewMessage ? queueDetectedCarLabel(manualReviewMessage) : "",
         sourceLabel: String(group.source_label ?? manualReviewMessage?.source_label ?? "").trim(),
         groupIdDisplay: String(group.group_id_display ?? manualReviewMessage?.group_id_display ?? "").trim(),
+        fallbackSubtitle: String(group.fallback_subtitle ?? group.fallbackSubtitle ?? "").trim(),
         latestMessageAt: groupLatestReceivedMs(group),
       });
     }
@@ -1991,6 +2014,9 @@ function useLineInboxBridgeState({
               <p className="mt-1 text-[10px] font-semibold text-slate-500">
                 {[row.sourceLabel, row.groupIdDisplay ? `group: ${row.groupIdDisplay}` : ""].filter(Boolean).join(" · ")}
               </p>
+            ) : null}
+            {row.fallbackSubtitle ? (
+              <p className="mt-1 line-clamp-2 text-[10px] font-medium text-slate-500">{row.fallbackSubtitle}</p>
             ) : null}
             {row.manualReviewCount > 0 ? (
               <div className="mt-2 rounded-xl bg-amber-50 px-2 py-2 text-[11px] font-medium leading-relaxed text-amber-950 ring-1 ring-amber-100">

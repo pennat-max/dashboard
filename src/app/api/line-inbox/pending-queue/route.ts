@@ -11,6 +11,7 @@ import type {
 } from "@/lib/line-inbox/types";
 
 export const dynamic = "force-dynamic";
+const LINE_IMAGE_AFTER_TEXT_WINDOW_MS = 5 * 60 * 1000;
 
 type PendingQueueNewLine = {
   item_index: number;
@@ -48,6 +49,13 @@ type PendingQueueAttachment = {
   fallback_description: string;
   fallbackTitle: string;
   fallbackDescription: string;
+  fallback_subtitle: string;
+  fallbackSubtitle: string;
+  rawTextPreview: string;
+  related_text_message_id: string;
+  relatedTextMessageId: string;
+  line_photo_count: number;
+  linePhotoCount: number;
   sale: string;
   needs_human_review: boolean;
   status: "not_linked";
@@ -74,6 +82,13 @@ type PendingQueueMsg = {
   fallback_description: string;
   fallbackTitle: string;
   fallbackDescription: string;
+  fallback_subtitle: string;
+  fallbackSubtitle: string;
+  rawTextPreview: string;
+  related_text_message_id: string;
+  relatedTextMessageId: string;
+  line_photo_count: number;
+  linePhotoCount: number;
   car_row_id: string;
   sale: string;
   raw_text: string;
@@ -99,6 +114,13 @@ type PendingQueueGroup = {
   fallback_description: string;
   fallbackTitle: string;
   fallbackDescription: string;
+  fallback_subtitle: string;
+  fallbackSubtitle: string;
+  rawTextPreview: string;
+  related_text_message_id: string;
+  relatedTextMessageId: string;
+  line_photo_count: number;
+  linePhotoCount: number;
   sale: string;
   source_label: string;
   source_type: string;
@@ -155,6 +177,13 @@ function sourceScopeKey(row: Pick<PendingQueueDbRow, "source_type" | "group_id" 
   const sourceType = cleanString(row.source_type) || "unknown";
   const id = cleanString(row.group_id) || cleanString(row.user_id);
   return `${sourceType}:${id}`;
+}
+
+function imageOnlyFallbackGroupAnchor(row: PendingQueueDbRow): string {
+  const sourceKey = sourceScopeKey(row);
+  const t = lineMessageTimeMs(row);
+  const bucket = t ? Math.floor(t / LINE_IMAGE_AFTER_TEXT_WINDOW_MS) : cleanString(row.id);
+  return `image-only:${sourceKey}:${bucket}`;
 }
 
 function maskLineSourceId(value: unknown): string {
@@ -222,7 +251,8 @@ function findNearbyTextContext(row: PendingQueueDbRow, rows: PendingQueueDbRow[]
       if (isLineImageOnlyText(candidate.raw_text)) return false;
       const t = lineMessageTimeMs(candidate);
       if (!t) return false;
-      return Math.abs(t - rowTime) <= 3 * 60 * 1000;
+      const delta = rowTime - t;
+      return delta >= 0 && delta <= LINE_IMAGE_AFTER_TEXT_WINDOW_MS;
     })
     .map((candidate) => {
       const payload = analyzePayloadOrNull(candidate.analyze_payload);
@@ -230,12 +260,12 @@ function findNearbyTextContext(row: PendingQueueDbRow, rows: PendingQueueDbRow[]
         Boolean(cleanString(candidate.car_row_id)) ||
         Boolean(cleanString(payload?.detected_car?.car_row_id)) ||
         Boolean(cleanString(payload?.detected_car?.plate_text));
-      const pendingWeight = cleanString(candidate.workflow_status) === "pending" ? 0 : 20_000;
-      const carWeight = hasCar ? -10_000 : 0;
+      const pendingWeight = cleanString(candidate.workflow_status) === "pending" ? 0 : LINE_IMAGE_AFTER_TEXT_WINDOW_MS;
+      const carWeight = hasCar ? -1_000 : 0;
       return {
         row: candidate,
         payload,
-        score: Math.abs(lineMessageTimeMs(candidate) - rowTime) + pendingWeight + carWeight,
+        score: rowTime - lineMessageTimeMs(candidate) + pendingWeight + carWeight,
       };
     })
     .sort((a, b) => a.score - b.score);
@@ -276,6 +306,23 @@ function fallbackDescriptionForQueue(input: {
   return "รอตรวจด้วยมือ";
 }
 
+function fallbackSubtitleForQueue(input: {
+  row: PendingQueueDbRow;
+  related: RelatedTextContext | null;
+  carRowId: string;
+}): string {
+  const source = sourceLabel(input.row.source_type);
+  const received = cleanString(input.row.received_at);
+  const group = groupIdDisplay(input.row);
+  const parts = [
+    input.carRowId ? `car_row_id: ${input.carRowId}` : "",
+    source,
+    group ? `group: ${group}` : "",
+    received,
+  ].filter(Boolean);
+  return parts.join(" · ");
+}
+
 function extractStoredAttachments(
   payload: LineInboxAnalyzeResponse,
   row: PendingQueueDbRow,
@@ -286,6 +333,9 @@ function extractStoredAttachments(
     sale?: string;
     fallbackTitle?: string;
     fallbackDescription?: string;
+    fallbackSubtitle?: string;
+    relatedTextMessageId?: string;
+    linePhotoCount?: number;
     rawTextPreview?: string;
   } = {}
 ): PendingQueueAttachment[] {
@@ -299,6 +349,9 @@ function extractStoredAttachments(
   const carTitle = cleanString(overrides.carTitle) || [plateText, specText].filter(Boolean).join(" ").trim();
   const fallbackTitle = cleanString(overrides.fallbackTitle) || carTitle || "รูปจาก LINE ยังไม่ผูกกับข้อความ/รถ";
   const fallbackDescription = cleanString(overrides.fallbackDescription) || linePreview(row.raw_text);
+  const fallbackSubtitle = cleanString(overrides.fallbackSubtitle);
+  const relatedTextMessageId = cleanString(overrides.relatedTextMessageId);
+  const linePhotoCount = Math.max(1, Number(overrides.linePhotoCount ?? 1));
   return (payload.line_attachments ?? [])
     .filter((attachment: LineInboxAttachmentMeta) => {
       return attachment.status === "stored" && Boolean(String(attachment.public_url ?? "").trim());
@@ -321,6 +374,13 @@ function extractStoredAttachments(
       fallback_description: fallbackDescription,
       fallbackTitle,
       fallbackDescription,
+      fallback_subtitle: fallbackSubtitle,
+      fallbackSubtitle,
+      rawTextPreview: cleanString(overrides.rawTextPreview) || fallbackDescription.slice(0, 120),
+      related_text_message_id: relatedTextMessageId,
+      relatedTextMessageId,
+      line_photo_count: linePhotoCount,
+      linePhotoCount,
       sale: cleanString(overrides.sale) || String(payload.detected_car?.sale ?? "").trim(),
       needs_human_review: Boolean(payload.needs_human_review),
       status: "not_linked" as const,
@@ -363,13 +423,22 @@ function sourceLabel(sourceType: unknown): string {
 
 function detectedCarForQueue(
   payload: LineInboxAnalyzeResponse,
-  storedCarRowId: string
+  storedCarRowId: string,
+  related: RelatedTextContext | null = null
 ): PendingQueueDetectedCar | null {
-  const detected = payload.detected_car;
+  const ownDetected = payload.detected_car;
+  const relatedDetected = related?.payload?.detected_car;
+  const detected =
+    cleanString(ownDetected?.car_row_id) ||
+    cleanString(ownDetected?.plate_text) ||
+    cleanString(ownDetected?.spec_text) ||
+    cleanString(ownDetected?.chassis)
+      ? ownDetected
+      : relatedDetected;
   const plate = String(detected?.plate_text ?? "").trim();
   const spec = String(detected?.spec_text ?? "").trim();
   const chassis = String(detected?.chassis ?? "").trim();
-  const carRowId = String(detected?.car_row_id ?? "").trim() || storedCarRowId;
+  const carRowId = String(detected?.car_row_id ?? "").trim() || storedCarRowId || cleanString(related?.row.car_row_id);
   const sale = String(detected?.sale ?? "").trim();
   const confidence = Number(detected?.confidence ?? 0);
   if (!plate && !spec && !chassis && !carRowId && !sale) return null;
@@ -422,10 +491,16 @@ function groupMessages(messages: PendingQueueMsg[]): PendingQueueGroup[] {
       existing.total_manual_reviews += message.needs_human_review && message.action_line_count === 0 ? 1 : 0;
       existing.existing_items = uniqueExistingItems([...existing.existing_items, ...message.existing_items]);
       existing.attachments = uniqueAttachments([...existing.attachments, ...message.attachments]);
+      existing.line_photo_count = existing.attachments.length;
+      existing.linePhotoCount = existing.attachments.length;
       if (!existing.fallback_title || existing.fallback_title === "-") existing.fallback_title = message.fallback_title;
       if (!existing.fallbackTitle || existing.fallbackTitle === "-") existing.fallbackTitle = message.fallbackTitle;
       if (!existing.fallback_description) existing.fallback_description = message.fallback_description;
       if (!existing.fallbackDescription) existing.fallbackDescription = message.fallbackDescription;
+      if (!existing.fallback_subtitle) existing.fallback_subtitle = message.fallback_subtitle;
+      if (!existing.fallbackSubtitle) existing.fallbackSubtitle = message.fallbackSubtitle;
+      if (!existing.related_text_message_id) existing.related_text_message_id = message.related_text_message_id;
+      if (!existing.relatedTextMessageId) existing.relatedTextMessageId = message.relatedTextMessageId;
       continue;
     }
 
@@ -438,6 +513,13 @@ function groupMessages(messages: PendingQueueMsg[]): PendingQueueGroup[] {
       fallback_description: message.fallback_description,
       fallbackTitle: message.fallbackTitle,
       fallbackDescription: message.fallbackDescription,
+      fallback_subtitle: message.fallback_subtitle,
+      fallbackSubtitle: message.fallbackSubtitle,
+      rawTextPreview: message.rawTextPreview,
+      related_text_message_id: message.related_text_message_id,
+      relatedTextMessageId: message.relatedTextMessageId,
+      line_photo_count: message.attachments.length,
+      linePhotoCount: message.attachments.length,
       sale: message.sale,
       source_label: message.source_label,
       source_type: message.source_type,
@@ -452,10 +534,15 @@ function groupMessages(messages: PendingQueueMsg[]): PendingQueueGroup[] {
     });
   }
 
-  return Array.from(map.values()).map((group) => ({
-    ...group,
-    attachments: uniqueAttachments(group.attachments).slice(0, 20),
-  }));
+  return Array.from(map.values()).map((group) => {
+    const attachments = uniqueAttachments(group.attachments).slice(0, 20);
+    return {
+      ...group,
+      attachments,
+      line_photo_count: attachments.length,
+      linePhotoCount: attachments.length,
+    };
+  });
 }
 
 /**
@@ -557,6 +644,8 @@ export async function GET() {
       const carTitle = carTitleRaw || relatedCarTitle;
       const fallbackTitle = fallbackTitleForQueue({ row, related, carTitle, carRowId: car_row_id });
       const fallbackDescription = fallbackDescriptionForQueue({ row, related, fallbackTitle });
+      const fallbackSubtitle = fallbackSubtitleForQueue({ row, related, carRowId: car_row_id });
+      const relatedTextMessageId = cleanString(related?.row.id);
       const plateText = plateTextRaw || fallbackTitle;
       const sale = String(payload.detected_car?.sale ?? related?.payload?.detected_car?.sale ?? "").trim();
       const needsHumanReview = Boolean(payload.needs_human_review || rowNeedsHumanReview);
@@ -571,6 +660,9 @@ export async function GET() {
         sale,
         fallbackTitle,
         fallbackDescription,
+        fallbackSubtitle,
+        relatedTextMessageId,
+        linePhotoCount: payload.line_attachments?.length ?? 0,
         rawTextPreview: fallbackDescription.slice(0, 120),
       });
       recentAttachments.push(...messageAttachments);
@@ -590,11 +682,18 @@ export async function GET() {
         fallback_description: fallbackDescription,
         fallbackTitle,
         fallbackDescription,
+        fallback_subtitle: fallbackSubtitle,
+        fallbackSubtitle,
+        rawTextPreview: fallbackDescription.slice(0, 120),
+        related_text_message_id: relatedTextMessageId,
+        relatedTextMessageId,
+        line_photo_count: messageAttachments.length,
+        linePhotoCount: messageAttachments.length,
         car_row_id: car_row_id || "",
         sale,
         raw_text: String(row.raw_text ?? "").trim(),
         raw_text_preview: fallbackDescription.slice(0, 120),
-        detected_car: detectedCarForQueue(payload, car_row_id || ""),
+        detected_car: detectedCarForQueue(payload, car_row_id || "", related),
         manual_review_reason: manualReviewOnly ? "AI ยังแยกงานไม่ได้" : "",
         new_lines: newEntries,
         new_line_count: newEntries.length,
@@ -603,7 +702,7 @@ export async function GET() {
         existing_items: uniqueExistingItems(payload.existing_items ?? []),
         attachments: messageAttachments,
         needs_human_review: needsHumanReview,
-        group_anchor_id: related?.row.id ? cleanString(related.row.id) : id,
+        group_anchor_id: relatedTextMessageId || (isLineImageOnlyText(row.raw_text) ? imageOnlyFallbackGroupAnchor(row) : id),
       });
     }
 
