@@ -4884,7 +4884,12 @@ export function MobileOrderTrackingHome({
   const [saleStatusFilters, setSaleStatusFilters] = useState<Set<SaleStatusFilterValue>>(
     () => new Set(initialSaleStatusFilters)
   );
-  const [vehicleSearch, setVehicleSearch] = useState("");
+  const [vehicleSearch, setVehicleSearch] = useState(() => sanitizeVehicleSearchInput(deepLinkParams.search));
+  useEffect(() => {
+    const querySearch = sanitizeVehicleSearchInput(deepLinkParams.search);
+    if (!querySearch) return;
+    setVehicleSearch((prev) => (prev === querySearch ? prev : querySearch));
+  }, [deepLinkParams.search]);
   const vehicleSearchForFiltering = useDebouncedValue(vehicleSearch, 120);
   const [translateAllBusy, setTranslateAllBusy] = useState(false);
   const [translateAllMessage, setTranslateAllMessage] = useState("");

@@ -252,6 +252,10 @@ const lineInboxToolbar = fs.readFileSync(
   path.join(root, "src/components/orders/mobile-v2/line-inbox-ai-toolbar.tsx"),
   "utf8"
 );
+const mobileOrderTrackingHome = fs.readFileSync(
+  path.join(root, "src/components/orders/mobile-v2/mobile-order-tracking-home.tsx"),
+  "utf8"
+);
 assert(
   pendingSaveRoute.includes("buildFallbackAnalyzePayloadFromRawText"),
   "pending-save accepts fallback item indexes from old/no-payload LINE text rows"
@@ -271,6 +275,14 @@ assert(
 assert(
   !lineInboxToolbar.includes('url.searchParams.set("focusCar"'),
   "copy-ready UI reply uses search-only review links"
+);
+assert(
+  mobileOrderTrackingHome.includes("useState(() => sanitizeVehicleSearchInput(deepLinkParams.search))"),
+  "orders page initializes search input from query search param"
+);
+assert(
+  mobileOrderTrackingHome.includes("setVehicleSearch((prev) => (prev === querySearch ? prev : querySearch))"),
+  "orders page applies query search param on client navigation"
 );
 assert(pendingSaveRoute.includes("assignee_staff: String(actionRow.assignee_staff"), "pending-save receives selected assignee");
 assert(pendingSaveRoute.includes("item_status: String(actionRow.item_status"), "pending-save receives selected status");
