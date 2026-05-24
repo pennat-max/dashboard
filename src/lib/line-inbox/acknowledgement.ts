@@ -14,11 +14,13 @@ const SYSTEM_ACK_PATTERNS = [
   /รับทราบค่ะ\s*✅?/i,
   /รับงานแล้วครับ\s*✅?/i,
   /ระบบบันทึกงานที่ตรวจสอบแล้วเรียบร้อย/i,
+  /บันทึกงานเรียบร้อย/i,
   /ระบบจับงานจาก LINE แล้ว/i,
   /กรุณาตรวจสอบก่อนบันทึก/i,
   /กรุณาตรวจสอบงานที่ AI จับได้ก่อนบันทึก/i,
   /ตรวจสอบข้อมูลงานได้ที่:/i,
   /ตรวจสอบงานได้ที่:/i,
+  /ดูงาน:/i,
   /used-car-export-dashboard\.vercel\.app\/m\/orders/i,
 ];
 
@@ -163,7 +165,7 @@ export function buildLineApprovalAcknowledgementText({
   const lines = [
     "รับทราบค่ะ ✅",
     "",
-    "ระบบบันทึกงานที่ตรวจสอบแล้วเรียบร้อย",
+    "บันทึกงานเรียบร้อย",
     "",
   ];
 
@@ -172,16 +174,14 @@ export function buildLineApprovalAcknowledgementText({
   }
 
   if (items.length > 0) {
-    lines.push("รายการที่รับงาน:");
+    lines.push("รายการ:");
     for (const [index, item] of items.entries()) {
-      lines.push(
-        `${index + 1}. ${item.name} — ผู้รับผิดชอบ: ${item.assignee || "ยังไม่ระบุ"} — สถานะ: ${item.status || "-"}`
-      );
+      lines.push(`${index + 1}. ${item.name} : ${item.assignee || "ยังไม่ระบุ"}/${item.status || "ยังไม่ระบุ"}`);
     }
     lines.push("");
   }
 
-  lines.push("ตรวจสอบข้อมูลงานได้ที่:", safeReviewUrl);
+  lines.push("ดูงาน:", safeReviewUrl);
   return lines.join("\n");
 }
 

@@ -183,13 +183,19 @@ const approvalReply = buildLineApprovalAcknowledgementText({
   approvedItems: [
     { name: "แต่งเหมือนรูปทุกอย่าง", assignee: "PREW", status: "สั่ง" },
     { name: "ยกเลิกติดกันแมลง+กันสาด", assignee: "", status: "เช็ค" },
+    { name: "เปลี่ยนแม็ก+ยาง ตามรูป", assignee: "AOR", status: "" },
   ],
 });
 assert(approvalReply.includes("รถ: กท-2692 ROCCO PRE"), "approval reply includes non-duplicated car label");
 assert(!approvalReply.includes("กท-2692 กท-2692 ROCCO"), "approval reply does not duplicate plate");
-assert(approvalReply.includes("ผู้รับผิดชอบ: PREW"), "approval reply includes selected assignee");
-assert(approvalReply.includes("สถานะ: สั่ง"), "approval reply includes selected status");
-assert(approvalReply.includes("ผู้รับผิดชอบ: ยังไม่ระบุ"), "approval reply shows explicit unassigned label");
+assert(approvalReply.includes("บันทึกงานเรียบร้อย"), "approval reply uses compact saved header");
+assert(approvalReply.includes("รายการ:"), "approval reply uses compact item header");
+assert(approvalReply.includes("1. แต่งเหมือนรูปทุกอย่าง : PREW/สั่ง"), "approval reply uses compact assignee/status format");
+assert(approvalReply.includes("2. ยกเลิกติดกันแมลง+กันสาด : ยังไม่ระบุ/เช็ค"), "approval reply shows compact missing-assignee fallback");
+assert(approvalReply.includes("3. เปลี่ยนแม็ก+ยาง ตามรูป : AOR/ยังไม่ระบุ"), "approval reply shows compact missing-status fallback");
+assert(!approvalReply.includes("ผู้รับผิดชอบ:"), "approval reply does not use verbose assignee label");
+assert(!approvalReply.includes("สถานะ:"), "approval reply does not use verbose status label");
+assert(approvalReply.includes("ดูงาน:"), "approval reply uses compact review link label");
 assert(approvalReply.includes("focusCar=64ceddf5-2f7b-4e63-b8aa-71cf6d8d537b"), "approval reply includes car deep link");
 
 const pendingQueueRoute = fs.readFileSync(
@@ -219,9 +225,25 @@ const pendingSaveRoute = fs.readFileSync(
   path.join(root, "src/app/api/line-inbox/pending-save/route.ts"),
   "utf8"
 );
+const lineInboxToolbar = fs.readFileSync(
+  path.join(root, "src/components/orders/mobile-v2/line-inbox-ai-toolbar.tsx"),
+  "utf8"
+);
 assert(
   pendingSaveRoute.includes("buildFallbackAnalyzePayloadFromRawText"),
   "pending-save accepts fallback item indexes from old/no-payload LINE text rows"
+);
+assert(
+  lineInboxToolbar.includes('${index + 1}. ${line.name.trim() || "-"} : ${assignee}/${status}'),
+  "copy-ready UI reply uses compact assignee/status format"
+);
+assert(
+  !lineInboxToolbar.includes("owner: ${assignee}"),
+  "copy-ready UI reply does not use verbose English owner label"
+);
+assert(
+  !lineInboxToolbar.includes("ผู้รับผิดชอบ: ${assignee}"),
+  "copy-ready UI reply does not use verbose Thai assignee label"
 );
 assert(pendingSaveRoute.includes("assignee_staff: String(actionRow.assignee_staff"), "pending-save receives selected assignee");
 assert(pendingSaveRoute.includes("item_status: String(actionRow.item_status"), "pending-save receives selected status");

@@ -394,10 +394,8 @@ function buildLineReplyText({
       ? lines
           .map((line, index) => {
             const assignee = String(line.assignee ?? "").trim() || (uiLang === "en" ? "Unassigned" : "ยังไม่ระบุ");
-            const status = line.status.trim() || "-";
-            return uiLang === "en"
-              ? `${index + 1}. ${line.name.trim() || "-"} — owner: ${assignee} — status: ${status}`
-              : `${index + 1}. ${line.name.trim() || "-"} — ผู้รับผิดชอบ: ${assignee} — สถานะ: ${status}`;
+            const status = line.status.trim() || (uiLang === "en" ? "Unspecified" : "ยังไม่ระบุ");
+            return `${index + 1}. ${line.name.trim() || "-"} : ${assignee}/${status}`;
           })
           .join("\n")
       : "-";
@@ -414,11 +412,15 @@ function buildLineReplyText({
   }
 
   return [
-    "รับงานแล้วครับ",
+    "รับทราบค่ะ ✅",
+    "",
+    "บันทึกงานเรียบร้อย",
+    "",
     `รถ: ${safePlate}`,
     "รายการ:",
     itemLines,
-    "ตรวจสอบข้อมูลงาน:",
+    "",
+    "ดูงาน:",
     safeReviewUrl,
   ].join("\n");
 }
