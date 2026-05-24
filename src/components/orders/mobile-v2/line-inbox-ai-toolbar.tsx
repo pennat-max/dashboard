@@ -357,11 +357,12 @@ function buildOrderReviewUrl({
   carRowId?: string | null;
   plate?: string | null;
 }): string {
+  void carRowId;
   const url = new URL(LINE_ORDER_REVIEW_URL);
-  const safeCarRowId = String(carRowId ?? "").trim();
   const safePlate = collapseDisplaySpaces(plate);
   url.searchParams.set("load", "full");
-  if (safeCarRowId) url.searchParams.set("focusCar", safeCarRowId);
+  // Use search-first links in LINE copy text because they are stable even when
+  // progressive card hydration cannot scroll to a focused row immediately.
   if (safePlate && safePlate !== "-") url.searchParams.set("search", safePlate);
   return url.toString();
 }

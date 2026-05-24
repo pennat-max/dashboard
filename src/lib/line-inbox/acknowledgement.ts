@@ -111,11 +111,13 @@ export function buildLineOrderReviewUrl({
   carRowId?: string | null;
   plate?: string | null;
 }): string {
+  void carRowId;
   const url = new URL(LINE_ORDER_REVIEW_URL);
-  const safeCarRowId = cleanLine(carRowId ?? "");
   const safePlate = cleanLine(plate ?? "");
   url.searchParams.set("load", "full");
-  if (safeCarRowId) url.searchParams.set("focusCar", safeCarRowId);
+  // Search is the stable public deep link for LINE replies. The page also
+  // understands focusCar, but search keeps the reply useful if card hydration
+  // cannot scroll to the row immediately.
   if (safePlate && safePlate !== "-") url.searchParams.set("search", safePlate);
   return url.toString();
 }
