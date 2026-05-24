@@ -187,7 +187,11 @@ const koTho2692ReviewUrl = buildLineOrderReviewUrl({
   plate: "กท-2692",
 });
 assert(koTho2692ReviewUrl.includes("load=full"), "review URL keeps full-load mode");
-assert(!koTho2692ReviewUrl.includes("focusCar="), "review URL does not use focusCar for LINE replies");
+assert.strictEqual(
+  new URL(koTho2692ReviewUrl).searchParams.get("aiLineCar"),
+  "64ceddf5-2f7b-4e63-b8aa-71cf6d8d537b",
+  "review URL includes AI LINE car focus id"
+);
 assert.strictEqual(new URL(koTho2692ReviewUrl).searchParams.get("search"), "2692", "review URL searches by short plate ref");
 const sampleThaiPlateReviewUrl = buildLineOrderReviewUrl({
   carRowId: "ignored-row-id",
@@ -195,8 +199,8 @@ const sampleThaiPlateReviewUrl = buildLineOrderReviewUrl({
 });
 assert.strictEqual(
   sampleThaiPlateReviewUrl,
-  "https://used-car-export-dashboard.vercel.app/m/orders?load=full&search=6286",
-  "review URL encodes Thai plate search link"
+  "https://used-car-export-dashboard.vercel.app/m/orders?load=full&aiLineCar=ignored-row-id&search=6286",
+  "review URL encodes AI LINE car focus and Thai plate search fallback"
 );
 
 const approvalReply = buildLineApprovalAcknowledgementText({
@@ -218,7 +222,7 @@ assert(approvalReply.includes("3. เปลี่ยนแม็ก+ยาง �
 assert(!approvalReply.includes("ผู้รับผิดชอบ:"), "approval reply does not use verbose assignee label");
 assert(!approvalReply.includes("สถานะ:"), "approval reply does not use verbose status label");
 assert(approvalReply.includes("ดูงาน:"), "approval reply uses compact review link label");
-assert(!approvalReply.includes("focusCar="), "approval reply does not include unstable focusCar link");
+assert(approvalReply.includes("aiLineCar=64ceddf5-2f7b-4e63-b8aa-71cf6d8d537b"), "approval reply includes AI LINE car focus link");
 assert(approvalReply.includes("search=2692"), "approval reply includes short search deep link");
 
 const pendingQueueRoute = fs.readFileSync(
@@ -273,8 +277,16 @@ assert(
   "copy-ready UI reply does not use verbose Thai assignee label"
 );
 assert(
-  !lineInboxToolbar.includes('url.searchParams.set("focusCar"'),
-  "copy-ready UI reply uses search-only review links"
+  lineInboxToolbar.includes('url.searchParams.set("aiLineCar"'),
+  "copy-ready UI reply includes AI LINE car focus links"
+);
+assert(
+  mobileOrderTrackingHome.includes('params.get("aiLineCar")'),
+  "orders page reads aiLineCar deep links"
+);
+assert(
+  mobileOrderTrackingHome.includes("void focusLineInboxCar({"),
+  "orders page reuses AI LINE car focus handler for deep links"
 );
 assert(
   mobileOrderTrackingHome.includes("useState(() => sanitizeVehicleSearchInput(deepLinkParams.search))"),

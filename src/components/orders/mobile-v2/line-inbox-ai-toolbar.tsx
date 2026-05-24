@@ -370,12 +370,12 @@ function buildOrderReviewUrl({
   carRowId?: string | null;
   plate?: string | null;
 }): string {
-  void carRowId;
   const url = new URL(LINE_ORDER_REVIEW_URL);
   const searchRef = buildOrderSearchRef(plate);
   url.searchParams.set("load", "full");
-  // Use search-first links in LINE copy text because they are stable even when
-  // progressive card hydration cannot scroll to a focused row immediately.
+  const safeCarRowId = String(carRowId ?? "").trim();
+  if (safeCarRowId) url.searchParams.set("aiLineCar", safeCarRowId);
+  // Keep search as a stable fallback if the focused card cannot be hydrated.
   if (searchRef) url.searchParams.set("search", searchRef);
   return url.toString();
 }

@@ -4778,7 +4778,7 @@ export function MobileOrderTrackingHome({
   const deepLinkParams = useMemo(() => {
     const params = new URLSearchParams(searchParams?.toString() ?? "");
     return {
-      carRowId: String(params.get("carRowId") ?? params.get("focusCar") ?? params.get("car_row_id") ?? "").trim(),
+      carRowId: String(params.get("aiLineCar") ?? params.get("carRowId") ?? params.get("focusCar") ?? params.get("car_row_id") ?? "").trim(),
       search: String(params.get("search") ?? params.get("plate") ?? "").trim(),
     };
   }, [searchParams]);
@@ -6409,25 +6409,20 @@ export function MobileOrderTrackingHome({
       deepLinkScrollDoneRef.current = true;
       return;
     }
-    deepLinkSetupRef.current = true;
-    setLineInboxFocusOrderId(order.id);
-    setSaleFilters(new Set());
-    setSaleStatusFilters(new Set());
-    setStaffFilters(new Set());
-    setItemStatusFilters(new Set());
     const q = rawSearch || String(order.fullPlate ?? "").trim() || String(order.plate ?? "").trim();
-    if (q && q !== "-") setVehicleSearch(sanitizeVehicleSearchInput(q));
-    if (orderChipCacheExperimentEnabled) {
-      void hydrateExperimentDetails([order]);
-    }
+    deepLinkSetupRef.current = true;
+    void focusLineInboxCar({
+      orderId: order.id,
+      carRowId: String(order.carRowId ?? deepLinkParams.carRowId ?? "").trim() || null,
+      plate: q && q !== "-" ? q : "-",
+    });
   }, [
     deepLinkParams.carRowId,
     deepLinkParams.search,
     findDeepLinkOrder,
-    hydrateExperimentDetails,
+    focusLineInboxCar,
     initialFocusedOrderId,
     mappedOrders.length,
-    orderChipCacheExperimentEnabled,
   ]);
 
   useLayoutEffect(() => {

@@ -124,13 +124,12 @@ export function buildLineOrderReviewUrl({
   carRowId?: string | null;
   plate?: string | null;
 }): string {
-  void carRowId;
   const url = new URL(LINE_ORDER_REVIEW_URL);
   const searchRef = buildLineOrderSearchRef(plate);
   url.searchParams.set("load", "full");
-  // Search is the stable public deep link for LINE replies. The page also
-  // understands focusCar, but search keeps the reply useful if card hydration
-  // cannot scroll to the row immediately.
+  const safeCarRowId = String(carRowId ?? "").trim();
+  if (safeCarRowId) url.searchParams.set("aiLineCar", safeCarRowId);
+  // Search stays as the stable fallback if card hydration cannot focus the row.
   if (searchRef) url.searchParams.set("search", searchRef);
   return url.toString();
 }
