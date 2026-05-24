@@ -63,6 +63,7 @@ const { buildFallbackAnalyzeItemsFromRawText } = loadTsFile(
 const {
   buildLineApprovalAcknowledgementText,
   buildLineCarDisplayLabel,
+  buildLineOrderSearchRef,
   buildLineOrderReviewUrl,
 } = loadTsFile(path.join(root, "src/lib/line-inbox/acknowledgement.ts"));
 
@@ -165,6 +166,21 @@ assert.strictEqual(
   "กท-2692 ROCCO PRE 2.4 Hight AT Double_Cab PEARL_WHITE Aug20",
   "car display label collapses duplicate leading plate"
 );
+assert.strictEqual(buildLineOrderSearchRef("4ฒญ-6286"), "6286", "search ref uses digits after Thai plate hyphen");
+assert.strictEqual(buildLineOrderSearchRef("กท-2692"), "2692", "search ref uses digits after short Thai plate hyphen");
+assert.strictEqual(buildLineOrderSearchRef("1นค-8637"), "8637", "search ref handles leading digit Thai plate");
+assert.strictEqual(buildLineOrderSearchRef("51072"), "51072", "search ref keeps numeric stock value");
+assert.strictEqual(buildLineOrderSearchRef("95295"), "95295", "search ref keeps numeric ref value");
+assert.strictEqual(
+  buildLineOrderSearchRef("กท-2692 ROCCO PRE 2.4 Hight AT Double_Cab PEARL_WHITE Aug20"),
+  "2692",
+  "search ref extracts plate from display label without using full spec"
+);
+assert.strictEqual(
+  buildLineOrderSearchRef("ROCCO PRE 2.4 Hight AT Double_Cab PEARL_WHITE Aug20"),
+  "",
+  "search ref does not use full spec when no plate/ref exists"
+);
 
 const koTho2692ReviewUrl = buildLineOrderReviewUrl({
   carRowId: "64ceddf5-2f7b-4e63-b8aa-71cf6d8d537b",
@@ -172,14 +188,14 @@ const koTho2692ReviewUrl = buildLineOrderReviewUrl({
 });
 assert(koTho2692ReviewUrl.includes("load=full"), "review URL keeps full-load mode");
 assert(!koTho2692ReviewUrl.includes("focusCar="), "review URL does not use focusCar for LINE replies");
-assert.strictEqual(new URL(koTho2692ReviewUrl).searchParams.get("search"), "กท-2692", "review URL searches by clean plate");
+assert.strictEqual(new URL(koTho2692ReviewUrl).searchParams.get("search"), "2692", "review URL searches by short plate ref");
 const sampleThaiPlateReviewUrl = buildLineOrderReviewUrl({
   carRowId: "ignored-row-id",
   plate: "4ฒญ-6286",
 });
 assert.strictEqual(
   sampleThaiPlateReviewUrl,
-  "https://used-car-export-dashboard.vercel.app/m/orders?load=full&search=4%E0%B8%92%E0%B8%8D-6286",
+  "https://used-car-export-dashboard.vercel.app/m/orders?load=full&search=6286",
   "review URL encodes Thai plate search link"
 );
 
@@ -203,7 +219,7 @@ assert(!approvalReply.includes("ผู้รับผิดชอบ:"), "approv
 assert(!approvalReply.includes("สถานะ:"), "approval reply does not use verbose status label");
 assert(approvalReply.includes("ดูงาน:"), "approval reply uses compact review link label");
 assert(!approvalReply.includes("focusCar="), "approval reply does not include unstable focusCar link");
-assert(approvalReply.includes("search=%E0%B8%81%E0%B8%97-2692"), "approval reply includes search deep link");
+assert(approvalReply.includes("search=2692"), "approval reply includes short search deep link");
 
 const pendingQueueRoute = fs.readFileSync(
   path.join(root, "src/app/api/line-inbox/pending-queue/route.ts"),

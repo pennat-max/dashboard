@@ -104,6 +104,19 @@ export function buildLineCarDisplayLabel({
   return "";
 }
 
+export function buildLineOrderSearchRef(value?: string | null): string {
+  const raw = cleanLine(value ?? "");
+  const clean = raw.replace(/\s+/g, "");
+  if (!clean || clean === "-") return "";
+  const firstPlateLike = raw.match(/[0-9A-Z\u0E00-\u0E7F]+[-–—]\d{2,8}[A-Z]?/i)?.[0] ?? "";
+  const firstStockLike = raw.match(/\d{4,8}/)?.[0] ?? "";
+  const candidate = firstPlateLike || (/\s/.test(raw) ? firstStockLike : clean);
+  if (!candidate) return "";
+  const normalized = candidate.replace(/[–—]/g, "-").replace(/\s+/g, "");
+  const parts = normalized.split("-").map((part) => part.trim()).filter(Boolean);
+  return parts.length > 1 ? parts[parts.length - 1]! : normalized;
+}
+
 export function buildLineOrderReviewUrl({
   carRowId,
   plate,
@@ -113,12 +126,12 @@ export function buildLineOrderReviewUrl({
 }): string {
   void carRowId;
   const url = new URL(LINE_ORDER_REVIEW_URL);
-  const safePlate = cleanLine(plate ?? "");
+  const searchRef = buildLineOrderSearchRef(plate);
   url.searchParams.set("load", "full");
   // Search is the stable public deep link for LINE replies. The page also
   // understands focusCar, but search keeps the reply useful if card hydration
   // cannot scroll to the row immediately.
-  if (safePlate && safePlate !== "-") url.searchParams.set("search", safePlate);
+  if (searchRef) url.searchParams.set("search", searchRef);
   return url.toString();
 }
 

@@ -350,6 +350,19 @@ function buildDisplayCarLabel({
   return uiLang === "en" ? "Unmatched car" : "ยังไม่จับรถ";
 }
 
+function buildOrderSearchRef(value?: string | null): string {
+  const raw = collapseDisplaySpaces(value);
+  const clean = raw.replace(/\s+/g, "");
+  if (!clean || clean === "-") return "";
+  const firstPlateLike = raw.match(/[0-9A-Z\u0E00-\u0E7F]+[-–—]\d{2,8}[A-Z]?/i)?.[0] ?? "";
+  const firstStockLike = raw.match(/\d{4,8}/)?.[0] ?? "";
+  const candidate = firstPlateLike || (/\s/.test(raw) ? firstStockLike : clean);
+  if (!candidate) return "";
+  const normalized = candidate.replace(/[–—]/g, "-").replace(/\s+/g, "");
+  const parts = normalized.split("-").map((part) => part.trim()).filter(Boolean);
+  return parts.length > 1 ? parts[parts.length - 1]! : normalized;
+}
+
 function buildOrderReviewUrl({
   carRowId,
   plate,
@@ -359,11 +372,11 @@ function buildOrderReviewUrl({
 }): string {
   void carRowId;
   const url = new URL(LINE_ORDER_REVIEW_URL);
-  const safePlate = collapseDisplaySpaces(plate);
+  const searchRef = buildOrderSearchRef(plate);
   url.searchParams.set("load", "full");
   // Use search-first links in LINE copy text because they are stable even when
   // progressive card hydration cannot scroll to a focused row immediately.
-  if (safePlate && safePlate !== "-") url.searchParams.set("search", safePlate);
+  if (searchRef) url.searchParams.set("search", searchRef);
   return url.toString();
 }
 
