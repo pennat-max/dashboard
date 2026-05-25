@@ -62,10 +62,12 @@ const { buildFallbackAnalyzeItemsFromRawText } = loadTsFile(
 );
 const {
   buildLineApprovalAcknowledgementText,
+} = loadTsFile(path.join(root, "src/lib/line-inbox/acknowledgement.ts"));
+const {
   buildLineCarDisplayLabel,
   buildLineOrderSearchRef,
   buildLineOrderReviewUrl,
-} = loadTsFile(path.join(root, "src/lib/line-inbox/acknowledgement.ts"));
+} = loadTsFile(path.join(root, "src/lib/line-inbox/review-link.ts"));
 
 function assertItems(input, expectedItems, label) {
   const result = splitLineTextForInbox(input);
@@ -202,6 +204,14 @@ assert.strictEqual(
   "https://used-car-export-dashboard.vercel.app/m/orders?load=full&focusCarRowId=ignored-row-id&search=6286",
   "review URL encodes focused car row id and Thai plate search fallback"
 );
+const searchOnlyReviewUrl = buildLineOrderReviewUrl({
+  plate: "51072",
+});
+assert.strictEqual(
+  searchOnlyReviewUrl,
+  "https://used-car-export-dashboard.vercel.app/m/orders?load=full&search=51072",
+  "review URL falls back to search when focused car row id is missing"
+);
 
 const approvalReply = buildLineApprovalAcknowledgementText({
   carTitle: koTho2692CarLabel,
@@ -261,6 +271,10 @@ const pendingSaveRoute = fs.readFileSync(
   path.join(root, "src/app/api/line-inbox/pending-save/route.ts"),
   "utf8"
 );
+const reviewLinkSource = fs.readFileSync(
+  path.join(root, "src/lib/line-inbox/review-link.ts"),
+  "utf8"
+);
 const lineInboxToolbar = fs.readFileSync(
   path.join(root, "src/components/orders/mobile-v2/line-inbox-ai-toolbar.tsx"),
   "utf8"
@@ -298,8 +312,9 @@ assert(
   "copy-ready UI reply does not use verbose Thai assignee label"
 );
 assert(
-  lineInboxToolbar.includes('url.searchParams.set("focusCarRowId"'),
-  "copy-ready UI reply includes focused car row id links"
+  reviewLinkSource.includes('url.searchParams.set("focusCarRowId"') &&
+    lineInboxToolbar.includes("buildLineOrderReviewUrl"),
+  "copy-ready UI reply uses the shared focused car row id link helper"
 );
 assert(
   mobileOrderTrackingHome.includes('params.get("focusCarRowId")') &&
