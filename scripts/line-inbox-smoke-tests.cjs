@@ -658,6 +658,61 @@ assert(autoSaveReply.includes("แนบรูปแล้ว 2 รูป"), "au
 assert(autoSaveReply.includes("focusCarRowId=car-row-2211&search=2211"), "auto-save reply includes review deep link");
 assert(!autoSaveReply.includes("skipped item"), "auto-save reply does not include skipped/blocked items");
 
+const sectionedApprovalReply = buildLineApprovalAcknowledgementText({
+  carTitle: "ขน-4055 RANGER Hi_Rider 2.2 XLT AT Double_Cab GRAY 18",
+  reviewUrl: "https://used-car-export-dashboard.vercel.app/m/orders?load=full&focusCarRowId=row-4055&search=4055",
+  createdItems: [{ name: "ทำเบาะหนัง", assignee: "PREW", status: "เช็ค" }],
+  updatedItems: [
+    {
+      name: "กรอไมล์ 32,000 KM",
+      beforeAssignee: "PREW",
+      beforeStatus: "เช็ค",
+      afterAssignee: "PREW",
+      afterStatus: "ต้องสั่ง",
+    },
+  ],
+  existingItems: [
+    { name: "กันสาด", assignee: "PREW", status: "เช็ค" },
+    { name: "โรบาร์แร็ค", assignee: "PREW", status: "ต้องสั่ง" },
+    { name: "ทำงานสีรอบคัน", assignee: "PREW", status: "เช็ค" },
+  ],
+});
+assert(sectionedApprovalReply.includes("งานใหม่ที่เพิ่ม:"), "sectioned reply has created item heading");
+assert(sectionedApprovalReply.includes("1. ทำเบาะหนัง : PREW/เช็ค"), "sectioned reply lists created items compactly");
+assert(sectionedApprovalReply.includes("งานที่แก้ไข/อัปเดต:"), "sectioned reply has updated item heading");
+assert(
+  sectionedApprovalReply.includes("1. กรอไมล์ 32,000 KM : PREW/เช็ค → PREW/ต้องสั่ง"),
+  "sectioned reply shows updated item before/after"
+);
+assert(sectionedApprovalReply.includes("งานเดิมในรถคันนี้:"), "sectioned reply has existing item heading");
+assert(sectionedApprovalReply.includes("1. กันสาด : PREW/เช็ค"), "sectioned reply lists existing work");
+assert(sectionedApprovalReply.includes("focusCarRowId=row-4055&search=4055"), "sectioned reply keeps review deep link");
+assert(!sectionedApprovalReply.includes("รายการ:"), "sectioned reply does not use the legacy generic list heading");
+assert(!sectionedApprovalReply.includes("ข้ามรายการนี้"), "sectioned reply excludes skipped/unapproved items");
+
+const newOnlyApprovalReply = buildLineApprovalAcknowledgementText({
+  carTitle: "51072 RAPTOR",
+  reviewUrl: "https://used-car-export-dashboard.vercel.app/m/orders?load=full&search=51072",
+  createdItems: [{ name: "กันสาด", assignee: "", status: "เช็ค" }],
+});
+assert(newOnlyApprovalReply.includes("งานใหม่ที่เพิ่ม:"), "new-only reply uses created section");
+assert(newOnlyApprovalReply.includes("1. กันสาด : ยังไม่ระบุ/เช็ค"), "new-only reply keeps missing assignee fallback");
+assert(!newOnlyApprovalReply.includes("งานเดิมในรถคันนี้:"), "new-only reply omits empty existing section");
+
+const cappedExistingReply = buildLineApprovalAcknowledgementText({
+  carTitle: "95295 TRAVO",
+  existingItems: Array.from({ length: 12 }, (_, index) => ({
+    name: `งานเดิม ${index + 1}`,
+    assignee: "PREW",
+    status: "เช็ค",
+  })),
+  reviewUrl: travo95295ReviewUrl,
+});
+assert(cappedExistingReply.includes("งานเดิมในรถคันนี้:"), "existing-only section is rendered when provided");
+assert(cappedExistingReply.includes("10. งานเดิม 10 : PREW/เช็ค"), "existing section shows first ten items");
+assert(!cappedExistingReply.includes("งานเดิม 11 : PREW/เช็ค"), "existing section hides item eleven by default");
+assert(cappedExistingReply.includes("...และอีก 2 รายการ"), "existing section caps long LINE reply lists");
+
 const pendingQueueRoute = fs.readFileSync(
   path.join(root, "src/app/api/line-inbox/pending-queue/route.ts"),
   "utf8"
@@ -764,8 +819,12 @@ assert(
 assert(pendingSaveRoute.includes("assignee_staff: String(actionRow.assignee_staff"), "pending-save receives selected assignee");
 assert(pendingSaveRoute.includes("item_status: String(actionRow.item_status"), "pending-save receives selected status");
 assert(pendingSaveRoute.includes("saved_items: saved.map"), "pending-save response returns saved item rows");
-assert(pendingSaveRoute.includes("assignee_staff: String(actionable[index]?.assignee_staff"), "pending-save response includes assignee");
-assert(pendingSaveRoute.includes("status: String(actionable[index]?.item_status"), "pending-save response includes status");
+assert(pendingSaveRoute.includes("createdItems = saved.filter"), "pending-save separates created items for LINE reply");
+assert(pendingSaveRoute.includes("updatedItems = saved.filter"), "pending-save separates updated/merged items for LINE reply");
+assert(pendingSaveRoute.includes("fetchExistingApprovalItemsForReply"), "pending-save fetches existing work for LINE reply");
+assert(pendingSaveRoute.includes("existingApprovalItemsFromPayloadForReply"), "pending-save has a safe existing-work fallback");
+assert(pendingSaveRoute.includes("assignee_staff: item.assignee_staff"), "pending-save response includes persisted assignee");
+assert(pendingSaveRoute.includes("status: item.status"), "pending-save response includes persisted status");
 assert(pendingSaveRoute.includes("buildLineOrderReviewUrl"), "pending-save reply uses search review link");
 assert(
   pendingSaveRoute.includes("assignee_staff: item.assignee_staff"),

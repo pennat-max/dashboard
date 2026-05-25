@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { requireMutateRole } from "@/lib/auth/mutation-guard";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import {
@@ -12,12 +13,19 @@ import {
   buildLineCarDisplayLabel,
   buildLineOrderReviewUrl,
   type LineApprovalAcknowledgementItem,
+  type LineApprovalUpdatedAcknowledgementItem,
 } from "@/lib/line-inbox/acknowledgement";
-import type { DuplicateStatus, LineInboxAnalyzeItem, LineInboxAnalyzeResponse } from "@/lib/line-inbox/types";
+import type { DuplicateStatus, ExistingOrderItemRow, LineInboxAnalyzeItem, LineInboxAnalyzeResponse } from "@/lib/line-inbox/types";
 import { formatZodIssues, lineInboxPendingSaveBodySchema } from "@/lib/line-inbox/api-schemas";
-import { persistLineInboxConfirmations, type PersistConfirmRow } from "@/lib/line-inbox/persist-line-inbox-confirm";
+import {
+  persistLineInboxConfirmations,
+  type PersistConfirmRow,
+  type PersistConfirmSavedItem,
+} from "@/lib/line-inbox/persist-line-inbox-confirm";
 
 export const dynamic = "force-dynamic";
+
+const ORDER_ITEMS_TABLE = "order_items";
 
 type AutoReplyResult = {
   enabled: boolean;
@@ -49,6 +57,19 @@ function cleanLine(value: unknown): string {
 function cleanErrorForLog(value: unknown): string {
   const raw = value instanceof Error ? value.message : String(value ?? "");
   return raw.replace(/\s+/g, " ").trim().slice(0, 300) || "LINE acknowledgement failed";
+}
+
+function isMissingDbColumnError(message: string): boolean {
+  const m = message.toLowerCase();
+  return (
+    (m.includes("column") && m.includes("does not exist")) ||
+    (m.includes("could not find") && m.includes("column") && m.includes("schema cache"))
+  );
+}
+
+function isActiveExistingItem(item: ExistingOrderItemRow): boolean {
+  const status = cleanLine(item.status).toLowerCase();
+  return !["done", "cancelled", "จบ"].includes(status);
 }
 
 async function claimPendingInboxForManualSave(
@@ -126,15 +147,115 @@ function resolveLinePushTarget(row: {
   return null;
 }
 
+function approvalItemFromSaved(item: PersistConfirmSavedItem): LineApprovalAcknowledgementItem {
+  return {
+    name: item.label,
+    assignee: item.assignee_staff,
+    status: item.status,
+  };
+}
+
+function updatedApprovalItemFromSaved(item: PersistConfirmSavedItem): LineApprovalUpdatedAcknowledgementItem {
+  return {
+    name: item.label,
+    beforeName: item.previous_label,
+    beforeAssignee: item.previous_assignee_staff,
+    beforeStatus: item.previous_status,
+    afterAssignee: item.assignee_staff,
+    afterStatus: item.status,
+  };
+}
+
+function existingApprovalItemsFromPayloadForReply(
+  payload: LineInboxAnalyzeResponse,
+  saved: PersistConfirmSavedItem[]
+): LineApprovalAcknowledgementItem[] {
+  const changedIds = new Set(saved.map((item) => item.order_item_id).filter(Boolean));
+  const createdNames = new Set(
+    saved
+      .filter((item) => item.action === "create")
+      .map((item) => cleanLine(item.label).toLowerCase())
+      .filter(Boolean)
+  );
+  return (payload.existing_items ?? [])
+    .filter((item) => !changedIds.has(String(item.id ?? "")))
+    .filter(isActiveExistingItem)
+    .filter((item) => !createdNames.has(cleanLine(item.label).toLowerCase()))
+    .map((item) => ({
+      name: item.label,
+      assignee: item.assignee_staff,
+      status: item.status,
+    }));
+}
+
+async function fetchExistingApprovalItemsForReply(
+  supabase: SupabaseClient,
+  orderTaskId: string,
+  saved: PersistConfirmSavedItem[],
+  payload: LineInboxAnalyzeResponse
+): Promise<LineApprovalAcknowledgementItem[]> {
+  const fallbackItems = existingApprovalItemsFromPayloadForReply(payload, saved);
+  const taskId = cleanLine(orderTaskId);
+  if (!taskId) return fallbackItems;
+
+  const changedIds = new Set(saved.map((item) => item.order_item_id).filter(Boolean));
+  try {
+    const primaryQuery = await supabase
+      .from(ORDER_ITEMS_TABLE)
+      .select("id,label,status,assignee_staff")
+      .eq("order_task_id", taskId);
+    let data: unknown[] | null = primaryQuery.data;
+    let error = primaryQuery.error;
+
+    if (error && isMissingDbColumnError(error.message)) {
+      const fallbackQuery = await supabase
+        .from(ORDER_ITEMS_TABLE)
+        .select("id,label,status")
+        .eq("order_task_id", taskId);
+      data = fallbackQuery.data;
+      error = fallbackQuery.error;
+    }
+
+    if (error) {
+      console.warn("[line-inbox] existing work reply section skipped", {
+        order_task_id: taskId,
+        error: cleanErrorForLog(error),
+      });
+      return fallbackItems;
+    }
+
+    return ((data ?? []) as ExistingOrderItemRow[])
+      .filter((item) => !changedIds.has(String(item.id ?? "")))
+      .filter(isActiveExistingItem)
+      .map((item) => ({
+        name: item.label,
+        assignee: item.assignee_staff,
+        status: item.status,
+      }));
+  } catch (error) {
+    console.warn("[line-inbox] existing work reply section skipped", {
+      order_task_id: taskId,
+      error: cleanErrorForLog(error),
+    });
+    return fallbackItems;
+  }
+}
+
 async function maybeSendApprovalAcknowledgement(params: {
   row: { source_type?: unknown; group_id?: unknown; user_id?: unknown };
   payload: LineInboxAnalyzeResponse;
   approvedItems: LineApprovalAcknowledgementItem[];
+  createdItems: LineApprovalAcknowledgementItem[];
+  updatedItems: LineApprovalUpdatedAcknowledgementItem[];
+  existingItems: LineApprovalAcknowledgementItem[];
   reviewUrl: string;
 }): Promise<{ autoReply: AutoReplyResult; replyText: string }> {
   const replyText = buildLineApprovalAcknowledgementText({
     carTitle: detectedCarTitle(params.payload),
     approvedItems: params.approvedItems,
+    createdItems: params.createdItems,
+    updatedItems: params.updatedItems,
+    existingItems: params.existingItems,
     reviewUrl: params.reviewUrl,
   });
 
@@ -366,20 +487,22 @@ export async function POST(request: Request) {
         line_inbox_msg_ref_for_audit: inboxId,
       });
 
-      const approvedItems: LineApprovalAcknowledgementItem[] = saved.map((item, index) => {
-        const source = actionable[index];
-        return {
-          name: item.label,
-          assignee: String(source?.assignee_staff ?? "").trim(),
-          status: String(source?.item_status ?? "").trim(),
-        };
-      });
+      const createdItems = saved.filter((item) => item.action === "create").map(approvalItemFromSaved);
+      const updatedItems = saved.filter((item) => item.action === "merge").map(updatedApprovalItemFromSaved);
+      const existingItems = await fetchExistingApprovalItemsForReply(supabase, order_task_id, saved, payload);
+      const approvedItems: LineApprovalAcknowledgementItem[] = [
+        ...createdItems,
+        ...saved.filter((item) => item.action === "merge").map(approvalItemFromSaved),
+      ];
       const reviewUrl = reviewUrlForLineInbox(payload, car_row_id);
       const autoReplyEnabled = isAutoReplyAfterApproveEnabled();
       let acknowledged: Awaited<ReturnType<typeof maybeSendApprovalAcknowledgement>> = {
         replyText: buildLineApprovalAcknowledgementText({
           carTitle: detectedCarTitle(payload),
           approvedItems,
+          createdItems,
+          updatedItems,
+          existingItems,
           reviewUrl,
         }),
         autoReply: {
@@ -396,6 +519,9 @@ export async function POST(request: Request) {
             row: row as { source_type?: unknown; group_id?: unknown; user_id?: unknown },
             payload,
             approvedItems,
+            createdItems,
+            updatedItems,
+            existingItems,
             reviewUrl,
           });
         } catch (error) {
@@ -427,8 +553,8 @@ export async function POST(request: Request) {
           order_item_id: item.order_item_id,
           label: item.label,
           action: item.action,
-          status: String(actionable[index]?.item_status ?? "").trim(),
-          assignee_staff: String(actionable[index]?.assignee_staff ?? "").trim(),
+          status: item.status,
+          assignee_staff: item.assignee_staff,
         })),
         reply_text: acknowledged.replyText,
         auto_reply: acknowledged.autoReply,
