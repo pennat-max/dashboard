@@ -1454,15 +1454,22 @@ function useLineInboxBridgeState({
       ? "new jobs"
       : "งานใหม่";
 
+  const todayYmd = useMemo(() => todayYmdBangkok(), []);
+  const ordersByCarRowId = useMemo(() => {
+    const map = new Map<string, LineInboxAiOrderPick>();
+    for (const order of orders) {
+      const id = String(order.carRowId ?? "").trim();
+      if (id) map.set(id, order);
+    }
+    return map;
+  }, [orders]);
+
   const carPickerRows = useMemo((): LineInboxCarPickerRow[] => {
-    const todayYmd = todayYmdBangkok();
     const rows: LineInboxCarPickerRow[] = [];
     for (const group of queueGroups) {
       if (!groupHasLineWorkToday(group, todayYmd)) continue;
       const carRowId = String(group.car_row_id ?? "").trim() || null;
-      const matched = carRowId
-        ? orders.find((o) => String(o.carRowId ?? "").trim() === carRowId)
-        : null;
+      const matched = carRowId ? ordersByCarRowId.get(carRowId) ?? null : null;
       const manualReviewCount = Math.max(0, group.total_manual_reviews ?? 0);
       const jobCount = Math.max(0, group.total_action_lines) + Math.max(0, group.total_new_lines) + manualReviewCount;
       const photoCount = group.attachments?.length ?? 0;
@@ -1495,7 +1502,7 @@ function useLineInboxBridgeState({
       });
     }
     return rows.sort((a, b) => b.latestMessageAt - a.latestMessageAt);
-  }, [orders, queueGroups, uiLang]);
+  }, [ordersByCarRowId, queueGroups, todayYmd, uiLang]);
 
   /** Badge = number of cars with LINE/AI work today (not line count). */
   const lineInboxCarCountToday = carPickerRows.length;
