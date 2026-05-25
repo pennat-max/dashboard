@@ -2305,6 +2305,51 @@ function orderCarSummaryFieldsHaveThai(order: Order): boolean {
   return /[\u0E00-\u0E7F]/.test(`${cost}\n${repair}\n${doc}`);
 }
 
+function isLikelyImageFile(f: File): boolean {
+  return (
+    typeof f.size === "number" &&
+    f.size > 0 &&
+    (/^image\//i.test(f.type) ||
+      /\.(png|jpeg|jpg|webp|gif|heic|heif|bmp)$/i.test(String(f.name ?? "")))
+  );
+}
+
+/** When drag/drop only exposes DataTransfer.items (e.g. LINE), not dt.files. */
+function gatherImageFilesFromDataTransfer(dt: DataTransfer | null): File[] {
+  if (!dt) return [];
+  const fromFiles = Array.from(dt.files ?? []).filter(isLikelyImageFile);
+  if (fromFiles.length > 0) return fromFiles;
+  const viaItems: File[] = [];
+  const items = dt.items;
+  if (!items?.length) return [];
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    if (it.kind !== "file") continue;
+    const f = it.getAsFile();
+    if (!f?.size) continue;
+    const mimeHint = `${it.type || ""} ${f.type || ""}`;
+    if (isLikelyImageFile(f) || /^image\//i.test(mimeHint.trim())) viaItems.push(f);
+  }
+  return viaItems;
+}
+
+function gatherImageFilesFromClipboard(cd: DataTransfer | null): File[] {
+  if (!cd) return [];
+  const fromFiles = Array.from(cd.files ?? []).filter(isLikelyImageFile);
+  if (fromFiles.length > 0) return fromFiles;
+  const out: File[] = [];
+  const items = cd.items;
+  if (!items?.length) return [];
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    if (it.kind !== "file") continue;
+    const f = it.getAsFile();
+    if (!f?.size) continue;
+    if (isLikelyImageFile(f) || /^image\//i.test(`${it.type || ""}`.trim())) out.push(f);
+  }
+  return out;
+}
+
 const OrderCard = React.memo(function OrderCard({
   order,
   uiLang,
@@ -3154,48 +3199,6 @@ const OrderCard = React.memo(function OrderCard({
     if (!itemId) return;
     void loadTamRoopItemPhotos();
   }, [tamRoopSheetUid, tamRoopSheetItem?.id, canAttachPhotos, loadTamRoopItemPhotos]);
-
-  const isLikelyImageFile = (f: File): boolean =>
-    typeof f.size === "number" &&
-    f.size > 0 &&
-    (/^image\//i.test(f.type) ||
-      /\.(png|jpeg|jpg|webp|gif|heic|heif|bmp)$/i.test(String(f.name ?? "")));
-
-  /** เวลามีจาก Files ธรรมดา และกรณีลากจากที่มาเหลือเฉพาะ DataTransfer.items */
-  const gatherImageFilesFromDataTransfer = (dt: DataTransfer | null): File[] => {
-    if (!dt) return [];
-    const fromFiles = Array.from(dt.files ?? []).filter(isLikelyImageFile);
-    if (fromFiles.length > 0) return fromFiles;
-    const viaItems: File[] = [];
-    const items = dt.items;
-    if (!items?.length) return [];
-    for (let i = 0; i < items.length; i++) {
-      const it = items[i];
-      if (it.kind !== "file") continue;
-      const f = it.getAsFile();
-      if (!f?.size) continue;
-      const mimeHint = `${it.type || ""} ${f.type || ""}`;
-      if (isLikelyImageFile(f) || /^image\//i.test(mimeHint.trim())) viaItems.push(f);
-    }
-    return viaItems;
-  };
-
-  const gatherImageFilesFromClipboard = (cd: DataTransfer | null): File[] => {
-    if (!cd) return [];
-    const fromFiles = Array.from(cd.files ?? []).filter(isLikelyImageFile);
-    if (fromFiles.length > 0) return fromFiles;
-    const out: File[] = [];
-    const items = cd.items;
-    if (!items?.length) return [];
-    for (let i = 0; i < items.length; i++) {
-      const it = items[i];
-      if (it.kind !== "file") continue;
-      const f = it.getAsFile();
-      if (!f?.size) continue;
-      if (isLikelyImageFile(f) || /^image\//i.test(`${it.type || ""}`.trim())) out.push(f);
-    }
-    return out;
-  };
 
   const uploadTamRoopItemPhotos = async (files: Iterable<File> | FileList | null | undefined) => {
     const itemId = String(tamRoopSheetItem?.id ?? "").trim();
