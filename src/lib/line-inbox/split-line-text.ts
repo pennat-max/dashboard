@@ -27,6 +27,11 @@ const RED_PLATE_CONTEXT_RE = /^ป้ายแดง$/i;
 const STOCK_NUMBER_RE = /\b\d{4,6}\b/;
 const THAI_STOCK_IDENTITY_RE =
   /^(?:ทะเบียน|เลขทะเบียน|stock|สต็อก|สต๊อก|ref|reference)\s*[:#：-]?\s*\d{4,6}\b/i;
+const LEADING_CAR_IDENTITY_RE =
+  /^(?:ทะเบียน|เลขทะเบียน|stock|สต็อก|สต๊อก|ref|reference)\s*[:#：-]?\s*\d{4,6}\b|^\d{0,2}[\u0E01-\u0E2E]{1,3}[-\s]?\d{2,4}\b|^[A-HJ-NPR-Z0-9]{17}\b/i;
+const LEADING_NUMERIC_STOCK_RE = /^\d{4,6}\b/;
+const MIXED_LINE_WORK_START_RE =
+  /(คิ้วล้อ|กรอไมล์|เลขไมล์|กุญแจ|กันสาด|กันแมลง|โรบาร์|สปอร์ตบาร์|โรลเลอร์|สติ๊กเกอร์|สติกเกอร์|ฟิล์ม|บันได|กันชน|กันแคร้ง|แร็ค|แรค|ฝาครอบ|ไฟ|กล้อง|เซ็นเซอร์|แม็ก|แม้ค|ยาง|ล้อ|แบต|แบตเตอรี่|โช้ค|ยกสูง|เอกสาร|ซ่อม|เปลี่ยน|ขาด|แตก|เสีย|หาย|ต้องสั่ง|สั่ง|ส่งอู่|ทำสี|ตรวจ|เช็ค|ติดตั้ง|ติด|เพิ่ม|ใส่|แปลง|ล้าง|ขัด|เคลือบ|เก็บงาน|ประเมิน|รับงาน|แต่งเหมือน\s*รูป|เหมือน\s*รูป|ตาม\s*(?:รูป|ภาพ)|ยกเลิก|ไม่ต้องติด|ไม่เอา|เอาออก|เบิก|รอ\s*ตรวจ|รอตรวจ|เอา\s*รถ\s*ไป\s*เช็ค)/i;
 const WORK_INTENT_RE =
   /(กรอไมล์|เลขไมล์|กันสาด|โรบาร์|สติ๊กเกอร์|ฟิล์ม|บันได|กันชน|แร็ค|แรค|ฝาครอบ|ไฟ|กล้อง|เซ็นเซอร์|ยาง|ล้อ|แบต|แบตเตอรี่|โช้ค|ยกสูง|ป้าย|เอกสาร|ซ่อม|เปลี่ยน|ขาด|แตก|เสีย|หาย|ต้องสั่ง|ส่งอู่|ทำสี|ตรวจ|เช็ค|ติด|ติดตั้ง|เพิ่ม|ใส่|แปลง|ล้าง|ขัด|เคลือบ|เก็บงาน|ประเมิน|รับงาน|งาน)/i;
 const STRONG_WORK_INTENT_RE =
@@ -69,8 +74,10 @@ function removeMentions(raw: string): string {
 }
 
 function removeCarIdentityFragments(raw: string): string {
+  const clean = sanitizeLine(raw);
+  if (/^\d{4,6}\s+/.test(clean) && !startsWithCarIdentity(clean)) return clean;
   return sanitizeLine(
-    raw
+    clean
       .replace(THAI_PLATE_RE, " ")
       .replace(/\b[A-HJ-NPR-Z0-9]{17}\b/gi, " ")
       .replace(/^(?:ช่วย|รบกวน|ฝาก)\s*/i, "")
@@ -189,7 +196,7 @@ function looksLikeVehicleContext(raw: string): boolean {
 }
 
 function cleanWorkLine(raw: string): string {
-  return removeCarIdentityFragments(removeMentions(raw));
+  return removeCarIdentityFragments(stripLeadingVehicleContextFromMixedWorkLine(removeMentions(raw)));
 }
 
 function normalizeWorkItemText(raw: string): string {
@@ -198,6 +205,39 @@ function normalizeWorkItemText(raw: string): string {
     .replace(/รอแจ้งกรอไมล์\s+อีกที/gi, "รอแจ้งกรอไมล์อีกที")
     .replace(/ติด\s*ฟิล์ม\s*รอบคัน/gi, "ติดฟิล์มรอบคัน")
     .replace(/ฟิล์ม\s*รอบคัน/gi, "ฟิล์มรอบคัน");
+}
+
+function startsWithCarIdentity(raw: string): boolean {
+  if (LEADING_CAR_IDENTITY_RE.test(raw)) return true;
+  const stock = raw.match(LEADING_NUMERIC_STOCK_RE);
+  if (!stock) return false;
+  const rest = raw.slice(stock[0].length);
+  return VEHICLE_BRAND_MODEL_RE.test(rest) || VEHICLE_BODY_SPEC_RE.test(rest) || VEHICLE_SPEC_RE.test(rest);
+}
+
+function cleanupMixedLineWorkContext(raw: string): string {
+  return normalizeWorkItemText(raw)
+    .replace(/^(?:เมื่อวาน|เมือวาน)\s*(?:มี)?\s*/i, "")
+    .replace(/^มี\s*/i, "")
+    .replace(/\s+แล้ว$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function stripLeadingVehicleContextFromMixedWorkLine(raw: string): string {
+  const clean = sanitizeLine(raw);
+  if (!clean || !startsWithCarIdentity(clean)) return clean;
+
+  const match = clean.match(MIXED_LINE_WORK_START_RE);
+  if (!match || match.index == null || match.index <= 0) return clean;
+
+  const prefix = clean.slice(0, match.index);
+  const prefixScore = vehicleSignalScore(prefix);
+  if (prefixScore < 2 && !startsWithCarIdentity(prefix)) return clean;
+
+  const rest = cleanupMixedLineWorkContext(clean.slice(match.index));
+  if (!rest || !hasWorkIntent(rest)) return clean;
+  return rest;
 }
 
 function lineKey(raw: string): string {
@@ -331,7 +371,8 @@ export function splitLineTextForInbox(text: string): SplitLineTextResult {
       continue;
     }
 
-    if (looksLikeVehicleContext(line) || looksLikeVehicleContext(rawLine)) {
+    const strippedMixedVehicleContext = lineKey(line) !== lineKey(rawLine) && hasWorkIntent(line);
+    if (looksLikeVehicleContext(line) || (!strippedMixedVehicleContext && looksLikeVehicleContext(rawLine))) {
       addUnique(ignoredVehicle, rawLine);
       continue;
     }
