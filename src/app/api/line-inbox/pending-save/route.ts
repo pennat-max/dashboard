@@ -3,8 +3,6 @@ import { requireMutateRole } from "@/lib/auth/mutation-guard";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import {
   LINE_INBOX_MESSAGES_TABLE,
-  markLineInboxMessageWorkflowConfirmed,
-  markLineInboxMessageWorkflowSkipped,
 } from "@/lib/line-inbox/line-inbox-messages";
 import { buildFallbackAnalyzeItemsFromRawText } from "@/lib/line-inbox/fallback-analyze-items";
 import { buildFallbackAnalyzePayloadFromRawText } from "@/lib/line-inbox/fallback-analyze-payload";
@@ -51,6 +49,48 @@ function cleanLine(value: unknown): string {
 function cleanErrorForLog(value: unknown): string {
   const raw = value instanceof Error ? value.message : String(value ?? "");
   return raw.replace(/\s+/g, " ").trim().slice(0, 300) || "LINE acknowledgement failed";
+}
+
+async function claimPendingInboxForManualSave(
+  supabase: ReturnType<typeof createServiceRoleClient>,
+  inboxId: string
+): Promise<void> {
+  const { data, error } = await supabase
+    .from(LINE_INBOX_MESSAGES_TABLE)
+    .update({
+      workflow_status: "confirmed",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", inboxId)
+    .eq("workflow_status", "pending")
+    .select("id")
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+  if (!data?.id) {
+    throw new Error(`inbox_message ${inboxId} is no longer pending`);
+  }
+}
+
+async function markPendingInboxSkipped(
+  supabase: ReturnType<typeof createServiceRoleClient>,
+  inboxId: string
+): Promise<void> {
+  const { data, error } = await supabase
+    .from(LINE_INBOX_MESSAGES_TABLE)
+    .update({
+      workflow_status: "skipped",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", inboxId)
+    .eq("workflow_status", "pending")
+    .select("id")
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+  if (!data?.id) {
+    throw new Error(`inbox_message ${inboxId} is no longer pending`);
+  }
 }
 
 function detectedCarTitle(payload: LineInboxAnalyzeResponse): string {
@@ -213,7 +253,7 @@ export async function POST(request: Request) {
       }
 
       if (block.skip_all) {
-        await markLineInboxMessageWorkflowSkipped(supabase, inboxId);
+        await markPendingInboxSkipped(supabase, inboxId);
         results.push({
           inbox_message_id: inboxId,
           saved_count: 0,
@@ -291,7 +331,7 @@ export async function POST(request: Request) {
       }
 
       if (actionable.length === 0) {
-        await markLineInboxMessageWorkflowSkipped(supabase, inboxId);
+        await markPendingInboxSkipped(supabase, inboxId);
         results.push({
           inbox_message_id: inboxId,
           saved_count: 0,
@@ -305,6 +345,11 @@ export async function POST(request: Request) {
       if (!car_row_id) {
         throw new Error(`This LINE inbox message is not matched to a car yet; inbox ${inboxId}`);
       }
+
+      // Atomic duplicate/race guard shared with LINE auto-save: claim the inbox
+      // row before writing order_items. The table currently supports only
+      // pending/confirmed/skipped, so confirmed is the durable processing lock.
+      await claimPendingInboxForManualSave(supabase, inboxId);
 
       const { order_task_id, saved } = await persistLineInboxConfirmations(supabase, {
         car_row_id,
@@ -346,12 +391,6 @@ export async function POST(request: Request) {
       };
 
       if (saved.length > 0) {
-        // Duplicate-send guard: this endpoint rejects non-pending inbox rows above.
-        // Marking confirmed before optional LINE push prevents the same approved
-        // action from being submitted again and sending another acknowledgement,
-        // without adding a schema/table marker.
-        await markLineInboxMessageWorkflowConfirmed(supabase, inboxId);
-
         try {
           acknowledged = await maybeSendApprovalAcknowledgement({
             row: row as { source_type?: unknown; group_id?: unknown; user_id?: unknown },

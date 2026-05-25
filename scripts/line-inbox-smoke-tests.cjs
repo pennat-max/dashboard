@@ -72,6 +72,10 @@ const {
   parseLineAllowedGroups,
   isLineGroupAllowed,
 } = loadTsFile(path.join(root, "src/lib/line/allowed-groups.ts"));
+const {
+  buildLineAutoSaveAcknowledgementText,
+  evaluateLineAutoSaveEligibility,
+} = loadTsFile(path.join(root, "src/lib/line-inbox/auto-save.ts"));
 
 const specificGroupPolicy = parseLineAllowedGroups("C-test-group,C-real-group");
 assert.strictEqual(specificGroupPolicy.allowAllGroups, false, "specific group allow-list does not allow all groups");
@@ -259,6 +263,257 @@ assert.strictEqual(
   "review URL focuses 95295 by car_row_id with short search fallback"
 );
 
+function autoSavePayload(overrides = {}) {
+  return {
+    detected_car: {
+      plate_text: "กจ-2211",
+      chassis: "",
+      car_row_id: "car-row-2211",
+      confidence: 0.95,
+      spec_text: "กจ-2211 ROCCO 4WD 2.8 Hight AT Double_Cab BLACK Aug20",
+      sale: "GWANG",
+    },
+    extractedCarCandidates: [{ text: "กจ-2211", confidence: 0.95 }],
+    aiTargetCarConfidence: "high",
+    existing_items: [],
+    ignored_vehicle_spec_lines: [],
+    ignored_mention_lines: [],
+    ignored_noise_lines: [],
+    line_attachments: [],
+    items: [
+      {
+        raw_text: "กลับสี rocco ขาวมุก",
+        suggested_item_name: "กลับสี rocco ขาวมุก",
+        suggested_category: "paint",
+        suggested_status: "ต้องสั่ง",
+        duplicate_status: "new",
+        matched_order_item_id: "",
+        matched_item_name: "",
+        confidence: 0.9,
+        reason: "clear work",
+      },
+    ],
+    needs_human_review: false,
+    ...overrides,
+  };
+}
+
+const autoSaveRow = {
+  id: "line-row-1",
+  raw_text: "กจ-2211 ROCCO 4WD 2.8 Hight AT Double_Cab BLACK Aug20\nกลับสี rocco ขาวมุก",
+  source_type: "group",
+  group_id: "C-real-group",
+  received_at: "2026-05-25T05:00:00.000Z",
+  workflow_status: "pending",
+  analyze_status: "ok",
+};
+
+assert.strictEqual(
+  evaluateLineAutoSaveEligibility({
+    row: autoSaveRow,
+    payload: autoSavePayload(),
+    enabled: true,
+    allowedGroupIds: "C-real-group",
+  }).eligible,
+  true,
+  "high-confidence explicit car message is eligible for auto-save"
+);
+assert.strictEqual(
+  evaluateLineAutoSaveEligibility({
+    row: autoSaveRow,
+    payload: autoSavePayload({ needs_human_review: true }),
+    enabled: true,
+    allowedGroupIds: "C-real-group",
+  }).blocked_reason,
+  "needs_human_review",
+  "needs_human_review blocks auto-save"
+);
+assert.strictEqual(
+  evaluateLineAutoSaveEligibility({
+    row: autoSaveRow,
+    payload: autoSavePayload({
+      detected_car: { ...autoSavePayload().detected_car, confidence: 0 },
+      aiTargetCarConfidence: "0.95",
+    }),
+    enabled: true,
+    allowedGroupIds: "C-real-group",
+  }).eligible,
+  true,
+  "numeric confidence string 0.95 is accepted as high confidence"
+);
+assert.strictEqual(
+  evaluateLineAutoSaveEligibility({
+    row: autoSaveRow,
+    payload: autoSavePayload({
+      detected_car: { ...autoSavePayload().detected_car, confidence: 0 },
+      aiTargetCarConfidence: "95%",
+    }),
+    enabled: true,
+    allowedGroupIds: "C-real-group",
+  }).eligible,
+  true,
+  "numeric confidence percentage 95% is accepted as high confidence"
+);
+assert.strictEqual(
+  evaluateLineAutoSaveEligibility({
+    row: autoSaveRow,
+    payload: autoSavePayload(),
+    enabled: false,
+    allowedGroupIds: "C-real-group",
+  }).blocked_reason,
+  "auto_save_disabled",
+  "auto-save disabled blocks save"
+);
+assert.strictEqual(
+  evaluateLineAutoSaveEligibility({
+    row: autoSaveRow,
+    payload: autoSavePayload(),
+    enabled: true,
+    allowedGroupIds: "C-other-group",
+  }).blocked_reason,
+  "group_not_allowed",
+  "unapproved group blocks auto-save"
+);
+assert.strictEqual(
+  evaluateLineAutoSaveEligibility({
+    row: { ...autoSaveRow, raw_text: "[LINE image]" },
+    payload: autoSavePayload(),
+    enabled: true,
+    allowedGroupIds: "*",
+  }).blocked_reason,
+  "image_only",
+  "image-only rows never auto-save"
+);
+assert.strictEqual(
+  evaluateLineAutoSaveEligibility({
+    row: autoSaveRow,
+    payload: autoSavePayload({ detected_car: { ...autoSavePayload().detected_car, car_row_id: "" } }),
+    enabled: true,
+    allowedGroupIds: "*",
+  }).blocked_reason,
+  "missing_car",
+  "missing car blocks auto-save"
+);
+assert.strictEqual(
+  evaluateLineAutoSaveEligibility({
+    row: autoSaveRow,
+    payload: autoSavePayload({
+      items: [
+        {
+          ...autoSavePayload().items[0],
+          raw_text: "ตามรูป",
+          suggested_item_name: "ตามรูป",
+        },
+      ],
+    }),
+    enabled: true,
+    allowedGroupIds: "*",
+  }).blocked_reason,
+  "vague_item",
+  "vague text blocks auto-save"
+);
+assert.strictEqual(
+  evaluateLineAutoSaveEligibility({
+    row: autoSaveRow,
+    payload: autoSavePayload({
+      extractedCarCandidates: [{ text: "51072" }, { text: "31440" }],
+      aiTargetCarConfidence: "medium",
+    }),
+    enabled: true,
+    allowedGroupIds: "*",
+  }).blocked_reason,
+  "multiple_car_candidates",
+  "multiple car candidates block auto-save"
+);
+const duplicateAutoSaveDecision = evaluateLineAutoSaveEligibility({
+  row: autoSaveRow,
+  payload: autoSavePayload({
+    items: [
+      {
+        ...autoSavePayload().items[0],
+        duplicate_status: "duplicate",
+        matched_order_item_id: "existing-item-1",
+      },
+    ],
+  }),
+  enabled: true,
+  allowedGroupIds: "*",
+});
+assert.strictEqual(duplicateAutoSaveDecision.eligible, true, "exact duplicate with matched item can auto-merge");
+assert.strictEqual(
+  duplicateAutoSaveDecision.eligible ? duplicateAutoSaveDecision.actions[0].action : "",
+  "merge",
+  "duplicate auto-save action is merge"
+);
+assert.strictEqual(
+  evaluateLineAutoSaveEligibility({
+    row: autoSaveRow,
+    payload: autoSavePayload({
+      items: [
+        {
+          ...autoSavePayload().items[0],
+          duplicate_status: "possible_duplicate",
+          matched_order_item_id: "",
+        },
+      ],
+    }),
+    enabled: true,
+    allowedGroupIds: "*",
+  }).blocked_reason,
+  "unsafe_duplicate_status_possible_duplicate",
+  "possible duplicate blocks auto-save"
+);
+assert.strictEqual(
+  evaluateLineAutoSaveEligibility({
+    row: autoSaveRow,
+    payload: autoSavePayload({
+      items: [
+        {
+          ...autoSavePayload().items[0],
+          duplicate_status: "unclear",
+          matched_order_item_id: "",
+        },
+      ],
+    }),
+    enabled: true,
+    allowedGroupIds: "*",
+  }).blocked_reason,
+  "unsafe_duplicate_status_unclear",
+  "unclear duplicate status blocks auto-save"
+);
+
+const autoSaveReply = buildLineAutoSaveAcknowledgementText({
+  carTitle: "กจ-2211 ROCCO 4WD 2.8 Hight AT Double_Cab BLACK Aug20",
+  createdItems: [{ name: "กลับสี rocco ขาวมุก", assignee: "PREW", status: "ต้องสั่ง" }],
+  updatedItems: [
+    {
+      item: {
+        order_item_id: "existing-1",
+        label: "กรอไมล์ 32,000 KM",
+        action: "merge",
+        assignee_staff: "PREW",
+        status: "ต้องสั่ง",
+      },
+      previous: {
+        id: "existing-1",
+        label: "กรอไมล์ 32,000 KM",
+        status: "เช็ค",
+        assignee_staff: "PREW",
+      },
+    },
+  ],
+  attachedPhotoCount: 2,
+  reviewUrl: "https://used-car-export-dashboard.vercel.app/m/orders?load=full&focusCarRowId=car-row-2211&search=2211",
+});
+assert(autoSaveReply.includes("บันทึกงานอัตโนมัติแล้ว"), "auto-save reply says the work was auto-saved");
+assert(autoSaveReply.includes("งานที่เพิ่ม:"), "auto-save reply includes created section");
+assert(autoSaveReply.includes("1. กลับสี rocco ขาวมุก : PREW/ต้องสั่ง"), "auto-save reply includes created item");
+assert(autoSaveReply.includes("งานที่อัปเดต:"), "auto-save reply includes updated section");
+assert(autoSaveReply.includes("1. กรอไมล์ 32,000 KM : PREW/เช็ค → PREW/ต้องสั่ง"), "auto-save reply includes before/after update");
+assert(autoSaveReply.includes("แนบรูปแล้ว 2 รูป"), "auto-save reply includes attached photo count");
+assert(autoSaveReply.includes("focusCarRowId=car-row-2211&search=2211"), "auto-save reply includes review deep link");
+assert(!autoSaveReply.includes("skipped item"), "auto-save reply does not include skipped/blocked items");
+
 const pendingQueueRoute = fs.readFileSync(
   path.join(root, "src/app/api/line-inbox/pending-queue/route.ts"),
   "utf8"
@@ -362,6 +617,50 @@ assert(pendingSaveRoute.includes("buildLineOrderReviewUrl"), "pending-save reply
 assert(
   pendingSaveRoute.includes("assignee_staff: item.assignee_staff"),
   "pending-save passes selected assignee into persistence"
+);
+const analyzePendingJobSource = fs.readFileSync(
+  path.join(root, "src/lib/line-inbox/analyze-pending-job.ts"),
+  "utf8"
+);
+const autoSaveSource = fs.readFileSync(
+  path.join(root, "src/lib/line-inbox/auto-save.ts"),
+  "utf8"
+);
+assert(analyzePendingJobSource.includes("maybeAutoSaveAnalyzedLineInbox"), "analyze-pending is wired to guarded auto-save");
+assert(autoSaveSource.includes("LINE_AUTO_SAVE_ENABLED"), "auto-save is gated by LINE_AUTO_SAVE_ENABLED");
+assert(autoSaveSource.includes("LINE_AUTO_SAVE_ALLOWED_GROUP_IDS"), "auto-save has a separate group allow-list");
+assert(autoSaveSource.includes("LINE_AUTO_SAVE_REPLY_ENABLED"), "auto-save reply is independently gated");
+assert(autoSaveSource.includes("LINE_AUTO_SAVE_DRY_RUN_ENABLED"), "auto-save has a dry-run flag");
+assert(autoSaveSource.includes('blocked_reason: "dry_run"'), "dry-run reports planned save without writing");
+assert(autoSaveSource.includes("markLineInboxMessageWorkflowConfirmed"), "auto-save marks the source message confirmed for idempotency");
+assert(autoSaveSource.includes("ORDER_TRACKING_PHOTOS_TABLE"), "auto-save attaches related LINE photos through order_tracking_photos");
+assert(
+  autoSaveSource.includes("claimLineInboxMessageForAutoSave") &&
+    autoSaveSource.includes('.eq("workflow_status", "pending")') &&
+    autoSaveSource.includes('workflow_status: "confirmed"'),
+  "auto-save atomically claims the inbox row before writing order_items"
+);
+assert(
+  autoSaveSource.indexOf("const claimed = await claimLineInboxMessageForAutoSave") <
+    autoSaveSource.indexOf("const persisted = await persistLineInboxConfirmations"),
+  "auto-save lock happens before order_items persistence"
+);
+assert(
+  autoSaveSource.indexOf('params.payload, "saved"') <
+    autoSaveSource.indexOf("related = await findRelatedLineAttachments"),
+  "auto-save records saved state before optional photo/reply work"
+);
+assert(autoSaveSource.includes("photo attach failed after save"), "photo attach failure is logged after save without retrying order_items");
+assert(autoSaveSource.includes("error_after_lock"), "persist failure after atomic lock records a non-retry error state");
+assert(
+  pendingSaveRoute.includes("claimPendingInboxForManualSave") &&
+    pendingSaveRoute.includes('.eq("workflow_status", "pending")'),
+  "manual pending-save uses an atomic pending workflow guard"
+);
+assert(
+  pendingSaveRoute.indexOf("await claimPendingInboxForManualSave") <
+    pendingSaveRoute.indexOf("const { order_task_id, saved } = await persistLineInboxConfirmations"),
+  "manual pending-save claims the row before writing order_items"
 );
 const persistConfirm = fs.readFileSync(
   path.join(root, "src/lib/line-inbox/persist-line-inbox-confirm.ts"),

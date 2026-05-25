@@ -54,8 +54,9 @@ async function authorizeAnalyzePending(request: Request) {
  * POST /api/line-inbox/analyze-pending
  * Analyzes pending webhook captures outside the LINE webhook request.
  *
- * This route is advisory only: it updates line_inbox_messages analyze fields
- * and never creates order_items or replies to LINE.
+ * This route updates line_inbox_messages analyze fields. Auto-save remains off
+ * unless LINE_AUTO_SAVE_* flags explicitly allow a clear group message. Use
+ * LINE_AUTO_SAVE_DRY_RUN_ENABLED to evaluate candidates without writes/replies.
  */
 export async function POST(request: Request) {
   const auth = await authorizeAnalyzePending(request);
