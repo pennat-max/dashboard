@@ -2,6 +2,11 @@ import {
   LINE_INBOX_MESSAGES_TABLE,
   updateLineInboxMessageAnalyze,
 } from "@/lib/line-inbox/line-inbox-messages";
+import {
+  isTruthyEnvFlag,
+  maybeAutoSaveAnalyzedLineInbox,
+  type LineAutoSaveRunResult,
+} from "@/lib/line-inbox/auto-save";
 import { runLineInboxAnalyzeCore } from "@/lib/line-inbox/run-analyze-core";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 
@@ -13,8 +18,15 @@ export type AnalyzePendingOptions = {
 
 type PendingInboxRow = {
   id: string;
+  line_message_id?: string | null;
   raw_text: string;
   car_row_id?: string | null;
+  source_type?: string | null;
+  group_id?: string | null;
+  user_id?: string | null;
+  received_at?: string | null;
+  workflow_status?: string | null;
+  analyze_status?: string | null;
 };
 
 type AnalyzePendingItemResult = {
@@ -23,6 +35,7 @@ type AnalyzePendingItemResult = {
   item_count?: number;
   needs_human_review?: boolean;
   car_row_id?: string | null;
+  auto_save?: LineAutoSaveRunResult | { enabled: boolean; attempted: boolean; saved: boolean; error: string };
   error?: string;
 };
 
@@ -61,10 +74,11 @@ function isMissingTableError(message: string): boolean {
 }
 
 /**
- * Advisory pending analyzer for webhook captures.
+ * Pending analyzer for webhook captures.
  *
- * This updates line_inbox_messages analyze fields only. It must not create
- * order_items, reply to LINE, or approve work without a human.
+ * By default this only updates line_inbox_messages analyze fields. If explicit
+ * LINE_AUTO_SAVE_* flags allow it, a high-confidence group message can be
+ * persisted automatically after analyze; otherwise it remains in manual review.
  */
 export async function runAnalyzePendingJob(
   options: AnalyzePendingOptions = {}
@@ -77,7 +91,7 @@ export async function runAnalyzePendingJob(
   try {
     let query = supabase
       .from(LINE_INBOX_MESSAGES_TABLE)
-      .select("id,raw_text,car_row_id")
+      .select("id,line_message_id,raw_text,source_type,group_id,user_id,received_at,workflow_status,analyze_status,car_row_id")
       .eq("workflow_status", "pending")
       .eq("analyze_status", "pending")
       .order("received_at", { ascending: true })
@@ -124,6 +138,35 @@ export async function runAnalyzePendingJob(
           needs_human_review: payload.needs_human_review,
           car_row_id: carRowId,
         });
+        let autoSave: AnalyzePendingItemResult["auto_save"];
+        try {
+          autoSave = await maybeAutoSaveAnalyzedLineInbox(supabase, {
+            row: {
+              id: inboxId,
+              line_message_id: row.line_message_id,
+              raw_text: rawText,
+              source_type: row.source_type,
+              group_id: row.group_id,
+              user_id: row.user_id,
+              received_at: row.received_at,
+              workflow_status: row.workflow_status,
+              analyze_status: "ok",
+              car_row_id: carRowId,
+            },
+            payload,
+          });
+        } catch (error) {
+          autoSave = {
+            enabled: isTruthyEnvFlag(process.env.LINE_AUTO_SAVE_ENABLED),
+            attempted: true,
+            saved: false,
+            error: cleanAnalyzePendingError(error),
+          };
+          console.warn("[line-auto-save] skipped after analyze", {
+            inbox_message_id: inboxId,
+            error: autoSave.error,
+          });
+        }
 
         results.push({
           inbox_message_id: inboxId,
@@ -131,6 +174,7 @@ export async function runAnalyzePendingJob(
           item_count: payload.items.length,
           needs_human_review: payload.needs_human_review,
           car_row_id: carRowId,
+          auto_save: autoSave,
         });
       } catch (error) {
         const msg = cleanAnalyzePendingError(error);
