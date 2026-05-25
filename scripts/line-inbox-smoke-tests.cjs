@@ -68,6 +68,21 @@ const {
   buildLineOrderSearchRef,
   buildLineOrderReviewUrl,
 } = loadTsFile(path.join(root, "src/lib/line-inbox/review-link.ts"));
+const {
+  parseLineAllowedGroups,
+  isLineGroupAllowed,
+} = loadTsFile(path.join(root, "src/lib/line/allowed-groups.ts"));
+
+const specificGroupPolicy = parseLineAllowedGroups("C-test-group,C-real-group");
+assert.strictEqual(specificGroupPolicy.allowAllGroups, false, "specific group allow-list does not allow all groups");
+assert.strictEqual(isLineGroupAllowed("C-real-group", specificGroupPolicy), true, "specific allowed group passes");
+assert.strictEqual(isLineGroupAllowed("C-blocked-group", specificGroupPolicy), false, "unlisted group is blocked");
+const emptyGroupPolicy = parseLineAllowedGroups("");
+assert.strictEqual(emptyGroupPolicy.allowAllGroups, false, "empty LINE_ALLOWED_GROUP_IDS does not allow all groups");
+assert.strictEqual(isLineGroupAllowed("C-any-group", emptyGroupPolicy), false, "empty group policy blocks group capture");
+assert.strictEqual(isLineGroupAllowed("C-any-group", parseLineAllowedGroups("*")), true, "wildcard allows all groups");
+assert.strictEqual(isLineGroupAllowed("C-any-group", parseLineAllowedGroups("ALL")), true, "ALL allows all groups");
+assert.strictEqual(isLineGroupAllowed("", parseLineAllowedGroups("*")), false, "wildcard still requires a real group id");
 
 function assertItems(input, expectedItems, label) {
   const result = splitLineTextForInbox(input);

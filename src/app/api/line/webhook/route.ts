@@ -1,5 +1,6 @@
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { verifyLineWebhookSignature } from "@/lib/line/verify-line-signature";
+import { isLineGroupAllowed, parseLineAllowedGroups } from "@/lib/line/allowed-groups";
 import {
   insertLineInboxMessage,
   updateLineInboxMessageAnalyze,
@@ -13,11 +14,6 @@ import {
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-
-function parseAllowedGroupIds(): Set<string> {
-  const raw = process.env.LINE_ALLOWED_GROUP_IDS ?? "";
-  return new Set(raw.split(",").map((s) => s.trim()).filter(Boolean));
-}
 
 type LineEvent = {
   type?: string;
@@ -198,7 +194,7 @@ export async function POST(request: Request) {
 
   const events = Array.isArray(payload.events) ? payload.events : [];
   const destination = payload.destination;
-  const allowedGroups = parseAllowedGroupIds();
+  const allowedGroups = parseLineAllowedGroups(process.env.LINE_ALLOWED_GROUP_IDS);
   const acceptDm = process.env.LINE_ACCEPT_DM === "true";
 
   for (const ev of events) {
@@ -252,13 +248,13 @@ export async function POST(request: Request) {
         );
       }
 
-      if (allowedGroups.size === 0) {
+      if (!allowedGroups.allowAllGroups && allowedGroups.groupIds.size === 0) {
         console.warn(
-          "[line-webhook] skipped group message - set LINE_ALLOWED_GROUP_IDS (see LINE_WEBHOOK_LOG_GROUP_IDS in .env.example)"
+          "[line-webhook] skipped group message - set LINE_ALLOWED_GROUP_IDS to a comma-separated list or * for all groups"
         );
         continue;
       }
-      if (!gid || !allowedGroups.has(gid)) {
+      if (!isLineGroupAllowed(gid, allowedGroups)) {
         if (gid && !logGroupDiscovery) {
           console.warn(`[line-webhook] skipped group ${gid} - not in LINE_ALLOWED_GROUP_IDS`);
         }
