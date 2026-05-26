@@ -1375,7 +1375,9 @@ function useLineInboxBridgeState({
         ? orders.find((o) => String(o.carRowId ?? "").trim() === carRowId)
         : null;
       const manualReviewCount = Math.max(0, group.total_manual_reviews ?? 0);
-      const jobCount = Math.max(0, group.total_action_lines) + Math.max(0, group.total_new_lines) + manualReviewCount;
+      const actionCount = Math.max(0, group.total_action_lines ?? 0);
+      const newCount = Math.max(0, group.total_new_lines ?? 0);
+      const jobCount = Math.max(actionCount, newCount) + manualReviewCount;
       const photoCount = group.attachments?.length ?? 0;
       const manualReviewMessage = group.messages.find(queueMessageNeedsManualReview) ?? null;
       const fallbackTitle = String(group.fallback_title ?? group.fallbackTitle ?? "").trim();

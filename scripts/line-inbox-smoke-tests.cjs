@@ -56,7 +56,12 @@ function loadTsFile(filePath) {
   return mod.exports;
 }
 
-const { splitLineTextForInbox } = loadTsFile(path.join(root, "src/lib/line-inbox/split-line-text.ts"));
+const {
+  classifyLineNoise,
+  isLineInboxNoiseOrSeparatorOnlyText,
+  isLineInboxSeparatorOrManualHeaderOnlyText,
+  splitLineTextForInbox,
+} = loadTsFile(path.join(root, "src/lib/line-inbox/split-line-text.ts"));
 const { buildFallbackAnalyzeItemsFromRawText } = loadTsFile(
   path.join(root, "src/lib/line-inbox/fallback-analyze-items.ts")
 );
@@ -76,6 +81,7 @@ const {
   buildLineAutoSaveAcknowledgementText,
   evaluateLineAutoSaveEligibility,
 } = loadTsFile(path.join(root, "src/lib/line-inbox/auto-save.ts"));
+const { LINE_AUTO_SAVE_MAX_ITEMS } = loadTsFile(path.join(root, "src/lib/line-inbox/auto-save-safety.ts"));
 
 const specificGroupPolicy = parseLineAllowedGroups("C-test-group,C-real-group");
 assert.strictEqual(specificGroupPolicy.allowAllGroups, false, "specific group allow-list does not allow all groups");
@@ -93,6 +99,62 @@ function assertItems(input, expectedItems, label) {
   assert.deepStrictEqual(result.items, expectedItems, label);
   return result;
 }
+
+const separatorOnly = "====================";
+const manualHeaderOnly = `${separatorOnly}\n\u0e23\u0e2d\u0e15\u0e23\u0e27\u0e08\u0e14\u0e49\u0e27\u0e22\u0e21\u0e37\u0e2d\n${separatorOnly}`;
+const thaiWaitManualReview = "\u0e23\u0e2d\u0e15\u0e23\u0e27\u0e08\u0e14\u0e49\u0e27\u0e22\u0e21\u0e37\u0e2d";
+const thaiAddMoreAwning = "\u0e40\u0e1e\u0e34\u0e48\u0e21\u0e40\u0e15\u0e34\u0e21 \u0e01\u0e31\u0e19\u0e2a\u0e32\u0e14";
+const thaiAwning = "\u0e01\u0e31\u0e19\u0e2a\u0e32\u0e14";
+const thaiFilmAround = "\u0e15\u0e34\u0e14\u0e1f\u0e34\u0e25\u0e4c\u0e21\u0e23\u0e2d\u0e1a\u0e04\u0e31\u0e19";
+const thaiDoorPercent = "\u0e1b\u0e23\u0e30\u0e15\u0e39 80%";
+assert.strictEqual(classifyLineNoise(separatorOnly), "separator", "equals-only separator is classified");
+assert.strictEqual(classifyLineNoise("----------"), "separator", "dash-only separator is classified");
+assert.strictEqual(classifyLineNoise("__________"), "separator", "underscore-only separator is classified");
+assert.strictEqual(classifyLineNoise("///////"), "separator", "slash-only separator is classified");
+assert.strictEqual(classifyLineNoise("....."), "separator", "dot-only separator is classified");
+assert.strictEqual(classifyLineNoise("= = = = ="), "separator", "spaced separator is classified");
+assert.strictEqual(classifyLineNoise(thaiWaitManualReview), "header", "manual-review header is classified");
+assert.strictEqual(classifyLineNoise("\u{1F697}\u{1F6FB}\u2728"), "decoration", "emoji-only line is classified as decoration");
+assert.strictEqual(
+  isLineInboxSeparatorOrManualHeaderOnlyText(separatorOnly),
+  true,
+  "separator-only LINE text is recognized as queue noise"
+);
+assert.strictEqual(
+  isLineInboxNoiseOrSeparatorOnlyText("----------"),
+  true,
+  "dash separator LINE text is recognized as queue noise"
+);
+assert.deepStrictEqual(
+  splitLineTextForInbox(separatorOnly).items,
+  [],
+  "separator-only LINE text should not produce actionable work items"
+);
+assert.deepStrictEqual(
+  splitLineTextForInbox("----------").items,
+  [],
+  "dash-only LINE text should not produce actionable work items"
+);
+assert.deepStrictEqual(
+  splitLineTextForInbox(thaiWaitManualReview).items,
+  [],
+  "manual-review header alone should not produce actionable work items"
+);
+assert.strictEqual(
+  isLineInboxSeparatorOrManualHeaderOnlyText(manualHeaderOnly),
+  true,
+  "separator plus manual-review header is recognized as queue noise"
+);
+assert.deepStrictEqual(splitLineTextForInbox("\u{1F697}\u{1F6FB}\u2728").items, [], "emoji-only line is ignored");
+assertItems(thaiAwning, [thaiAwning], "normal work line remains unchanged");
+assertItems(thaiAddMoreAwning, [thaiAwning], "header prefix with real work keeps the work part");
+const separatorReset = splitLineTextForInbox(`${thaiFilmAround}\n==========\n${thaiDoorPercent}`);
+assert.deepStrictEqual(separatorReset.items, [thaiFilmAround], "separator between blocks does not create a detail item");
+assert.strictEqual(separatorReset.grouped_items[0]?.note ?? "", "", "separator resets detail grouping context");
+assert(
+  separatorReset.ignored_noise_lines.includes(thaiDoorPercent),
+  "detail-like line after separator is ignored instead of attaching to previous work"
+);
 
 assertItems("แต่งเหมือนรูปทุกอย่าง!!! / ยกเลิกติดกันแมลง", [
   "แต่งเหมือนรูปทุกอย่าง",
@@ -346,6 +408,27 @@ const autoSaveRow = {
 
 assert.strictEqual(
   evaluateLineAutoSaveEligibility({
+    row: { ...autoSaveRow, raw_text: separatorOnly },
+    payload: autoSavePayload(),
+    enabled: true,
+    allowedGroupIds: "C-real-group",
+  }).blocked_reason,
+  "noise_or_separator",
+  "separator-only rows are blocked from auto-save with a specific reason"
+);
+assert.strictEqual(
+  evaluateLineAutoSaveEligibility({
+    row: { ...autoSaveRow, raw_text: manualHeaderOnly },
+    payload: autoSavePayload(),
+    enabled: true,
+    allowedGroupIds: "C-real-group",
+  }).blocked_reason,
+  "noise_or_separator",
+  "header-only rows are blocked from auto-save with a specific reason"
+);
+
+assert.strictEqual(
+  evaluateLineAutoSaveEligibility({
     row: autoSaveRow,
     payload: autoSavePayload(),
     enabled: true,
@@ -518,6 +601,31 @@ assert.strictEqual(
   "unclear duplicate status blocks auto-save"
 );
 
+const tooManyAutoSaveItems = Array.from({ length: LINE_AUTO_SAVE_MAX_ITEMS }, (_, index) => ({
+  ...autoSavePayload().items[0],
+  raw_text: `clear work item ${index + 1}`,
+  suggested_item_name: `clear work item ${index + 1}`,
+  duplicate_status: "new",
+  matched_order_item_id: "",
+  matched_item_name: "",
+  confidence: 0.9,
+}));
+assert.strictEqual(
+  evaluateLineAutoSaveEligibility({
+    row: {
+      ...autoSaveRow,
+      raw_text: `8\u0e01\u0e19-2827 FORTUNER 4WD 3.0 V AT SUV BLUE Jun05\n${tooManyAutoSaveItems
+        .map((item) => item.raw_text)
+        .join("\n")}`,
+    },
+    payload: autoSavePayload({ items: tooManyAutoSaveItems }),
+    enabled: true,
+    allowedGroupIds: "*",
+  }).blocked_reason,
+  "too_many_items",
+  "long LINE messages with too many extracted items block auto-save"
+);
+
 const autoSaveReply = buildLineAutoSaveAcknowledgementText({
   carTitle: "กจ-2211 ROCCO 4WD 2.8 Hight AT Double_Cab BLACK Aug20",
   createdItems: [{ name: "กลับสี rocco ขาวมุก", assignee: "PREW", status: "ต้องสั่ง" }],
@@ -566,9 +674,14 @@ for (const token of [
   "matchStatus",
   "buildFallbackAnalyzeItemsFromRawText",
   "action_line_count: actionEntriesForMessage.length",
+  "isLineInboxNoiseOrSeparatorOnlyText",
 ]) {
   assert(pendingQueueRoute.includes(token), `pending queue exposes ${token}`);
 }
+assert(
+  pendingQueueRoute.includes("isLineInboxNoiseOrSeparatorOnlyText(String(row.raw_text"),
+  "pending queue hides separator/noise/header-only rows"
+);
 assert(
   pendingQueueRoute.includes("isLineImageOnlyText(row.raw_text) && related"),
   "pending queue groups image rows under the previous text row"
@@ -608,6 +721,10 @@ assert(
 assert(
   lineInboxToolbar.includes("queueActionDraftForLine(line, fallbackAssignee)"),
   "queue duplicate warning uses fallback assignee draft defaults"
+);
+assert(
+  lineInboxToolbar.includes("Math.max(actionCount, newCount) + manualReviewCount"),
+  "AI LINE navigator does not double-count action_lines and new_lines"
 );
 assert(
   !lineInboxToolbar.includes("owner: ${assignee}"),
@@ -667,6 +784,8 @@ assert(autoSaveSource.includes("LINE_AUTO_SAVE_ENABLED"), "auto-save is gated by
 assert(autoSaveSource.includes("LINE_AUTO_SAVE_ALLOWED_GROUP_IDS"), "auto-save has a separate group allow-list");
 assert(autoSaveSource.includes("LINE_AUTO_SAVE_REPLY_ENABLED"), "auto-save reply is independently gated");
 assert(autoSaveSource.includes("LINE_AUTO_SAVE_DRY_RUN_ENABLED"), "auto-save has a dry-run flag");
+assert(autoSaveSource.includes('blocked_reason: "noise_or_separator"'), "auto-save blocks separator/noise/header-only rows");
+assert(autoSaveSource.includes('blocked_reason: "too_many_items"'), "auto-save blocks overly large item batches");
 assert(autoSaveSource.includes('blocked_reason: "dry_run"'), "dry-run reports planned save without writing");
 assert(autoSaveSource.includes("markLineInboxMessageWorkflowConfirmed"), "auto-save marks the source message confirmed for idempotency");
 assert(autoSaveSource.includes("ORDER_TRACKING_PHOTOS_TABLE"), "auto-save attaches related LINE photos through order_tracking_photos");

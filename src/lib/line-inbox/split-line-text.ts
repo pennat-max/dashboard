@@ -12,6 +12,8 @@ export type SplitLineTextResult = {
   ignored_noise_lines: string[];
 };
 
+export type LineNoiseClassification = "separator" | "header" | "decoration" | "noise" | "content";
+
 const MENTION_RE = /@\S+/g;
 const THAI_PLATE_RE = /(?<![\u0E00-\u0E7F])\d{0,2}[\u0E01-\u0E2E]{1,3}[-\s]?\d{2,4}/g;
 const CHASSIS_RE = /\b[A-HJ-NPR-Z0-9]{17}\b/i;
@@ -52,6 +54,20 @@ const DETAIL_LINE_RE =
   /(%|เปอร์เซ็น|เปอร์|ประตู|กระจก|บานหน้า|บานหลัง|ด้านหน้า|ด้านหลัง|ซ้าย|ขวา|หน้า|หลัง|ฝั่ง|แถว|ชิ้น|จุด|\b\d+(?:\.\d+)?\s*(?:cm|mm|inch|in|นิ้ว)\b)/i;
 const DETAIL_PARENT_RE =
   /(ฟิล์ม|สี|paint|ติด|ติดตั้ง|ใส่|เปลี่ยน|ซ่อม|repair|install|แปลง|แต่ง|ยกสูง|โรบาร์|กันชน|บันได|แร็ค|แรค|ฝาครอบ|สติ๊กเกอร์|ขัด|เคลือบ|เก็บงาน)/i;
+const THAI_WAIT_MANUAL_REVIEW_COMPACT =
+  "\u0e23\u0e2d\u0e15\u0e23\u0e27\u0e08\u0e14\u0e49\u0e27\u0e22\u0e21\u0e37\u0e2d";
+const THAI_WAIT_REVIEW_COMPACT = "\u0e23\u0e2d\u0e15\u0e23\u0e27\u0e08";
+const THAI_HEADER_PREFIXES = [
+  "\u0e23\u0e2d\u0e15\u0e23\u0e27\u0e08\u0e14\u0e49\u0e27\u0e22\u0e21\u0e37\u0e2d",
+  "\u0e23\u0e2d\u0e15\u0e23\u0e27\u0e08",
+  "\u0e23\u0e32\u0e22\u0e01\u0e32\u0e23\u0e07\u0e32\u0e19",
+  "\u0e07\u0e32\u0e19\u0e17\u0e35\u0e48\u0e15\u0e49\u0e2d\u0e07\u0e17\u0e33",
+  "\u0e04\u0e31\u0e19\u0e15\u0e48\u0e2d\u0e44\u0e1b",
+  "\u0e2a\u0e23\u0e38\u0e1b\u0e07\u0e32\u0e19",
+  "\u0e40\u0e1e\u0e34\u0e48\u0e21\u0e40\u0e15\u0e34\u0e21",
+  "\u0e2b\u0e21\u0e32\u0e22\u0e40\u0e2b\u0e15\u0e38",
+];
+const THAI_HEADER_COMPACT_LINES = new Set(THAI_HEADER_PREFIXES.map((value) => value.replace(/\s+/g, "")));
 
 function sanitizeLine(raw: string): string {
   return raw
@@ -59,6 +75,82 @@ function sanitizeLine(raw: string): string {
     .replace(/[\s*•!！]+$/, "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function isSeparatorLine(raw: string): boolean {
+  const compact = String(raw ?? "").replace(/\s+/g, "");
+  return compact.length >= 3 && /^[=_*#./\\|\-]+$/.test(compact);
+}
+
+function isDecorationOnlyLine(raw: string): boolean {
+  const source = String(raw ?? "").trim();
+  if (!source) return false;
+  if (semanticTokens(removeMentions(source)).length > 0) return false;
+  return /[^\s]/.test(source) && /[\p{Emoji_Presentation}\p{Extended_Pictographic}\u{2600}-\u{27BF}%^*:/\\|_.=+-]/u.test(source);
+}
+
+function stripHeaderPrefixFromWorkLine(raw: string): string {
+  const clean = sanitizeLine(raw);
+  if (!clean) return clean;
+  for (const header of THAI_HEADER_PREFIXES) {
+    if (clean === header) return clean;
+    if (!clean.startsWith(header)) continue;
+    const rest = sanitizeLine(clean.slice(header.length).replace(/^[:：\-–—/|]+/, " "));
+    if (rest && hasWorkIntent(rest)) return rest;
+  }
+  return clean;
+}
+
+export function classifyLineNoise(rawLine: string): LineNoiseClassification {
+  const raw = String(rawLine ?? "").trim();
+  if (!raw) return "noise";
+  if (isSeparatorLine(raw)) return "separator";
+
+  const clean = sanitizeLine(raw);
+  if (!clean) return "noise";
+
+  const strippedHeader = stripHeaderPrefixFromWorkLine(clean);
+  if (lineKey(strippedHeader) !== lineKey(clean) && hasWorkIntent(strippedHeader)) return "content";
+
+  const compact = clean.replace(/\s+/g, "").toLowerCase();
+  if (
+    THAI_HEADER_COMPACT_LINES.has(compact) ||
+    compact === THAI_WAIT_MANUAL_REVIEW_COMPACT ||
+    compact === THAI_WAIT_REVIEW_COMPACT ||
+    /^(?:manualreview|needsmanualreview|reviewmanually)$/i.test(compact)
+  ) {
+    return "header";
+  }
+
+  if (isDecorationOnlyLine(raw)) return "decoration";
+  if (looksLikeMentionOnly(clean) || looksLikeLinePersonContext(clean) || looksLikeNoiseOnly(clean)) return "noise";
+
+  const hasThaiPlateLike = THAI_PLATE_RE.test(clean);
+  THAI_PLATE_RE.lastIndex = 0;
+  if (
+    !hasWorkIntent(clean) &&
+    !looksLikeVehicleContext(clean) &&
+    !hasThaiPlateLike &&
+    !CHASSIS_RE.test(clean) &&
+    !STOCK_NUMBER_RE.test(clean) &&
+    semanticTokens(clean).length <= 3
+  ) {
+    return "noise";
+  }
+
+  return "content";
+}
+
+export function isLineInboxSeparatorOrManualHeaderOnlyText(text: string): boolean {
+  return isLineInboxNoiseOrSeparatorOnlyText(text);
+}
+
+export function isLineInboxNoiseOrSeparatorOnlyText(text: string): boolean {
+  const lines = String(text ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return lines.length > 0 && lines.every((line) => classifyLineNoise(line) !== "content");
 }
 
 function addUnique(target: string[], value: string) {
@@ -326,7 +418,7 @@ function addShortContinuationToLastText(target: Array<{ text: string; note: stri
 export function splitLineTextForInbox(text: string): SplitLineTextResult {
   const lines = text
     .split(/\r?\n/)
-    .map((l) => sanitizeLine(l))
+    .map((l) => l.trim())
     .filter(Boolean);
 
   const groupedItems: Array<{ text: string; note: string }> = [];
@@ -344,53 +436,92 @@ export function splitLineTextForInbox(text: string): SplitLineTextResult {
     };
   }
 
+  if (isLineInboxNoiseOrSeparatorOnlyText(text)) {
+    return {
+      items: [],
+      grouped_items: [],
+      ignored_vehicle_spec_lines: [],
+      ignored_mention_lines: [],
+      ignored_noise_lines: lines.slice(0, 30),
+    };
+  }
+
+  let contextBreak = true;
   for (const rawLine of lines) {
-    if (looksLikeMentionOnly(rawLine)) {
+    const noiseType = classifyLineNoise(rawLine);
+    if (noiseType !== "content") {
+      addUnique(looksLikeMentionOnly(rawLine) || looksLikeLinePersonContext(rawLine) ? ignoredMentions : ignoredNoise, rawLine);
+      contextBreak = true;
+      continue;
+    }
+
+    const sourceLine = stripHeaderPrefixFromWorkLine(rawLine);
+    if (looksLikeMentionOnly(sourceLine)) {
       addUnique(ignoredMentions, rawLine);
+      contextBreak = true;
       continue;
     }
 
-    const continuationLine = cleanWorkLine(rawLine);
-    if (looksLikeShortContinuationLine(continuationLine) && addShortContinuationToLastText(groupedItems, continuationLine)) {
+    const continuationLine = cleanWorkLine(sourceLine);
+    if (
+      !contextBreak &&
+      looksLikeShortContinuationLine(continuationLine) &&
+      addShortContinuationToLastText(groupedItems, continuationLine)
+    ) {
+      contextBreak = false;
       continue;
     }
 
-    if (looksLikeLinePersonContext(rawLine)) {
+    if (looksLikeLinePersonContext(sourceLine)) {
       addUnique(ignoredMentions, rawLine);
+      contextBreak = true;
       continue;
     }
 
-    if (looksLikeCarReferenceMeta(rawLine)) {
+    if (looksLikeCarReferenceMeta(sourceLine)) {
       addUnique(ignoredNoise, rawLine);
+      contextBreak = true;
       continue;
     }
 
-    const line = cleanWorkLine(rawLine);
+    const line = cleanWorkLine(sourceLine);
     if (!line) {
       addUnique((rawLine.match(MENTION_RE) ?? []).length > 0 ? ignoredMentions : ignoredNoise, rawLine);
+      contextBreak = true;
       continue;
     }
 
-    const strippedMixedVehicleContext = lineKey(line) !== lineKey(rawLine) && hasWorkIntent(line);
-    if (looksLikeVehicleContext(line) || (!strippedMixedVehicleContext && looksLikeVehicleContext(rawLine))) {
+    const strippedMixedVehicleContext = lineKey(line) !== lineKey(sourceLine) && hasWorkIntent(line);
+    if (looksLikeVehicleContext(line) || (!strippedMixedVehicleContext && looksLikeVehicleContext(sourceLine))) {
       addUnique(ignoredVehicle, rawLine);
+      contextBreak = true;
       continue;
     }
 
     if (looksLikeDetailLine(line) || looksLikeShortContinuationLine(line)) {
-      if (addDetailToLast(groupedItems, line)) continue;
+      if (!contextBreak && addDetailToLast(groupedItems, line)) {
+        contextBreak = false;
+        continue;
+      }
       addUnique(ignoredNoise, rawLine);
+      contextBreak = true;
       continue;
     }
 
     if (looksLikeNoiseOnly(line)) {
       addUnique((rawLine.match(MENTION_RE) ?? []).length > 0 ? ignoredMentions : ignoredNoise, rawLine);
+      contextBreak = true;
       continue;
     }
 
     const beforeCount = groupedItems.length;
     addWorkLines(groupedItems, line);
-    if (groupedItems.length === beforeCount) addUnique(ignoredNoise, rawLine);
+    if (groupedItems.length === beforeCount) {
+      addUnique(ignoredNoise, rawLine);
+      contextBreak = true;
+    } else {
+      contextBreak = false;
+    }
   }
 
   const grouped = groupedItems.slice(0, 60);
