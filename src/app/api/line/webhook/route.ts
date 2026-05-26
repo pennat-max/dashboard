@@ -6,6 +6,12 @@ import {
   updateLineInboxMessageAnalyze,
 } from "@/lib/line-inbox/line-inbox-messages";
 import {
+  buildLineWebhookReceiptAcknowledgementText,
+  isLineInboxSystemAcknowledgementText,
+} from "@/lib/line-inbox/acknowledgement";
+import { isLineInboxNoiseOrSeparatorOnlyText } from "@/lib/line-inbox/split-line-text";
+import { replyLineTextMessage } from "@/lib/line/push-message";
+import {
   fetchLineMessageContent,
   makeLineAttachmentAnalyzePayload,
   makeLineInboxAttachmentMeta,
@@ -25,6 +31,22 @@ type LineEvent = {
 };
 
 type CapturableLineMessageType = "text" | "image" | "file";
+type CaptureLineMessageResult = { id: string | null; duplicate: boolean };
+
+function isTruthyEnvFlag(value: string | undefined): boolean {
+  return /^(1|true|yes|on|enabled)$/i.test(value?.trim() ?? "");
+}
+
+function cleanLine(value: unknown): string {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function maskLineTarget(value: unknown): string {
+  const raw = cleanLine(value);
+  if (!raw) return "";
+  if (raw.length <= 8) return `${raw.slice(0, 1)}...${raw.slice(-1)}`;
+  return `${raw.slice(0, 4)}...${raw.slice(-4)}`;
+}
 
 function receivedAtFromLineTimestamp(timestamp: number | undefined): string | undefined {
   if (!Number.isFinite(timestamp)) return undefined;
@@ -41,10 +63,10 @@ async function captureTextMessage(params: {
   rawText: string;
   replyToken: string | undefined;
   receivedAt?: string | undefined;
-}): Promise<void> {
+}): Promise<CaptureLineMessageResult> {
   const supabase = createServiceRoleClient();
 
-  await insertLineInboxMessage(supabase, {
+  return insertLineInboxMessage(supabase, {
     line_message_id: params.lineMessageId,
     destination: params.destination ?? null,
     source_type: params.sourceType,
@@ -53,6 +75,55 @@ async function captureTextMessage(params: {
     raw_text: params.rawText,
     reply_token: params.replyToken ?? null,
     received_at: params.receivedAt,
+  });
+}
+
+async function maybeSendWebhookReceiptReply(params: {
+  replyToken: string | undefined;
+  lineMessageId: string;
+  sourceType: "group" | "user" | "room";
+  groupId: string | null;
+  messageType: CapturableLineMessageType;
+  text: string;
+  duplicate: boolean;
+}): Promise<void> {
+  if (!isTruthyEnvFlag(process.env.LINE_WEBHOOK_RECEIPT_REPLY_ENABLED)) return;
+  if (params.duplicate) return;
+  if (!params.replyToken) return;
+  if (params.sourceType !== "group") return;
+  if (params.messageType === "text") {
+    if (isLineInboxSystemAcknowledgementText(params.text)) return;
+    if (isLineInboxNoiseOrSeparatorOnlyText(params.text)) return;
+  }
+
+  const token = process.env.LINE_CHANNEL_ACCESS_TOKEN?.trim() ?? "";
+  if (!token) {
+    console.warn("[line-webhook] receipt reply skipped - LINE_CHANNEL_ACCESS_TOKEN is not set", {
+      line_message_id: maskLineTarget(params.lineMessageId),
+      group_id: maskLineTarget(params.groupId),
+    });
+    return;
+  }
+
+  const sent = await replyLineTextMessage({
+    accessToken: token,
+    replyToken: params.replyToken,
+    text: buildLineWebhookReceiptAcknowledgementText(),
+  });
+
+  if (!sent.ok) {
+    console.warn("[line-webhook] receipt reply not sent", {
+      line_message_id: maskLineTarget(params.lineMessageId),
+      group_id: maskLineTarget(params.groupId),
+      status: sent.status ?? null,
+      error: cleanLine(sent.error).slice(0, 300),
+    });
+    return;
+  }
+
+  console.info("[line-webhook] receipt reply sent", {
+    line_message_id: maskLineTarget(params.lineMessageId),
+    group_id: maskLineTarget(params.groupId),
   });
 }
 
@@ -77,7 +148,7 @@ async function captureAttachmentMessage(params: {
   userId: string | null;
   replyToken: string | undefined;
   receivedAt?: string | undefined;
-}): Promise<void> {
+}): Promise<CaptureLineMessageResult> {
   const supabase = createServiceRoleClient();
   const pendingAttachment = makeLineInboxAttachmentMeta({
     lineMessageId: params.lineMessageId,
@@ -101,7 +172,7 @@ async function captureAttachmentMessage(params: {
     needs_human_review: true,
   });
 
-  if (inserted.duplicate || !inserted.id) return;
+  if (inserted.duplicate || !inserted.id) return inserted;
 
   const accessToken = process.env.LINE_CHANNEL_ACCESS_TOKEN?.trim();
   if (!accessToken) {
@@ -121,7 +192,7 @@ async function captureAttachmentMessage(params: {
       car_row_id: null,
     });
     console.warn("[line-webhook] image/file capture skipped - LINE_CHANNEL_ACCESS_TOKEN is not set");
-    return;
+    return inserted;
   }
 
   try {
@@ -162,6 +233,8 @@ async function captureAttachmentMessage(params: {
     });
     console.error("[line-webhook] image/file capture failed:", msg);
   }
+
+  return inserted;
 }
 
 /**
@@ -205,15 +278,20 @@ export async function POST(request: Request) {
     const text = messageType === "text" ? String(msg.text ?? "").trim() : "";
     const mid = String(msg.id ?? "").trim();
     if (!mid || (messageType === "text" && !text)) continue;
+    if (messageType === "text" && isLineInboxSystemAcknowledgementText(text)) continue;
 
     const src = ev.source;
     if (!src?.type) continue;
 
     const replyToken = typeof ev.replyToken === "string" ? ev.replyToken : undefined;
     const receivedAt = receivedAtFromLineTimestamp(ev.timestamp);
-    const runCapture = async (sourceType: "group" | "user" | "room", groupId: string | null, userId: string | null) => {
+    const runCapture = async (
+      sourceType: "group" | "user" | "room",
+      groupId: string | null,
+      userId: string | null
+    ): Promise<CaptureLineMessageResult> => {
       if (messageType === "text") {
-        await captureTextMessage({
+        return captureTextMessage({
           destination,
           lineMessageId: mid,
           sourceType,
@@ -223,10 +301,9 @@ export async function POST(request: Request) {
           replyToken,
           receivedAt,
         });
-        return;
       }
 
-      await captureAttachmentMessage({
+      return captureAttachmentMessage({
         destination,
         lineMessageId: mid,
         lineMessageType: messageType,
@@ -262,7 +339,16 @@ export async function POST(request: Request) {
       }
 
       try {
-        await runCapture("group", gid, src.userId ? String(src.userId) : null);
+        const captured = await runCapture("group", gid, src.userId ? String(src.userId) : null);
+        await maybeSendWebhookReceiptReply({
+          replyToken,
+          lineMessageId: mid,
+          sourceType: "group",
+          groupId: gid,
+          messageType,
+          text,
+          duplicate: captured.duplicate,
+        });
       } catch (e) {
         console.error("[line-webhook] capture failed:", e instanceof Error ? e.message : e);
       }

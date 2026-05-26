@@ -1810,11 +1810,28 @@ function useLineInboxBridgeState({
               assignee_staff?: string;
             }>;
             reply_text?: string;
+            copy_ready_reply_text?: string;
+            copyReadyReplyText?: string;
             auto_reply?: {
               enabled?: boolean;
               attempted?: boolean;
               sent?: boolean;
               skipped_reason?: string;
+              error_reason?: string;
+              errorReason?: string;
+              error_status?: number;
+              errorStatus?: number;
+              error?: string;
+            };
+            autoReply?: {
+              enabled?: boolean;
+              attempted?: boolean;
+              sent?: boolean;
+              skipped_reason?: string;
+              error_reason?: string;
+              errorReason?: string;
+              error_status?: number;
+              errorStatus?: number;
               error?: string;
             };
           }>;
@@ -1858,16 +1875,23 @@ function useLineInboxBridgeState({
         }
 
         clearStagedForRowKeys(touchedRowKeys);
-        const autoReply = resultForMessage?.auto_reply;
+        const autoReply = resultForMessage?.auto_reply ?? resultForMessage?.autoReply;
+        const autoReplyErrorReason = String(autoReply?.error_reason ?? autoReply?.errorReason ?? "");
+        const autoReplyErrorStatus = Number(autoReply?.error_status ?? autoReply?.errorStatus ?? 0);
+        const isLineQuotaLimit = autoReplyErrorReason === "line_quota_limit" || autoReplyErrorStatus === 429;
         const autoReplyHint =
           autoReply?.sent
             ? uiLang === "en"
               ? " + sent LINE acknowledgement"
               : " + ส่ง LINE รับทราบแล้ว"
             : autoReply?.enabled && autoReply.skipped_reason && autoReply.skipped_reason !== "disabled"
-              ? uiLang === "en"
-                ? " + LINE auto-send skipped; copy-ready fallback is below"
-                : " + ส่ง LINE อัตโนมัติไม่สำเร็จ/ข้ามไว้ ใช้ข้อความคัดลอกด้านล่างแทน"
+              ? isLineQuotaLimit
+                ? uiLang === "en"
+                  ? " + LINE reply failed because the monthly quota is not enough for this group. Use Copy below."
+                  : " + บันทึกงานแล้ว แต่ LINE ตอบกลับไม่ได้ เพราะ quota รายเดือนเหลือไม่พอสำหรับส่งเข้ากลุ่มนี้ กรุณากด Copy แล้ววางใน LINE เอง"
+                : uiLang === "en"
+                  ? " + LINE auto-send skipped; copy-ready fallback is below"
+                  : " + ส่ง LINE อัตโนมัติไม่สำเร็จ/ข้ามไว้ ใช้ข้อความคัดลอกด้านล่างแทน"
               : "";
         setSaveHint(
           uiLang === "en"
@@ -1889,7 +1913,12 @@ function useLineInboxBridgeState({
                   assignee: "",
                 }));
         setReplyText(
-          String(resultForMessage?.reply_text ?? "").trim() ||
+          String(
+            resultForMessage?.copy_ready_reply_text ??
+              resultForMessage?.copyReadyReplyText ??
+              resultForMessage?.reply_text ??
+              ""
+          ).trim() ||
             buildLineReplyText({
               plate: queueMessageDisplayTitle(m, uiLang),
               lines: savedLines,
@@ -2718,6 +2747,7 @@ function useLineInboxBridgeState({
                     : "คัดลอก"}
               </button>
             </div>
+            {saveHint ? <p className="mb-1.5 text-[11px] font-semibold text-emerald-900">{saveHint}</p> : null}
             <pre className="max-h-28 overflow-auto whitespace-pre-wrap rounded-lg bg-white/85 p-2 text-[11px] leading-relaxed text-slate-800 ring-1 ring-emerald-100">
               {replyText}
             </pre>
