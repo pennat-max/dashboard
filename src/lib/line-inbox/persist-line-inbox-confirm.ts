@@ -17,6 +17,17 @@ export type PersistConfirmRow = {
   due_date?: string | null;
 };
 
+export type PersistConfirmSavedItem = {
+  order_item_id: string;
+  label: string;
+  action: "create" | "merge";
+  status: string;
+  assignee_staff: string;
+  previous_label?: string | null;
+  previous_status?: string | null;
+  previous_assignee_staff?: string | null;
+};
+
 function isMissingDbColumnError(message: string): boolean {
   const m = message.toLowerCase();
   return (
@@ -38,7 +49,7 @@ export async function persistLineInboxConfirmations(
   }
 ): Promise<{
   order_task_id: string;
-  saved: Array<{ order_item_id: string; label: string; action: string }>;
+  saved: PersistConfirmSavedItem[];
 }> {
   const car_row_id = String(input.car_row_id ?? "").trim();
   const car_id = input.car_id;
@@ -81,7 +92,7 @@ export async function persistLineInboxConfirmations(
   const itemNameEnMap =
     labelsForEn.length > 0 ? await buildItemNameEnglishMap(labelsForEn) : {};
 
-  const saved: Array<{ order_item_id: string; label: string; action: string }> = [];
+  const saved: PersistConfirmSavedItem[] = [];
 
   for (const c of actionable) {
     if (c.action === "create") {
@@ -151,7 +162,13 @@ export async function persistLineInboxConfirmations(
             updated_by: "line-inbox",
             role: "sales",
           });
-          saved.push({ order_item_id: rid, label: c.item_name, action: "create" });
+          saved.push({
+            order_item_id: rid,
+            label: c.item_name,
+            action: "create",
+            status: dbStatus,
+            assignee_staff: assigneeStaff,
+          });
           continue;
         }
         const rid = String(retry.data?.id ?? "");
@@ -173,7 +190,13 @@ export async function persistLineInboxConfirmations(
           updated_by: "line-inbox",
           role: "sales",
         });
-        saved.push({ order_item_id: rid, label: c.item_name, action: "create" });
+        saved.push({
+          order_item_id: rid,
+          label: c.item_name,
+          action: "create",
+          status: dbStatus,
+          assignee_staff: assigneeStaff,
+        });
         continue;
       }
       const id = String(inserted.data?.id ?? "");
@@ -195,7 +218,13 @@ export async function persistLineInboxConfirmations(
         updated_by: "line-inbox",
         role: "sales",
       });
-      saved.push({ order_item_id: id, label: c.item_name, action: "create" });
+      saved.push({
+        order_item_id: id,
+        label: c.item_name,
+        action: "create",
+        status: dbStatus,
+        assignee_staff: assigneeStaff,
+      });
     } else if (c.action === "merge") {
       const oid = String(c.order_item_id ?? "").trim();
       let beforeQuery = await supabase
@@ -215,6 +244,9 @@ export async function persistLineInboxConfirmations(
       if (!before || String(before.order_task_id ?? "").trim() !== taskId) {
         throw new Error(`order_item ${oid} not part of this car task`);
       }
+      const beforeLabel = String(before.label ?? "").trim();
+      const beforeStatus = String(before.status ?? "").trim();
+      const beforeAssignee = String((before as { assignee_staff?: unknown }).assignee_staff ?? "").trim();
       const dbStatus = itemStatusForOrderItemsRow(c.item_status || String(before.status ?? ""));
       const labelNext = c.item_name || String(before.label ?? "");
       const labelEnResolved =
@@ -249,6 +281,7 @@ export async function persistLineInboxConfirmations(
         }
       }
       if (error) throw new Error(error.message);
+      const assigneeNext = String(c.assignee_staff ?? "").trim() || beforeAssignee;
 
       await createOrderTaskUpdate(supabase, {
         order_task_id: taskId,
@@ -268,7 +301,16 @@ export async function persistLineInboxConfirmations(
         updated_by: "line-inbox",
         role: "sales",
       });
-      saved.push({ order_item_id: oid, label: labelNext, action: "merge" });
+      saved.push({
+        order_item_id: oid,
+        label: labelNext,
+        action: "merge",
+        status: dbStatus,
+        assignee_staff: assigneeNext,
+        previous_label: beforeLabel,
+        previous_status: beforeStatus,
+        previous_assignee_staff: beforeAssignee,
+      });
     }
   }
 
