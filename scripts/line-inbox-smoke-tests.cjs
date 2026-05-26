@@ -118,6 +118,42 @@ assertItems(
 );
 
 assertItems(
+  "95295 TRAVO ป้ายแดง เมือวานมีเปลี่ยนแม้ค ยาง ตามรูป แล้ว",
+  ["เปลี่ยนแม้ค ยาง ตามรูป"],
+  "strips mixed stock/spec/context prefix from single-line work"
+);
+
+assertItems(
+  "95295 TRAVO 4WD 2.8 4TREX AT Standard SILVER Mar26 คิ้วล้อมาแล้ว ไปเบิกกับพี่ตูน",
+  ["คิ้วล้อมาแล้ว ไปเบิกกับพี่ตูน"],
+  "keeps full work phrase after mixed stock/spec prefix"
+);
+
+assertItems(
+  "1ขฎ-5400 REVO 2WD 2.4 J MT Double_Cab WHITE Jan20 กันสาด",
+  ["กันสาด"],
+  "strips Thai plate/spec prefix from simple accessory work"
+);
+
+assertItems(
+  "2026 ซ่อมสี",
+  ["2026 ซ่อมสี"],
+  "does not strip leading year-like number without vehicle context"
+);
+
+assertItems(
+  "12345 งานสี",
+  ["12345 งานสี"],
+  "does not strip leading generic number without vehicle context"
+);
+
+assertItems(
+  "เปลี่ยนแม้ค ยาง ตามรูป",
+  ["เปลี่ยนแม้ค ยาง ตามรูป"],
+  "normal work line without car prefix remains unchanged"
+);
+
+assertItems(
   [
     "1นค-8637 COMMUTER 2WD 3.0 No MT VAN WHITE Feb18",
     "เก็บงาน รอส่ง รถมีตรวจเคนย่า รอแจ้งกรอไมล์ อีกที",
