@@ -7,7 +7,7 @@ import {
 } from "@/lib/line-inbox/line-inbox-messages";
 import { buildFallbackAnalyzeItemsFromRawText } from "@/lib/line-inbox/fallback-analyze-items";
 import { buildFallbackAnalyzePayloadFromRawText } from "@/lib/line-inbox/fallback-analyze-payload";
-import { pushLineTextMessage } from "@/lib/line/push-message";
+import { classifyLineSendError, pushLineTextMessage, type LineSendErrorReason } from "@/lib/line/push-message";
 import {
   buildLineApprovalAcknowledgementText,
   buildLineCarDisplayLabel,
@@ -33,6 +33,8 @@ type AutoReplyResult = {
   sent: boolean;
   target_type?: "group" | "user";
   skipped_reason?: "disabled" | "missing_token" | "missing_target" | "unsupported_source" | "no_saved_items" | "line_error";
+  error_reason?: LineSendErrorReason | "missing_token" | "missing_target" | "no_saved_items" | "disabled";
+  error_status?: number;
   error?: string;
 };
 
@@ -269,7 +271,7 @@ async function maybeSendApprovalAcknowledgement(params: {
   if (!isAutoReplyAfterApproveEnabled()) {
     return {
       replyText,
-      autoReply: { enabled: false, attempted: false, sent: false, skipped_reason: "disabled" },
+      autoReply: { enabled: false, attempted: false, sent: false, skipped_reason: "disabled", error_reason: "disabled" },
     };
   }
 
@@ -281,7 +283,7 @@ async function maybeSendApprovalAcknowledgement(params: {
     });
     return {
       replyText,
-      autoReply: { enabled: true, attempted: false, sent: false, skipped_reason: "no_saved_items" },
+      autoReply: { enabled: true, attempted: false, sent: false, skipped_reason: "no_saved_items", error_reason: "no_saved_items" },
     };
   }
 
@@ -294,7 +296,7 @@ async function maybeSendApprovalAcknowledgement(params: {
     });
     return {
       replyText,
-      autoReply: { enabled: true, attempted: false, sent: false, skipped_reason: "missing_token" },
+      autoReply: { enabled: true, attempted: false, sent: false, skipped_reason: "missing_token", error_reason: "missing_token" },
     };
   }
 
@@ -310,7 +312,7 @@ async function maybeSendApprovalAcknowledgement(params: {
     });
     return {
       replyText,
-      autoReply: { enabled: true, attempted: false, sent: false, skipped_reason: "missing_target" },
+      autoReply: { enabled: true, attempted: false, sent: false, skipped_reason: "missing_target", error_reason: "missing_target" },
     };
   }
 
@@ -321,8 +323,9 @@ async function maybeSendApprovalAcknowledgement(params: {
   });
 
   if (!sent.ok) {
+    const errorReason = classifyLineSendError(sent.status, sent.error);
     console.warn("[line-inbox] manual approval LINE acknowledgement not sent", {
-      reason: "line_error",
+      reason: errorReason,
       enabled: true,
       attempted: true,
       target_type: target.targetType,
@@ -338,6 +341,8 @@ async function maybeSendApprovalAcknowledgement(params: {
         sent: false,
         target_type: target.targetType,
         skipped_reason: "line_error",
+        error_reason: errorReason,
+        error_status: sent.status,
         error: sent.error,
       },
     };
@@ -394,7 +399,10 @@ export async function POST(request: Request) {
       assignee_staff: string;
     }>;
     reply_text?: string;
+    copy_ready_reply_text?: string;
+    copyReadyReplyText?: string;
     auto_reply?: AutoReplyResult;
+    autoReply?: AutoReplyResult;
   }> = [];
 
   try {
@@ -546,11 +554,12 @@ export async function POST(request: Request) {
         }),
         autoReply: {
           enabled: autoReplyEnabled,
-          attempted: false,
-          sent: false,
-          skipped_reason: approvedItems.length === 0 ? "no_saved_items" : autoReplyEnabled ? "line_error" : "disabled",
-        },
-      };
+            attempted: false,
+            sent: false,
+            skipped_reason: approvedItems.length === 0 ? "no_saved_items" : autoReplyEnabled ? "line_error" : "disabled",
+            error_reason: approvedItems.length === 0 ? "no_saved_items" : autoReplyEnabled ? "line_error" : "disabled",
+          },
+        };
 
       if (saved.length > 0) {
         try {
@@ -576,6 +585,7 @@ export async function POST(request: Request) {
               attempted: autoReplyEnabled,
               sent: false,
               skipped_reason: "line_error",
+              error_reason: "line_error",
               error: safeError,
             },
           };
@@ -596,7 +606,10 @@ export async function POST(request: Request) {
           assignee_staff: item.assignee_staff,
         })),
         reply_text: acknowledged.replyText,
+        copy_ready_reply_text: acknowledged.replyText,
+        copyReadyReplyText: acknowledged.replyText,
         auto_reply: acknowledged.autoReply,
+        autoReply: acknowledged.autoReply,
       });
     }
 

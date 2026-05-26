@@ -36,6 +36,8 @@ const UNKNOWN_LINE_VALUE = "ยังไม่ระบุ";
 const DEFAULT_EXISTING_ITEM_LIMIT = 10;
 
 const SYSTEM_ACK_PATTERNS = [
+  /รับข้อความแล้วค่ะ\s*✅?/i,
+  /ระบบกำลังตรวจและจัดเข้าคิวงาน/i,
   /รับทราบค่ะ\s*✅?/i,
   /รับงานแล้วครับ\s*✅?/i,
   /ระบบบันทึกงานที่ตรวจสอบแล้วเรียบร้อย/i,
@@ -282,4 +284,8 @@ export function buildLineReviewLinkAcknowledgementText(carTitle?: string | null)
     "กรุณาตรวจสอบงานที่ AI จับได้ก่อนบันทึก:",
     LINE_ORDER_REVIEW_URL,
   ].join("\n");
+}
+
+export function buildLineWebhookReceiptAcknowledgementText(): string {
+  return ["รับข้อความแล้วค่ะ ✅", "ระบบกำลังตรวจและจัดเข้าคิวงาน"].join("\n");
 }

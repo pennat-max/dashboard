@@ -67,7 +67,12 @@ const { buildFallbackAnalyzeItemsFromRawText } = loadTsFile(
 );
 const {
   buildLineApprovalAcknowledgementText,
+  buildLineWebhookReceiptAcknowledgementText,
+  isLineInboxSystemAcknowledgementText,
 } = loadTsFile(path.join(root, "src/lib/line-inbox/acknowledgement.ts"));
+const {
+  classifyLineSendError,
+} = loadTsFile(path.join(root, "src/lib/line/push-message.ts"));
 const {
   buildLineCarDisplayLabel,
   buildLineOrderSearchRef,
@@ -93,6 +98,12 @@ assert.strictEqual(isLineGroupAllowed("C-any-group", emptyGroupPolicy), false, "
 assert.strictEqual(isLineGroupAllowed("C-any-group", parseLineAllowedGroups("*")), true, "wildcard allows all groups");
 assert.strictEqual(isLineGroupAllowed("C-any-group", parseLineAllowedGroups("ALL")), true, "ALL allows all groups");
 assert.strictEqual(isLineGroupAllowed("", parseLineAllowedGroups("*")), false, "wildcard still requires a real group id");
+const receiptReply = buildLineWebhookReceiptAcknowledgementText();
+assert(receiptReply.includes("รับข้อความแล้วค่ะ"), "webhook receipt acknowledgement says the message was received");
+assert(!receiptReply.includes("บันทึกงาน"), "webhook receipt acknowledgement must not claim work was saved");
+assert(isLineInboxSystemAcknowledgementText(receiptReply), "webhook receipt acknowledgement is ignored by the analyzer loop guard");
+assert.strictEqual(classifyLineSendError(429, "You have reached your monthly limit."), "line_quota_limit", "LINE monthly quota errors are classified");
+assert.strictEqual(classifyLineSendError(400, "Bad request"), "line_error", "other LINE errors stay generic");
 
 function assertItems(input, expectedItems, label) {
   const result = splitLineTextForInbox(input);
@@ -745,6 +756,14 @@ const pendingSaveRoute = fs.readFileSync(
   path.join(root, "src/app/api/line-inbox/pending-save/route.ts"),
   "utf8"
 );
+const lineWebhookRoute = fs.readFileSync(
+  path.join(root, "src/app/api/line/webhook/route.ts"),
+  "utf8"
+);
+const linePushMessageSource = fs.readFileSync(
+  path.join(root, "src/lib/line/push-message.ts"),
+  "utf8"
+);
 const reviewLinkSource = fs.readFileSync(
   path.join(root, "src/lib/line-inbox/review-link.ts"),
   "utf8"
@@ -828,12 +847,36 @@ assert(pendingSaveRoute.includes("status: item.status"), "pending-save response 
 assert(pendingSaveRoute.includes("buildLineOrderReviewUrl"), "pending-save reply uses search review link");
 assert(pendingSaveRoute.includes("LINE_AUTO_REPLY_AFTER_APPROVE_ENABLED"), "manual approval reply is gated by its own env flag");
 assert(pendingSaveRoute.includes("pushLineTextMessage"), "manual approval reply calls the LINE push API helper");
+assert(pendingSaveRoute.includes("classifyLineSendError"), "manual approval reply classifies LINE send failures");
+assert(pendingSaveRoute.includes("error_reason: errorReason"), "manual approval reply returns a machine-readable error reason");
+assert(pendingSaveRoute.includes("error_status: sent.status"), "manual approval reply returns the LINE error status");
+assert(pendingSaveRoute.includes("copy_ready_reply_text: acknowledged.replyText"), "pending-save returns copy-ready fallback text");
+assert(pendingSaveRoute.includes("autoReply: acknowledged.autoReply"), "pending-save returns camel-case autoReply fallback status");
 assert(
   pendingSaveRoute.includes("manual approval LINE acknowledgement not sent") &&
     pendingSaveRoute.includes("manual approval LINE acknowledgement sent"),
   "manual approval reply logs masked send results for production diagnostics"
 );
 assert(pendingSaveRoute.includes("maskLineTarget"), "manual approval reply masks LINE targets in logs");
+assert(linePushMessageSource.includes("replyLineTextMessage"), "LINE helper supports replyToken receipt replies");
+assert(linePushMessageSource.includes("https://api.line.me/v2/bot/message/reply"), "LINE reply helper uses the LINE reply API");
+assert(linePushMessageSource.includes("classifyLineSendError"), "LINE helper exposes send error classification");
+assert(lineWebhookRoute.includes("LINE_WEBHOOK_RECEIPT_REPLY_ENABLED"), "webhook receipt replies are gated by env");
+assert(lineWebhookRoute.includes("replyLineTextMessage"), "webhook receipt uses LINE replyToken API");
+assert(lineWebhookRoute.includes("buildLineWebhookReceiptAcknowledgementText"), "webhook receipt uses safe receipt-only text");
+assert(lineWebhookRoute.includes("isLineInboxSystemAcknowledgementText(text)"), "webhook ignores bot/system acknowledgement text");
+assert(
+  lineWebhookRoute.includes("isLineInboxNoiseOrSeparatorOnlyText(params.text)"),
+  "webhook skips separator/noise-only receipt replies"
+);
+assert(lineWebhookRoute.includes("duplicate: captured.duplicate"), "webhook de-dupes receipt replies by insert duplicate state");
+assert(
+    lineInboxToolbar.includes("line_quota_limit") &&
+    lineInboxToolbar.includes("กรุณากด Copy แล้ววางใน LINE เอง") &&
+    lineInboxToolbar.includes("copy_ready_reply_text") &&
+    lineInboxToolbar.includes("resultForMessage?.auto_reply ?? resultForMessage?.autoReply"),
+  "LINE queue UI shows copy fallback when approval push fails because quota is exhausted"
+);
 assert(
   pendingSaveRoute.includes("assignee_staff: item.assignee_staff"),
   "pending-save passes selected assignee into persistence"
