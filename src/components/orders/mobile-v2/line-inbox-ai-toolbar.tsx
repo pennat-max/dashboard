@@ -917,6 +917,8 @@ type LineInboxCarPickerRow = {
   latestMessageAt: number;
 };
 
+type LineInboxQueueDateFilter = "all" | "today" | "yesterday" | "manual";
+
 type LineInboxBridgeContextValue = {
   uiLang: UiLang;
   open: boolean;
@@ -928,6 +930,14 @@ type LineInboxBridgeContextValue = {
 
 function todayYmdBangkok(): string {
   return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Bangkok" });
+}
+
+function addBangkokCalendarDays(ymd: string, days: number): string {
+  const t = Date.parse(`${ymd}T12:00:00+07:00`);
+  if (!Number.isFinite(t)) return "";
+  return new Date(t + days * 24 * 60 * 60 * 1000).toLocaleDateString("en-CA", {
+    timeZone: "Asia/Bangkok",
+  });
 }
 
 function ymdBangkokFromIso(iso: string): string {
@@ -949,15 +959,30 @@ function groupLatestReceivedMs(group: PendingQueueGroup): number {
   return max;
 }
 
-/** Car has pending LINE/AI work with activity received today (Bangkok). */
-function groupHasLineWorkToday(group: PendingQueueGroup, todayYmd: string): boolean {
-  const messageToday = group.messages.some((m) => {
-    if (ymdBangkokFromIso(m.received_at) !== todayYmd) return false;
+function groupHasLineWorkOnYmd(group: PendingQueueGroup, ymd: string): boolean {
+  const messageOnDate = group.messages.some((m) => {
+    if (ymdBangkokFromIso(m.received_at) !== ymd) return false;
     const jobs = queueMessageActionCount(m) + Math.max(0, m.new_line_count ?? 0);
     return jobs > 0 || queueMessageNeedsManualReview(m);
   });
-  const photoToday = (group.attachments ?? []).some((a) => ymdBangkokFromIso(a.received_at) === todayYmd);
-  return messageToday || photoToday;
+  const photoOnDate = (group.attachments ?? []).some((a) => ymdBangkokFromIso(a.received_at) === ymd);
+  return messageOnDate || photoOnDate;
+}
+
+function groupHasManualReview(group: PendingQueueGroup): boolean {
+  return Math.max(0, group.total_manual_reviews ?? 0) > 0 || group.messages.some(queueMessageNeedsManualReview);
+}
+
+function groupMatchesLineInboxFilter(
+  group: PendingQueueGroup,
+  filter: LineInboxQueueDateFilter,
+  todayYmd: string
+): boolean {
+  if (filter === "all") return true;
+  if (filter === "manual") return groupHasManualReview(group);
+  if (filter === "today") return groupHasLineWorkOnYmd(group, todayYmd);
+  if (filter === "yesterday") return groupHasLineWorkOnYmd(group, addBangkokCalendarDays(todayYmd, -1));
+  return true;
 }
 
 function formatLatestLineMessageTime(ms: number, uiLang: UiLang): string {
@@ -1068,6 +1093,7 @@ function useLineInboxBridgeState({
   const [queueTotalAction, setQueueTotalAction] = useState(0);
   const [queueTotalManualReview, setQueueTotalManualReview] = useState(0);
   const [queueTab, setQueueTab] = useState<"actions" | "messages" | "photos">("actions");
+  const [queueDateFilter, setQueueDateFilter] = useState<LineInboxQueueDateFilter>("all");
   const [queueDrafts, setQueueDrafts] = useState<Record<string, QueueActionDraft>>({});
   /** Unchecked = not saved when user clicks save (default: all lines selected) */
   const [queueDeselected, setQueueDeselected] = useState<Record<string, Set<number>>>({});
@@ -1110,24 +1136,24 @@ function useLineInboxBridgeState({
         .join("|");
       if (sig !== queueSigRef.current) {
         queueSigRef.current = sig;
-        const nextDes: Record<string, Set<number>> = {};
-        for (const m of list) {
-          nextDes[m.inbox_id] = new Set();
-        }
-        setQueueDeselected(nextDes);
-        const nextDrafts: Record<string, QueueActionDraft> = {};
-        for (const group of groups) {
-          const fallbackAssignee = resolveSaleStaffForOrder(group.sale, saleAssigneesBySale);
-          for (const message of group.messages) {
-            for (const line of message.action_lines ?? []) {
-              nextDrafts[queueSuggestionRowKey(message.inbox_id, line.item_index)] = queueActionDraftForLine(
-                line,
-                fallbackAssignee
-              );
+        setQueueDeselected((prev) => {
+          const nextDes: Record<string, Set<number>> = {};
+          for (const m of list) nextDes[m.inbox_id] = new Set(prev[m.inbox_id] ?? []);
+          return nextDes;
+        });
+        setQueueDrafts((prev) => {
+          const nextDrafts: Record<string, QueueActionDraft> = {};
+          for (const group of groups) {
+            const fallbackAssignee = resolveSaleStaffForOrder(group.sale, saleAssigneesBySale);
+            for (const message of group.messages) {
+              for (const line of message.action_lines ?? []) {
+                const rowKey = queueSuggestionRowKey(message.inbox_id, line.item_index);
+                nextDrafts[rowKey] = prev[rowKey] ?? queueActionDraftForLine(line, fallbackAssignee);
+              }
             }
           }
-        }
-        setQueueDrafts(nextDrafts);
+          return nextDrafts;
+        });
       }
     } catch {
       setQueueMessages([]);
@@ -1136,7 +1162,6 @@ function useLineInboxBridgeState({
       setQueueTotalNew(0);
       setQueueTotalAction(0);
       setQueueTotalManualReview(0);
-      setQueueDrafts({});
     } finally {
       setQueueLoading(false);
     }
@@ -1144,7 +1169,7 @@ function useLineInboxBridgeState({
 
   useEffect(() => {
     void fetchQueue();
-    const t = window.setInterval(() => void fetchQueue(), 45_000);
+    const t = window.setInterval(() => void fetchQueue(), 5 * 60 * 1000);
     return () => window.clearInterval(t);
   }, [fetchQueue]);
 
@@ -1369,7 +1394,7 @@ function useLineInboxBridgeState({
     const todayYmd = todayYmdBangkok();
     const rows: LineInboxCarPickerRow[] = [];
     for (const group of queueGroups) {
-      if (!groupHasLineWorkToday(group, todayYmd)) continue;
+      if (!groupMatchesLineInboxFilter(group, queueDateFilter, todayYmd)) continue;
       const carRowId = String(group.car_row_id ?? "").trim() || null;
       const matched = carRowId
         ? orders.find((o) => String(o.carRowId ?? "").trim() === carRowId)
@@ -1408,10 +1433,43 @@ function useLineInboxBridgeState({
       });
     }
     return rows.sort((a, b) => b.latestMessageAt - a.latestMessageAt);
-  }, [orders, queueGroups, uiLang]);
+  }, [orders, queueDateFilter, queueGroups, uiLang]);
 
-  /** Badge = number of cars with LINE/AI work today (not line count). */
-  const lineInboxCarCountToday = carPickerRows.length;
+  /** Badge = number of cars/groups with pending LINE/AI work (not line count). */
+  const lineInboxCarCount = queueGroups.filter((group) => {
+    const manualReviewCount = Math.max(0, group.total_manual_reviews ?? 0);
+    const actionCount = Math.max(0, group.total_action_lines ?? 0);
+    const newCount = Math.max(0, group.total_new_lines ?? 0);
+    const photoCount = group.attachments?.length ?? 0;
+    return Math.max(actionCount, newCount) + manualReviewCount > 0 || photoCount > 0;
+  }).length;
+
+  const queueDateFilterOptions = useMemo(() => {
+    const todayYmd = todayYmdBangkok();
+    const options: Array<{ value: LineInboxQueueDateFilter; label: string; count: number }> = [
+      {
+        value: "all",
+        label: uiLang === "en" ? "All pending" : "รอดำเนินการทั้งหมด",
+        count: lineInboxCarCount,
+      },
+      {
+        value: "today",
+        label: uiLang === "en" ? "Today" : "วันนี้",
+        count: queueGroups.filter((group) => groupMatchesLineInboxFilter(group, "today", todayYmd)).length,
+      },
+      {
+        value: "yesterday",
+        label: uiLang === "en" ? "Yesterday" : "เมื่อวาน",
+        count: queueGroups.filter((group) => groupMatchesLineInboxFilter(group, "yesterday", todayYmd)).length,
+      },
+      {
+        value: "manual",
+        label: uiLang === "en" ? "Manual review" : "ต้องตรวจเอง",
+        count: queueGroups.filter((group) => groupMatchesLineInboxFilter(group, "manual", todayYmd)).length,
+      },
+    ];
+    return options;
+  }, [lineInboxCarCount, queueGroups, uiLang]);
 
   const toggleQueueLine = useCallback((inboxId: string, itemIndex: number) => {
     setQueueDeselected((prev) => {
@@ -2341,7 +2399,7 @@ function useLineInboxBridgeState({
         onPointerDown={(e) => e.preventDefault()}
         onClick={() => setOpen(!open)}
         aria-expanded={open}
-        aria-label={uiLang === "en" ? "LINE cars with new work today" : "รถที่มีงานใหม่จาก LINE วันนี้"}
+        aria-label={uiLang === "en" ? "LINE cars with pending work" : "รถที่มีงาน LINE รอดำเนินการ"}
         className={cn(
           "fixed z-[65] flex h-14 min-w-[3.5rem] items-center justify-center gap-1 rounded-full px-4 text-xs font-bold text-white shadow-lg ring-2 touch-manipulation",
           "bottom-[max(1rem,env(safe-area-inset-bottom))] right-[max(0.75rem,env(safe-area-inset-right))]",
@@ -2349,9 +2407,9 @@ function useLineInboxBridgeState({
         )}
       >
         <span className="leading-tight">AI · LINE</span>
-        {lineInboxCarCountToday > 0 ? (
+        {lineInboxCarCount > 0 ? (
           <span className="absolute -right-0.5 -top-0.5 flex h-[22px] min-w-[22px] items-center justify-center rounded-full bg-rose-600 px-1 text-[11px] font-bold tabular-nums ring-2 ring-white">
-            {lineInboxCarCountToday > 99 ? "99+" : lineInboxCarCountToday}
+            {lineInboxCarCount > 99 ? "99+" : lineInboxCarCount}
           </span>
         ) : null}
       </button>
@@ -2373,21 +2431,52 @@ function useLineInboxBridgeState({
           >
             <div className="mx-auto mt-2 h-1 w-10 shrink-0 rounded-full bg-slate-300" />
             <div className="shrink-0 border-b border-slate-100 px-4 pb-3 pt-3">
-              <h2 id="line-inbox-car-drawer-title" className="text-base font-bold text-violet-950">
-                {uiLang === "en" ? "Cars with new LINE work today" : "รถที่มีงานใหม่จาก LINE วันนี้"}
-              </h2>
-              <p className="mt-1 text-[11px] font-medium text-slate-500">
-                {uiLang === "en"
-                  ? `${lineInboxCarCountToday} car(s) · tap to open card`
-                  : `${lineInboxCarCountToday} คัน · แตะเพื่อไปการ์ดรถ`}
-              </p>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h2 id="line-inbox-car-drawer-title" className="text-base font-bold text-violet-950">
+                    {uiLang === "en" ? "Pending LINE work" : "งาน LINE รอดำเนินการ"}
+                  </h2>
+                  <p className="mt-1 text-[11px] font-medium text-slate-500">
+                    {uiLang === "en"
+                      ? `${carPickerRows.length} shown · ${lineInboxCarCount} pending group(s)`
+                      : `แสดง ${carPickerRows.length} รายการ · รอดำเนินการ ${lineInboxCarCount} กลุ่ม`}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void fetchQueue()}
+                  className="min-h-8 shrink-0 rounded-full bg-slate-100 px-3 text-[11px] font-bold text-slate-700 ring-1 ring-slate-200 touch-manipulation active:bg-slate-200"
+                >
+                  {uiLang === "en" ? "Refresh" : "รีเฟรช"}
+                </button>
+              </div>
+              <div className="mt-3 flex gap-1.5 overflow-x-auto pb-0.5">
+                {queueDateFilterOptions.map((option) => {
+                  const active = queueDateFilter === option.value;
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => setQueueDateFilter(option.value)}
+                      className={cn(
+                        "min-h-8 shrink-0 rounded-full px-3 text-[11px] font-bold ring-1 touch-manipulation",
+                        active
+                          ? "bg-violet-700 text-white ring-violet-700"
+                          : "bg-slate-50 text-slate-700 ring-slate-200 active:bg-violet-50"
+                      )}
+                    >
+                      {option.label} {option.count > 0 ? `(${option.count})` : ""}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-3 pt-2">
               {queueLoading ? (
                 <p className="py-6 text-center text-sm text-slate-500">{uiLang === "en" ? "Loading…" : "กำลังโหลด…"}</p>
               ) : carPickerRows.length === 0 ? (
                 <p className="py-6 text-center text-sm text-slate-500">
-                  {uiLang === "en" ? "No cars with new LINE work today." : "วันนี้ยังไม่มีรถที่มีงานใหม่จาก LINE"}
+                  {uiLang === "en" ? "No pending LINE work for this filter." : "ไม่มีงาน LINE รอดำเนินการในตัวกรองนี้"}
                 </p>
               ) : (
                 carDrawerList

@@ -749,6 +749,15 @@ assert(
   "pending queue hides separator/noise/header-only rows"
 );
 assert(
+  pendingQueueRoute.includes('cleanString(row.workflow_status) !== "pending"'),
+  "pending queue hides confirmed/skipped rows even when older rows are selected for context"
+);
+assert(
+  !pendingQueueRoute.includes('gte("received_at"') && !pendingQueueRoute.includes('lte("received_at"'),
+  "pending queue API does not default-hide older pending rows by date"
+);
+assert(pendingQueueRoute.includes(".limit(500)"), "pending queue can return a larger all-pending window");
+assert(
   pendingQueueRoute.includes("isLineImageOnlyText(row.raw_text) && related"),
   "pending queue groups image rows under the previous text row"
 );
@@ -800,6 +809,31 @@ assert(
   lineInboxToolbar.includes("Math.max(actionCount, newCount) + manualReviewCount"),
   "AI LINE navigator does not double-count action_lines and new_lines"
 );
+assert(
+  lineInboxToolbar.includes('useState<LineInboxQueueDateFilter>("all")'),
+  "AI LINE navigator defaults to all pending work"
+);
+assert(
+  lineInboxToolbar.includes('value: "today"') &&
+    lineInboxToolbar.includes('value: "yesterday"') &&
+    lineInboxToolbar.includes('value: "manual"'),
+  "AI LINE navigator exposes today/yesterday/manual review filters"
+);
+assert(
+  lineInboxToolbar.includes("groupMatchesLineInboxFilter(group, queueDateFilter") &&
+    !lineInboxToolbar.includes("groupHasLineWorkToday"),
+  "AI LINE navigator no longer defaults to today-only filtering"
+);
+assert(
+  lineInboxToolbar.includes("5 * 60 * 1000"),
+  "AI LINE pending queue refreshes every five minutes"
+);
+assert(
+  lineInboxToolbar.includes("nextDrafts[rowKey] = prev[rowKey] ?? queueActionDraftForLine") &&
+    lineInboxToolbar.includes("new Set(prev[m.inbox_id] ?? [])"),
+  "AI LINE auto-refresh preserves staged action drafts and deselections by row id"
+);
+assert(lineInboxToolbar.includes("รีเฟรช"), "AI LINE drawer keeps a manual refresh button");
 assert(
   !lineInboxToolbar.includes("owner: ${assignee}"),
   "copy-ready UI reply does not use verbose English owner label"

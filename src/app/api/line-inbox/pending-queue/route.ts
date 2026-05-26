@@ -705,7 +705,7 @@ export async function GET() {
       )
       .in("workflow_status", ["pending", "confirmed"])
       .order("received_at", { ascending: false })
-      .limit(160);
+      .limit(500);
 
     if (error) {
       const m = error.message.toLowerCase();
