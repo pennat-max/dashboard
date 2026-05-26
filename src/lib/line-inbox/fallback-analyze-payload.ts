@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { buildFallbackAnalyzeItemsFromRawText } from "@/lib/line-inbox/fallback-analyze-items";
+import { hasTooManyLineAutoSaveItems } from "@/lib/line-inbox/auto-save-safety";
 import { fetchOrderItemsForTask, fetchOrderTaskIdForCar } from "@/lib/line-inbox/fetch-task-items";
 import { resolveCarFromContext } from "@/lib/line-inbox/resolve-car";
 import type { ExistingOrderItemRow, LineInboxAnalyzeResponse } from "@/lib/line-inbox/types";
@@ -48,6 +49,6 @@ export async function buildFallbackAnalyzePayloadFromRawText(
     matchReason: resolved.matchReason ?? "",
     existing_items: existingItems,
     items,
-    needs_human_review: !carRowId || items.length === 0,
+    needs_human_review: !carRowId || items.length === 0 || hasTooManyLineAutoSaveItems(items.length),
   };
 }

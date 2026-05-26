@@ -13,6 +13,8 @@ import {
   buildLineOrderReviewUrl,
   type LineApprovalAcknowledgementItem,
 } from "@/lib/line-inbox/acknowledgement";
+import { hasTooManyLineAutoSaveItems } from "@/lib/line-inbox/auto-save-safety";
+import { isLineInboxNoiseOrSeparatorOnlyText } from "@/lib/line-inbox/split-line-text";
 import type {
   DuplicateStatus,
   ExistingOrderItemRow,
@@ -240,6 +242,7 @@ export function evaluateLineAutoSaveEligibility(params: {
   const policy = parseLineAllowedGroups(params.allowedGroupIds);
   if (!isLineGroupAllowed(row.group_id, policy)) return { eligible: false, blocked_reason: "group_not_allowed" };
   if (isLineImageOnlyText(row.raw_text)) return { eligible: false, blocked_reason: "image_only" };
+  if (isLineInboxNoiseOrSeparatorOnlyText(row.raw_text)) return { eligible: false, blocked_reason: "noise_or_separator" };
   if (payload.needs_human_review) return { eligible: false, blocked_reason: "needs_human_review" };
 
   const carRowId = cleanLine(payload.detected_car?.car_row_id) || cleanLine(row.car_row_id);
@@ -257,6 +260,7 @@ export function evaluateLineAutoSaveEligibility(params: {
 
   const items = payload.items ?? [];
   if (items.length === 0) return { eligible: false, blocked_reason: "no_items" };
+  if (hasTooManyLineAutoSaveItems(items.length)) return { eligible: false, blocked_reason: "too_many_items" };
 
   const actions: PersistConfirmRow[] = [];
   for (const item of items) {

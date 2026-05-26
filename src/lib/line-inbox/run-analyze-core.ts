@@ -5,6 +5,7 @@ import { classifyDuplicateLine, suggestCategoryAndStatus } from "@/lib/line-inbo
 import { runLineInboxAiAnalyze, type LineInboxAiAnalyzeDraft } from "@/lib/line-inbox/ai-analyze";
 import { splitLineTextForInbox } from "@/lib/line-inbox/split-line-text";
 import { isLineInboxSystemAcknowledgementText } from "@/lib/line-inbox/acknowledgement";
+import { hasTooManyLineAutoSaveItems } from "@/lib/line-inbox/auto-save-safety";
 import type { ExistingOrderItemRow, LineInboxAnalyzeResponse } from "@/lib/line-inbox/types";
 
 export type RunLineInboxAnalyzeInput = {
@@ -330,6 +331,7 @@ export async function runLineInboxAnalyzeCore(
     items.some(
       (i) => i.duplicate_status === "possible_duplicate" || i.duplicate_status === "unclear"
     ) ||
+    hasTooManyLineAutoSaveItems(items.length) ||
     items.length === 0;
 
   return {
