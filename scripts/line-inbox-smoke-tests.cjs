@@ -826,6 +826,14 @@ assert(pendingSaveRoute.includes("existingApprovalItemsFromPayloadForReply"), "p
 assert(pendingSaveRoute.includes("assignee_staff: item.assignee_staff"), "pending-save response includes persisted assignee");
 assert(pendingSaveRoute.includes("status: item.status"), "pending-save response includes persisted status");
 assert(pendingSaveRoute.includes("buildLineOrderReviewUrl"), "pending-save reply uses search review link");
+assert(pendingSaveRoute.includes("LINE_AUTO_REPLY_AFTER_APPROVE_ENABLED"), "manual approval reply is gated by its own env flag");
+assert(pendingSaveRoute.includes("pushLineTextMessage"), "manual approval reply calls the LINE push API helper");
+assert(
+  pendingSaveRoute.includes("manual approval LINE acknowledgement not sent") &&
+    pendingSaveRoute.includes("manual approval LINE acknowledgement sent"),
+  "manual approval reply logs masked send results for production diagnostics"
+);
+assert(pendingSaveRoute.includes("maskLineTarget"), "manual approval reply masks LINE targets in logs");
 assert(
   pendingSaveRoute.includes("assignee_staff: item.assignee_staff"),
   "pending-save passes selected assignee into persistence"

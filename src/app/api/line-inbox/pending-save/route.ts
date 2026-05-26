@@ -59,6 +59,13 @@ function cleanErrorForLog(value: unknown): string {
   return raw.replace(/\s+/g, " ").trim().slice(0, 300) || "LINE acknowledgement failed";
 }
 
+function maskLineTarget(value: unknown): string {
+  const raw = cleanLine(value);
+  if (!raw) return "";
+  if (raw.length <= 8) return `${raw.slice(0, 1)}...${raw.slice(-1)}`;
+  return `${raw.slice(0, 4)}...${raw.slice(-4)}`;
+}
+
 function isMissingDbColumnError(message: string): boolean {
   const m = message.toLowerCase();
   return (
@@ -267,6 +274,11 @@ async function maybeSendApprovalAcknowledgement(params: {
   }
 
   if (params.approvedItems.length === 0) {
+    console.warn("[line-inbox] manual approval LINE acknowledgement not sent", {
+      reason: "no_saved_items",
+      enabled: true,
+      attempted: false,
+    });
     return {
       replyText,
       autoReply: { enabled: true, attempted: false, sent: false, skipped_reason: "no_saved_items" },
@@ -275,6 +287,11 @@ async function maybeSendApprovalAcknowledgement(params: {
 
   const token = process.env.LINE_CHANNEL_ACCESS_TOKEN?.trim() ?? "";
   if (!token) {
+    console.warn("[line-inbox] manual approval LINE acknowledgement not sent", {
+      reason: "missing_token",
+      enabled: true,
+      attempted: false,
+    });
     return {
       replyText,
       autoReply: { enabled: true, attempted: false, sent: false, skipped_reason: "missing_token" },
@@ -283,6 +300,14 @@ async function maybeSendApprovalAcknowledgement(params: {
 
   const target = resolveLinePushTarget(params.row);
   if (!target) {
+    console.warn("[line-inbox] manual approval LINE acknowledgement not sent", {
+      reason: "missing_target",
+      enabled: true,
+      attempted: false,
+      source_type: cleanLine(params.row.source_type) || null,
+      group_id: maskLineTarget(params.row.group_id) || null,
+      user_id: maskLineTarget(params.row.user_id) || null,
+    });
     return {
       replyText,
       autoReply: { enabled: true, attempted: false, sent: false, skipped_reason: "missing_target" },
@@ -296,6 +321,15 @@ async function maybeSendApprovalAcknowledgement(params: {
   });
 
   if (!sent.ok) {
+    console.warn("[line-inbox] manual approval LINE acknowledgement not sent", {
+      reason: "line_error",
+      enabled: true,
+      attempted: true,
+      target_type: target.targetType,
+      target: maskLineTarget(target.target),
+      status: sent.status ?? null,
+      error: cleanErrorForLog(sent.error),
+    });
     return {
       replyText,
       autoReply: {
@@ -308,6 +342,11 @@ async function maybeSendApprovalAcknowledgement(params: {
       },
     };
   }
+
+  console.info("[line-inbox] manual approval LINE acknowledgement sent", {
+    target_type: target.targetType,
+    target: maskLineTarget(target.target),
+  });
 
   return {
     replyText,
