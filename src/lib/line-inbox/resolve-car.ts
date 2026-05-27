@@ -46,6 +46,7 @@ export type CarMatchRow = {
 };
 
 const STOCK_NUMBER_RE = /\b\d{4,6}\b/g;
+const SHORT_MILEAGE_REF_RE = /^\d{3}$/;
 const THAI_PLATE_RE = /(?<![\u0E00-\u0E7F])\d{0,2}[\u0E01-\u0E2E]{1,3}[-\s]?\d{2,4}/g;
 const THAI_STOCK_IDENTITY_RE =
   /^(?:ทะเบียน|เลขทะเบียน|stock|สต็อก|สต๊อก|ref|reference)\s*[:#：-]?\s*(\d{4,6})\b/i;
@@ -93,7 +94,7 @@ export function extractLineInboxMileageCarReference(line: string): string {
   const clean = safeString(line).replace(/\s+/g, " ");
   const thaiPlate = clean.match(/^\s*(\d{0,2}[\u0E01-\u0E2E]{1,3}[-\s]?\d{2,4})\s*(?:[-\u2013\u2014:]|\s)\s*(?:\d{2,3}(?:,\d{3})|\d{4,6})\s*(?:km|kms|\u0e01\u0e21\.?|\u0e01\u0e34\u0e42\u0e25)/i);
   if (thaiPlate?.[1]) return safeString(thaiPlate[1]);
-  const numeric = clean.match(/^\s*(\d{4,6})\s*(?:[-\u2013\u2014:]|\s)\s*(?:\d{2,3}(?:,\d{3})|\d{4,6})\s*(?:km|kms|\u0e01\u0e21\.?|\u0e01\u0e34\u0e42\u0e25)/i);
+  const numeric = clean.match(/^\s*(\d{3,6})\s*(?:[-\u2013\u2014:]|\s)\s*(?:\d{2,3}(?:,\d{3})|\d{4,6})\s*(?:km|kms|\u0e01\u0e21\.?|\u0e01\u0e34\u0e42\u0e25)/i);
   return safeString(numeric?.[1]);
 }
 
@@ -124,6 +125,13 @@ export function extractStockNumbers(text: string): string[] {
     if (/^(?:19|20)\d{2}$/.test(token)) continue;
     if (!out.includes(token)) out.push(token);
   }
+  return out.slice(0, 5);
+}
+
+function extractStockOrMileageRefs(text: string): string[] {
+  const out = extractStockNumbers(text);
+  const mileageRef = extractLineInboxMileageCarReference(text);
+  if (mileageRef && !out.includes(mileageRef)) out.unshift(mileageRef);
   return out.slice(0, 5);
 }
 
@@ -338,6 +346,17 @@ function extractVehicleTokens(text: string): string[] {
   return out.slice(0, 10);
 }
 
+export function scoreLineInboxShortRefPlateMatch(row: CarMatchRow, stock: string): number {
+  const normalizedStock = normalizeSearch(stock);
+  if (!SHORT_MILEAGE_REF_RE.test(normalizedStock)) return 0;
+
+  const plate = normalizeSearch(safeString(row.plate_number));
+  const plateSuffix = normalizeSearch(lineInboxPlateNumericSuffix(row.plate_number));
+  if (plateSuffix && plateSuffix === normalizedStock) return 10;
+  if (plate.endsWith(normalizedStock)) return 8;
+  return 0;
+}
+
 export function scoreLineInboxStockMatch(row: CarMatchRow, stock: string): number {
   const normalizedStock = normalizeSearch(stock);
   if (!normalizedStock) return 0;
@@ -411,7 +430,30 @@ async function queryCarCandidates(
   return (data ?? []) as CarMatchRow[];
 }
 
-function chooseScoredCandidate(rows: CarMatchRow[], contextLine: string): ResolvedCar | null {
+function chooseScoredCandidate(rows: CarMatchRow[], contextLine: string, stockRefs: string[] = []): ResolvedCar | null {
+  const shortRefs = stockRefs.map(normalizeSearch).filter((stock) => SHORT_MILEAGE_REF_RE.test(stock));
+  for (const shortRef of shortRefs) {
+    const shortMatches = rows
+      .map((row) => ({ row, score: scoreLineInboxShortRefPlateMatch(row, shortRef) }))
+      .filter((entry) => entry.score > 0)
+      .sort((a, b) => b.score - a.score);
+
+    if (shortMatches.length > 1) {
+      return {
+        car_row_id: "",
+        plate_text: "",
+        chassis: "",
+        confidence: 0.45,
+        candidate_count: shortMatches.length,
+      };
+    }
+
+    const only = shortMatches[0];
+    if (only?.row?.row_id) {
+      return resolvedFromRow(only.row, 0.72, 1);
+    }
+  }
+
   const scored = rows
     .map((row) => ({ row, score: scoreCandidate(row, contextLine) }))
     .filter((entry) => entry.score >= 4)
@@ -583,15 +625,21 @@ export async function resolveCarFromContext(
       }
     }
 
-    const stocks = extractStockNumbers(line);
-    const stockOrParts = stocks.flatMap((stock) => [
-      `spec.ilike.%${likeToken(stock)}%`,
-      `row_id.ilike.%${likeToken(stock)}%`,
-      `plate_number.ilike.%${likeToken(stock)}%`,
-      `chassis_number.ilike.%${likeToken(stock)}%`,
-    ]);
+    const stocks = extractStockOrMileageRefs(line);
+    const stockOrParts = stocks.flatMap((stock) => {
+      const token = likeToken(stock);
+      if (SHORT_MILEAGE_REF_RE.test(token)) {
+        return [`plate_number.ilike.%${token}`];
+      }
+      return [
+        `spec.ilike.%${token}%`,
+        `row_id.ilike.%${token}%`,
+        `plate_number.ilike.%${token}%`,
+        `chassis_number.ilike.%${token}%`,
+      ];
+    });
     const byStock = await queryCarCandidates(supabase, stockOrParts, 20);
-    const stockMatch = chooseScoredCandidate(byStock, line);
+    const stockMatch = chooseScoredCandidate(byStock, line, stocks);
     if (stockMatch && (stockMatch.car_row_id || (stockMatch.candidate_count ?? 0) > 1)) {
       return withResolveMeta(stockMatch, {
         ...meta,
