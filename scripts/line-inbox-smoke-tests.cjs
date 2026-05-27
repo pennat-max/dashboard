@@ -226,6 +226,20 @@ assertItems(
   "normal work line without car prefix remains unchanged"
 );
 
+assertItems("-กลับสี 1G3", ["กลับสี 1G3"], "extracts repaint/color-change work with leading dash bullet");
+
+assertItems("กลับสี 1G3", ["กลับสี 1G3"], "extracts repaint/color-change work without bullet");
+
+assertItems(
+  ["วกญ-7660", "MR0JB8DD003529457", "", "-กลับสี 1G3"].join("\n"),
+  ["กลับสี 1G3"],
+  "extracts repaint/color-change work after plate and chassis context"
+);
+
+assertItems("-กันสาด", ["กันสาด"], "leading dash bullet is removed from other valid work lines");
+
+assert.deepStrictEqual(splitLineTextForInbox("1G3").items, [], "plain color code alone is not a work item");
+
 assertItems(
   [
     "1นค-8637 COMMUTER 2WD 3.0 No MT VAN WHITE Feb18",
