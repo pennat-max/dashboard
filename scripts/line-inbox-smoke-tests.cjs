@@ -81,6 +81,7 @@ const {
 const {
   extractLineInboxMileageCarReference,
   lineInboxPlateNumericSuffix,
+  scoreLineInboxShortRefPlateMatch,
   scoreLineInboxStockMatch,
   extractStockNumbers,
 } = loadTsFile(path.join(root, "src/lib/line-inbox/resolve-car.ts"));
@@ -227,12 +228,16 @@ assertItems(thaiAddMoreAwning, [thaiAwning], "header prefix with real work keeps
 const thaiMileage47500 = "\u0e01\u0e23\u0e2d\u0e44\u0e21\u0e25\u0e4c 47,000 KM";
 const thaiMileage67500 = "\u0e01\u0e23\u0e2d\u0e44\u0e21\u0e25\u0e4c 67,500 KM";
 const thaiMileage39800 = "\u0e01\u0e23\u0e2d\u0e44\u0e21\u0e25\u0e4c 39,800 KM";
+const thaiMileage36600 = "\u0e01\u0e23\u0e2d\u0e44\u0e21\u0e25\u0e4c 36,600 KM";
 assertItems("4380 - 47000 KM.", [thaiMileage47500], "plate/ref plus mileage becomes a mileage work item");
 assertItems("4380 - 47,000 KM", [thaiMileage47500], "comma mileage is normalized");
+assertItems("368 - 36600 KM.", [thaiMileage36600], "short plate/ref plus mileage becomes a mileage work item");
 assertItems("\u0e19\u0e02-6866 - 67500 KM", [thaiMileage67500], "Thai plate plus mileage becomes a mileage work item");
 assertItems("\u0e01\u0e23\u0e2d\u0e44\u0e21\u0e25\u0e4c 47000 KM", [thaiMileage47500], "mileage without car remains a work item");
 assert.strictEqual(extractLineInboxMileageCarReference("4380 - 47000 KM."), "4380", "mileage line keeps first ref as car candidate");
+assert.strictEqual(extractLineInboxMileageCarReference("368 - 36600 KM."), "368", "short mileage line keeps first ref as car candidate");
 assert.strictEqual(extractLineInboxMileageCarReference("\u0e19\u0e02-6866 - 67500 KM"), "\u0e19\u0e02-6866", "mileage line keeps Thai plate as car candidate");
+assert.deepStrictEqual(extractStockNumbers("368 - 36600 KM."), [], "short ref is only a mileage-context candidate and mileage number is not a stock/ref candidate");
 assert.deepStrictEqual(extractStockNumbers("4380 - 47000 KM."), ["4380"], "mileage number is not a stock/ref candidate");
 assert.deepStrictEqual(extractStockNumbers("4380 - 47,000 KM"), ["4380"], "comma mileage number is not a stock/ref candidate");
 assert.deepStrictEqual(extractStockNumbers("\u0e19\u0e02-6866 67500 KM"), ["6866"], "Thai plate mileage keeps only plate digits as candidate");
@@ -243,6 +248,14 @@ assert.strictEqual(lineInboxPlateNumericSuffix("\u0e19\u0e02-6866"), "6866", "Th
 assert(scoreLineInboxStockMatch({ plate_number: "\u0e19\u0e02-6866" }, "6866") > scoreLineInboxStockMatch({ spec: "6866" }, "6866"), "plate suffix outranks loose spec match");
 assert.strictEqual(scoreLineInboxStockMatch({ row_id: "a18c7942-10fc-4d32-8059-5b97f86ec9e8" }, "6866"), 0, "UUID row_id substrings do not count as stock/ref matches");
 assert.strictEqual(scoreLineInboxStockMatch({ plate_number: "\u0e01\u0e01-6866" }, "6866"), scoreLineInboxStockMatch({ plate_number: "\u0e19\u0e02-6866" }, "6866"), "duplicate suffix plates score equally and remain ambiguous upstream");
+assert(scoreLineInboxShortRefPlateMatch({ plate_number: "3\u0e02\u0e07-368" }, "368") > 0, "three-digit mileage ref can match a plate suffix when unique");
+assert.strictEqual(scoreLineInboxShortRefPlateMatch({ plate_number: "3\u0e02\u0e0e-3680" }, "368"), 0, "three-digit mileage ref does not match non-suffix plate digits");
+assert.strictEqual(scoreLineInboxShortRefPlateMatch({ spec: "368" }, "368"), 0, "three-digit mileage ref does not match loose spec-only text");
+assert.strictEqual(
+  scoreLineInboxShortRefPlateMatch({ plate_number: "5\u0e01\u0e01-368" }, "368"),
+  scoreLineInboxShortRefPlateMatch({ plate_number: "3\u0e02\u0e07-368" }, "368"),
+  "duplicate three-digit suffix plates score equally and remain ambiguous upstream"
+);
 const waitingCarRecordText = [
   "44582 Raptor Double Cab Raptor 2.0L 4WD AT BLACK 2025 \u0e1b\u0e49\u0e32\u0e22\u0e41\u0e14\u0e07",
   "\u0e23\u0e16\u0e21\u0e32\u0e2a\u0e31\u0e1b\u0e14\u0e32\u0e2b\u0e4c\u0e04\u0e48\u0e30",
