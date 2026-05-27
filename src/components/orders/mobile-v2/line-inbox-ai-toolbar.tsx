@@ -101,8 +101,10 @@ type PendingQueueMessage = {
   related_photo_ids?: string[];
   relatedPhotoIds?: string[];
   suggestedItems?: string[];
-  extractionStatus?: "ok" | "no_items" | "needs_manual_review";
+  extractionStatus?: "ok" | "no_items" | "needs_manual_review" | "matched_no_work";
   matchStatus?: "matched" | "unresolved";
+  reviewUrl?: string;
+  review_url?: string;
   car_row_id: string;
   sale?: string;
   raw_text?: string;
@@ -177,8 +179,10 @@ type PendingQueueGroup = {
   related_photo_ids?: string[];
   relatedPhotoIds?: string[];
   suggestedItems?: string[];
-  extractionStatus?: "ok" | "no_items" | "needs_manual_review";
+  extractionStatus?: "ok" | "no_items" | "needs_manual_review" | "matched_no_work";
   matchStatus?: "matched" | "unresolved";
+  reviewUrl?: string;
+  review_url?: string;
   sale: string;
   source_label?: string;
   source_type?: string;
@@ -453,7 +457,8 @@ function queueMessageNeedsManualReview(message: PendingQueueMessage): boolean {
   const flagged =
     Boolean(message.needs_human_review) ||
     String(message.extractionStatus ?? "").trim() === "needs_manual_review" ||
-    String(message.extractionStatus ?? "").trim() === "no_items";
+    String(message.extractionStatus ?? "").trim() === "no_items" ||
+    String(message.extractionStatus ?? "").trim() === "matched_no_work";
   const hasImagePlaceholderOnly =
     (message.action_lines ?? []).some((line) =>
       isLineInboxImagePlaceholderText(line.raw_text) || isLineInboxImagePlaceholderText(line.suggested_item_name)
@@ -461,6 +466,17 @@ function queueMessageNeedsManualReview(message: PendingQueueMessage): boolean {
   if (hasImagePlaceholderOnly) return true;
   if (flagged) return true;
   return Boolean(queueMessageRawText(message));
+}
+
+function queueMessageMatchedNoWork(message: PendingQueueMessage): boolean {
+  return String(message.extractionStatus ?? "").trim() === "matched_no_work" && queueMessageHasMatchedCar(message);
+}
+
+function queueGroupMatchedNoWork(group: PendingQueueGroup): boolean {
+  return (
+    String(group.extractionStatus ?? "").trim() === "matched_no_work" ||
+    group.messages.some(queueMessageMatchedNoWork)
+  );
 }
 
 function queueMessageHasMatchedCar(message: PendingQueueMessage): boolean {
@@ -562,6 +578,9 @@ function queueMessageManualReviewTitle(uiLang: UiLang): string {
 function queueMessageManualReviewReason(message: PendingQueueMessage, uiLang: UiLang): string {
   const reason = String(message.manual_review_reason ?? "").trim();
   if (reason) return reason;
+  if (queueMessageMatchedNoWork(message)) {
+    return uiLang === "en" ? "No work items found yet." : "ยังไม่พบรายการงาน";
+  }
   if (queueMessageHasMatchedCar(message)) {
     return uiLang === "en"
       ? "AI could not split work items yet - manual review needed."
@@ -903,8 +922,10 @@ type LineInboxCarPickerRow = {
   sale: string;
   jobCount: number;
   manualReviewCount: number;
+  matchedNoWork: boolean;
   photoCount: number;
   isUnresolved: boolean;
+  reviewUrl: string;
   manualReviewPreview: string;
   detectedCarLabel: string;
   extractedCarCandidates: LineInboxCarCandidate[];
@@ -1358,7 +1379,7 @@ function useLineInboxBridgeState({
 
   const queueManualReviewCount =
     queueTotalManualReview || queueMessages.reduce((sum, message) => sum + (queueMessageNeedsManualReview(message) ? 1 : 0), 0);
-  const queueActionCount = Math.max(0, queueTotalAction + queueManualReviewCount);
+  const queueActionCount = Math.max(0, queueTotalAction);
   const queueMessageCount = Math.max(
     0,
     queueTotalNew || queueMessages.reduce((sum, message) => sum + Math.max(0, message.new_line_count || 0), 0)
@@ -1380,15 +1401,19 @@ function useLineInboxBridgeState({
   const queueBadgeIsPhotoLed = queueHasOnlyPhotos || queueBadgePrefersPhotos;
   const rawBadgeTotal = queueBadgeIsPhotoLed
     ? queuePhotoCount
-    : (queueActionCount || queueMessageCount) + pendingSaveCount;
+    : (queueActionCount || queueMessageCount || queueManualReviewCount) + pendingSaveCount;
   const showBadgeDot = rawBadgeTotal > 0;
   const aiLineBadgeLabel = queueBadgeIsPhotoLed
     ? uiLang === "en"
       ? "new photos"
       : "รูปใหม่"
-    : uiLang === "en"
-      ? "new jobs"
-      : "งานใหม่";
+    : queueActionCount === 0 && queueManualReviewCount > 0
+      ? uiLang === "en"
+        ? "manual review"
+        : "ต้องตรวจเอง"
+      : uiLang === "en"
+        ? "new jobs"
+        : "งานใหม่";
 
   const carPickerRows = useMemo((): LineInboxCarPickerRow[] => {
     const todayYmd = todayYmdBangkok();
@@ -1402,13 +1427,17 @@ function useLineInboxBridgeState({
       const manualReviewCount = Math.max(0, group.total_manual_reviews ?? 0);
       const actionCount = Math.max(0, group.total_action_lines ?? 0);
       const newCount = Math.max(0, group.total_new_lines ?? 0);
-      const jobCount = Math.max(actionCount, newCount) + manualReviewCount;
+      const jobCount = Math.max(actionCount, newCount);
+      const matchedNoWork = queueGroupMatchedNoWork(group);
       const photoCount = group.attachments?.length ?? 0;
       const manualReviewMessage = group.messages.find(queueMessageNeedsManualReview) ?? null;
       const fallbackTitle = String(group.fallback_title ?? group.fallbackTitle ?? "").trim();
       const fallbackDescription = String(group.fallback_description ?? group.fallbackDescription ?? "").trim();
       const displayTitle = queueGroupDisplayTitle(group, uiLang);
-      if (jobCount === 0 && photoCount === 0) continue;
+      const reviewUrl =
+        String(group.reviewUrl ?? group.review_url ?? "").trim() ||
+        buildOrderReviewUrl({ carRowId: carRowId ?? undefined, plate: displayTitle || fallbackTitle });
+      if (jobCount === 0 && manualReviewCount === 0 && photoCount === 0) continue;
       rows.push({
         groupKey: group.group_key,
         orderId: matched?.id ?? null,
@@ -1418,8 +1447,10 @@ function useLineInboxBridgeState({
         sale: String(group.sale ?? "").trim() || String(matched?.sale ?? "").trim(),
         jobCount,
         manualReviewCount,
+        matchedNoWork,
         photoCount,
         isUnresolved: queueGroupIsUnresolved(group),
+        reviewUrl,
         manualReviewPreview: manualReviewMessage ? queueMessageRawText(manualReviewMessage).slice(0, 180) : "",
         detectedCarLabel: manualReviewMessage ? queueDetectedCarLabel(manualReviewMessage) : "",
         extractedCarCandidates: group.extractedCarCandidates ?? manualReviewMessage?.extractedCarCandidates ?? [],
@@ -2280,15 +2311,18 @@ function useLineInboxBridgeState({
         <li key={row.groupKey}>
           <button
             type="button"
-            disabled={!row.orderId}
+            disabled={!row.orderId && !row.reviewUrl}
             onClick={() => {
-              if (!row.orderId) return;
-              setOpen(false);
-              onPickCar?.({ orderId: row.orderId, carRowId: row.carRowId, plate: row.plate });
+              if (row.orderId) {
+                setOpen(false);
+                onPickCar?.({ orderId: row.orderId, carRowId: row.carRowId, plate: row.plate });
+                return;
+              }
+              if (row.reviewUrl) window.location.assign(row.reviewUrl);
             }}
             className={cn(
               "w-full rounded-2xl px-3 py-3 text-left ring-1 touch-manipulation",
-              row.orderId
+              row.orderId || row.reviewUrl
                 ? "bg-slate-50 ring-slate-200/80 active:bg-violet-50"
                 : "cursor-not-allowed bg-slate-100/80 ring-slate-200/60 opacity-70"
             )}
@@ -2318,7 +2352,13 @@ function useLineInboxBridgeState({
               ) : null}
               {row.manualReviewCount > 0 ? (
                 <span className="rounded-full bg-amber-50 px-1.5 py-0.5 text-amber-800 ring-1 ring-amber-200">
-                  {uiLang === "en" ? "Manual review" : "รอตรวจด้วยมือ"}
+                  {row.matchedNoWork
+                    ? uiLang === "en"
+                      ? "Car matched"
+                      : "จับรถได้แล้ว"
+                    : uiLang === "en"
+                      ? "Manual review"
+                      : "รอตรวจด้วยมือ"}
                 </span>
               ) : null}
               {row.isUnresolved ? (
@@ -2342,6 +2382,10 @@ function useLineInboxBridgeState({
                     ? uiLang === "en"
                       ? "AI could not split work items yet."
                       : "AI ยังแยกงานไม่ได้"
+                    : row.matchedNoWork
+                      ? uiLang === "en"
+                        ? "Car matched"
+                        : "จับรถได้แล้ว ✅"
                     : uiLang === "en"
                       ? "Review LINE work manually"
                       : "รอตรวจงานจาก LINE"}
@@ -2354,6 +2398,17 @@ function useLineInboxBridgeState({
                 ) : null}
                 {row.isUnresolved ? (
                   <p className="mt-1 text-rose-700">{uiLang === "en" ? "Car is still unclear." : "ยังจับรถไม่ชัด"}</p>
+                ) : row.matchedNoWork ? (
+                  <>
+                    <p className="mt-1 font-semibold text-emerald-800">
+                      {uiLang === "en" ? "No work items found yet." : "ยังไม่พบรายการงาน"}
+                    </p>
+                    <p className="mt-1 text-slate-700">
+                      {uiLang === "en"
+                        ? "Tap to open this car and add work manually."
+                        : "แตะเพื่อเปิดรถคันนี้และเพิ่มงานเอง"}
+                    </p>
+                  </>
                 ) : (
                   <p className="mt-1 font-semibold text-emerald-800">
                     {uiLang === "en" ? "Car matched - review work manually." : "จับรถได้แล้ว — รอตรวจงาน"}
@@ -2565,14 +2620,27 @@ function useLineInboxBridgeState({
         })();
         const fallbackAssignee = resolveSaleStaffForOrder(group.sale, saleAssigneesBySale);
         const matchedCar = queueMessageHasMatchedCar(m) || queueGroupHasMatchedCar(group);
+        const matchedNoWork = queueMessageMatchedNoWork(m);
         const selectedActions = selectedQueueActionsForInbox(m, fallbackAssignee);
+        const messageReviewUrl =
+          String(m.reviewUrl ?? m.review_url ?? group.reviewUrl ?? group.review_url ?? "").trim() ||
+          buildOrderReviewUrl({
+            carRowId: messageCarRowId || undefined,
+            plate: m.plate_display || group.plate_display || m.car_title || group.car_title,
+          });
         return (
           <div key={m.inbox_id} className="rounded-xl bg-white px-2.5 py-2.5 ring-1 ring-slate-200/80">
             {showManual ? (
               <div className="mb-2.5 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-[12px] leading-relaxed text-amber-950">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <p className="text-sm font-bold">{queueMessageManualReviewTitle(uiLang)}</p>
+                    <p className="text-sm font-bold">
+                      {matchedNoWork
+                        ? uiLang === "en"
+                          ? "Car matched"
+                          : "จับรถได้แล้ว ✅"
+                        : queueMessageManualReviewTitle(uiLang)}
+                    </p>
                     <p className="mt-0.5 font-medium">{queueMessageManualReviewReason(m, uiLang)}</p>
                   </div>
                   {m.received_at ? (
@@ -2598,7 +2666,13 @@ function useLineInboxBridgeState({
                   </p>
                 ) : (
                   <p className="mt-1 font-semibold text-emerald-800">
-                    {uiLang === "en" ? "Car matched - review work manually." : "จับรถได้แล้ว — รอตรวจงาน"}
+                    {matchedNoWork
+                      ? uiLang === "en"
+                        ? "Car matched - no work items found yet."
+                        : "จับรถได้แล้ว ✅ — ยังไม่พบรายการงาน"
+                      : uiLang === "en"
+                        ? "Car matched - review work manually."
+                        : "จับรถได้แล้ว — รอตรวจงาน"}
                   </p>
                 )}
                 {m.car_row_id ? (
@@ -2650,6 +2724,26 @@ function useLineInboxBridgeState({
                   </div>
                 ) : null}
                 <div className="mt-3">
+                  {matchedCar && messageCarRowId ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={savingInboxId === m.inbox_id}
+                      onClick={() => {
+                        const order = orders.find((item) => String(item.carRowId ?? "").trim() === messageCarRowId);
+                        if (order) {
+                          setOpen(false);
+                          onPickCar?.({ orderId: order.id, carRowId: messageCarRowId, plate: m.plate_display || group.plate_display || "-" });
+                          return;
+                        }
+                        if (messageReviewUrl) window.location.assign(messageReviewUrl);
+                      }}
+                      className="mb-2 min-h-11 w-full touch-manipulation border-emerald-200 bg-emerald-50 text-emerald-900 hover:bg-emerald-100"
+                    >
+                      {uiLang === "en" ? "Open car / add work manually" : "เปิดรถคันนี้ / เพิ่มงานเอง"}
+                    </Button>
+                  ) : null}
                   <Button
                     type="button"
                     size="sm"

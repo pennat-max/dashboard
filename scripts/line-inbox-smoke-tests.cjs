@@ -594,6 +594,16 @@ assert.strictEqual(
 assert.strictEqual(
   evaluateLineAutoSaveEligibility({
     row: autoSaveRow,
+    payload: autoSavePayload({ items: [] }),
+    enabled: true,
+    allowedGroupIds: "*",
+  }).blocked_reason,
+  "no_items",
+  "matched car with no work items does not auto-save"
+);
+assert.strictEqual(
+  evaluateLineAutoSaveEligibility({
+    row: autoSaveRow,
     payload: autoSavePayload({
       items: [
         {
@@ -812,6 +822,12 @@ for (const token of [
   assert(pendingQueueRoute.includes(token), `pending queue exposes ${token}`);
 }
 assert(
+  pendingQueueRoute.includes('"matched_no_work"') &&
+    pendingQueueRoute.includes("matchedNoWorkOnly") &&
+    pendingQueueRoute.includes("buildLineOrderReviewUrl"),
+  "pending queue exposes matched car/no-work rows with a review URL"
+);
+assert(
   pendingQueueRoute.includes("isLineInboxNoiseOrSeparatorOnlyText(String(row.raw_text"),
   "pending queue hides separator/noise/header-only rows"
 );
@@ -873,8 +889,18 @@ assert(
   "queue duplicate warning uses fallback assignee draft defaults"
 );
 assert(
-  lineInboxToolbar.includes("Math.max(actionCount, newCount) + manualReviewCount"),
+  lineInboxToolbar.includes("const jobCount = Math.max(actionCount, newCount)"),
   "AI LINE navigator does not double-count action_lines and new_lines"
+);
+assert(
+  lineInboxToolbar.includes("queueGroupMatchedNoWork") &&
+    lineInboxToolbar.includes("Open car / add work manually") &&
+    lineInboxToolbar.includes("jobCount = Math.max(actionCount, newCount)"),
+  "AI LINE navigator shows matched-car/no-work rows as open-car manual review instead of new jobs"
+);
+assert(
+  lineInboxToolbar.includes("queueActionCount === 0 && queueManualReviewCount > 0"),
+  "AI LINE badge labels manual-only rows as manual review instead of new jobs"
 );
 assert(
   lineInboxToolbar.includes('useState<LineInboxQueueDateFilter>("all")'),

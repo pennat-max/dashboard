@@ -5,6 +5,7 @@ import { LINE_INBOX_MESSAGES_TABLE } from "@/lib/line-inbox/line-inbox-messages"
 import { buildFallbackAnalyzeItemsFromRawText } from "@/lib/line-inbox/fallback-analyze-items";
 import { buildFallbackAnalyzePayloadFromRawText } from "@/lib/line-inbox/fallback-analyze-payload";
 import { isLineInboxNoiseOrSeparatorOnlyText } from "@/lib/line-inbox/split-line-text";
+import { buildLineOrderReviewUrl } from "@/lib/line-inbox/review-link";
 import type {
   DuplicateStatus,
   ExistingOrderItemRow,
@@ -112,8 +113,10 @@ type PendingQueueMsg = {
   related_photo_ids: string[];
   relatedPhotoIds: string[];
   suggestedItems: string[];
-  extractionStatus: "ok" | "no_items" | "needs_manual_review";
+  extractionStatus: "ok" | "no_items" | "needs_manual_review" | "matched_no_work";
   matchStatus: "matched" | "unresolved";
+  reviewUrl: string;
+  review_url: string;
   car_row_id: string;
   sale: string;
   raw_text: string;
@@ -154,8 +157,10 @@ type PendingQueueGroup = {
   related_photo_ids: string[];
   relatedPhotoIds: string[];
   suggestedItems: string[];
-  extractionStatus: "ok" | "no_items" | "needs_manual_review";
+  extractionStatus: "ok" | "no_items" | "needs_manual_review" | "matched_no_work";
   matchStatus: "matched" | "unresolved";
+  reviewUrl: string;
+  review_url: string;
   sale: string;
   source_label: string;
   source_type: string;
@@ -627,10 +632,14 @@ function groupMessages(messages: PendingQueueMsg[]): PendingQueueGroup[] {
       existing.extractionStatus =
         existing.extractionStatus === "ok" || message.extractionStatus === "ok"
           ? "ok"
+          : existing.extractionStatus === "matched_no_work" || message.extractionStatus === "matched_no_work"
+            ? "matched_no_work"
           : existing.extractionStatus === "needs_manual_review" || message.extractionStatus === "needs_manual_review"
             ? "needs_manual_review"
             : "no_items";
       existing.matchStatus = existing.car_row_id ? "matched" : "unresolved";
+      if (!existing.reviewUrl) existing.reviewUrl = message.reviewUrl;
+      if (!existing.review_url) existing.review_url = message.review_url;
       continue;
     }
 
@@ -660,6 +669,8 @@ function groupMessages(messages: PendingQueueMsg[]): PendingQueueGroup[] {
       suggestedItems: message.suggestedItems,
       extractionStatus: message.extractionStatus,
       matchStatus: message.matchStatus,
+      reviewUrl: message.reviewUrl,
+      review_url: message.review_url,
       sale: message.sale,
       source_label: message.source_label,
       source_type: message.source_type,
@@ -824,8 +835,9 @@ export async function GET() {
         });
       });
       const manualReviewOnly = needsHumanReview && actionEntries.length === 0;
+      const matchedNoWorkOnly = Boolean(car_row_id) && actionEntries.length === 0;
 
-      if (actionEntries.length === 0 && !manualReviewOnly) continue;
+      if (actionEntries.length === 0 && !manualReviewOnly && !matchedNoWorkOnly) continue;
 
       const attachmentOverrides = {
         carRowId: car_row_id,
@@ -871,12 +883,22 @@ export async function GET() {
       );
       const suggestedItems = actionEntriesForMessage.map((entry) => entry.suggested_item_name).filter(Boolean);
       const extractionStatus =
-        actionEntriesForMessage.length > 0 ? "ok" : needsHumanReview ? "needs_manual_review" : "no_items";
+        actionEntriesForMessage.length > 0
+          ? "ok"
+          : matchedNoWorkOnly
+            ? "matched_no_work"
+            : needsHumanReview
+              ? "needs_manual_review"
+              : "no_items";
       const matchStatus = car_row_id ? "matched" : "unresolved";
+      const queueNeedsHumanReview = needsHumanReview || matchedNoWorkOnly;
+      const reviewUrl = car_row_id
+        ? buildLineOrderReviewUrl({ carRowId: car_row_id, plate: plateText || carTitle || fallbackTitle })
+        : "";
 
       totalNew += newEntries.length;
       totalAction += actionEntriesForMessage.length;
-      totalManualReview += manualReviewOnly ? 1 : 0;
+      totalManualReview += manualReviewOnly || matchedNoWorkOnly ? 1 : 0;
       messages.push({
         inbox_id: id,
         received_at: String(row.received_at ?? ""),
@@ -906,12 +928,16 @@ export async function GET() {
         suggestedItems,
         extractionStatus,
         matchStatus,
+        reviewUrl,
+        review_url: reviewUrl,
         car_row_id: car_row_id || "",
         sale,
         raw_text: String(row.raw_text ?? "").trim(),
         raw_text_preview: fallbackDescription.slice(0, 120),
         detected_car: detectedCarForQueue(payload, car_row_id || "", related),
-        manual_review_reason: manualReviewOnly
+        manual_review_reason: matchedNoWorkOnly
+          ? "จับรถได้แล้ว แต่ยังไม่พบรายการงาน"
+          : manualReviewOnly
           ? car_row_id
             ? "AI ยังแยกงานไม่ได้ — รอตรวจด้วยมือ"
             : "AI ยังแยกงานไม่ได้"
@@ -922,7 +948,7 @@ export async function GET() {
         action_line_count: actionEntriesForMessage.length,
         existing_items: uniqueExistingItems(payload.existing_items ?? []),
         attachments: messageAttachments,
-        needs_human_review: needsHumanReview,
+        needs_human_review: queueNeedsHumanReview,
         group_anchor_id: relatedTextMessageId || (isLineImageOnlyText(row.raw_text) ? imageOnlyFallbackGroupAnchor(row) : id),
       });
     }
