@@ -83,6 +83,11 @@ const {
   extractStockNumbers,
 } = loadTsFile(path.join(root, "src/lib/line-inbox/resolve-car.ts"));
 const {
+  extractLineQuotedMessageId,
+  makeLineReplyCaptureAnalyzePayload,
+  withLineReplyAnalyzeContext,
+} = loadTsFile(path.join(root, "src/lib/line-inbox/reply-context.ts"));
+const {
   parseLineAllowedGroups,
   isLineGroupAllowed,
 } = loadTsFile(path.join(root, "src/lib/line/allowed-groups.ts"));
@@ -274,6 +279,66 @@ assertItems(
 assertItems("-กันสาด", ["กันสาด"], "leading dash bullet is removed from other valid work lines");
 
 assert.deepStrictEqual(splitLineTextForInbox("1G3").items, [], "plain color code alone is not a work item");
+
+assertItems("รถเข้ามาแล้วจ้า มาเมื่อวาน @Nat💕", ["รถเข้ามาแล้ว"], "extracts arrived-car reply status text");
+
+assert.strictEqual(
+  extractLineQuotedMessageId({ quotedMessageId: "468789532432007169", type: "text" }),
+  "468789532432007169",
+  "extracts LINE quotedMessageId from webhook text message"
+);
+assert.deepStrictEqual(
+  makeLineReplyCaptureAnalyzePayload({
+    quotedMessageId: "468789532432007169",
+    quoteToken: "quote-token",
+  }),
+  {
+    line_context: {
+      context_source: "reply_context",
+      quoted_message_id: "468789532432007169",
+      quote_token: "quote-token",
+    },
+  },
+  "stores quote metadata in analyze_payload without schema changes"
+);
+const replyContextPayload = withLineReplyAnalyzeContext(
+  {
+    detected_car: {
+      plate_text: "",
+      chassis: "",
+      car_row_id: "car-row-parent",
+      confidence: 1,
+      spec_text: "OVERLAND PLUS D-CAB 2.8 AT 4x4 (2026) ASH",
+      sale: "",
+    },
+    existing_items: [],
+    items: [
+      {
+        raw_text: "รถเข้ามาแล้ว",
+        suggested_item_name: "รถเข้ามาแล้ว",
+        suggested_category: "status",
+        suggested_status: "เช็ค",
+        duplicate_status: "new",
+        matched_order_item_id: "",
+        matched_item_name: "",
+        confidence: 0.9,
+        reason: "clear reply status",
+      },
+    ],
+    needs_human_review: false,
+  },
+  {
+    context_source: "reply_context",
+    quoted_message_id: "468789532432007169",
+    source_line_message_id: "468789532432007169",
+    source_inbox_message_id: "parent-inbox-row",
+    source_car_row_id: "car-row-parent",
+    source_raw_text_preview: "MR0YA3AV403022076 / 1GD1958983 22076",
+  }
+);
+assert.strictEqual(replyContextPayload.context_source, "reply_context", "reply context is marked on analyze payload");
+assert.strictEqual(replyContextPayload.reply_context.source_car_row_id, "car-row-parent", "reply to matched car inherits car_row_id context");
+assert(replyContextPayload.matchReason.includes("reply"), "reply context explains match reason");
 
 assertItems(
   [
@@ -604,6 +669,26 @@ assert.strictEqual(
   }).blocked_reason,
   "missing_car",
   "mileage item without matched car remains blocked from auto-save"
+);
+assert.strictEqual(
+  evaluateLineAutoSaveEligibility({
+    row: autoSaveRow,
+    payload: autoSavePayload({
+      context_source: "reply_context",
+      reply_context: {
+        context_source: "reply_context",
+        quoted_message_id: "quoted-parent-without-car-row",
+        source_raw_text_preview: "OVERLAND PLUS D-CAB 2.8 AT 4x4 (2026) ASH",
+        confidence: "medium",
+      },
+      detected_car: { ...autoSavePayload().detected_car, car_row_id: "", confidence: 0.4 },
+      aiTargetCarConfidence: "medium",
+    }),
+    enabled: true,
+    allowedGroupIds: "*",
+  }).blocked_reason,
+  "missing_car",
+  "reply context without matched car_row_id still blocks auto-save"
 );
 assert.strictEqual(
   evaluateLineAutoSaveEligibility({

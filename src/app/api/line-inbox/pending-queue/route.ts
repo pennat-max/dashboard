@@ -71,6 +71,10 @@ type PendingQueueAttachment = {
   aiTargetCarConfidence: string;
   matchReason: string;
   inheritedCarRowId: string;
+  context_source: string;
+  contextSource: string;
+  reply_context: LineInboxAnalyzeResponse["reply_context"] | null;
+  replyContext: LineInboxAnalyzeResponse["reply_context"] | null;
   sale: string;
   needs_human_review: boolean;
   status: "not_linked";
@@ -109,6 +113,10 @@ type PendingQueueMsg = {
   aiTargetCarConfidence: string;
   matchReason: string;
   inheritedCarRowId: string;
+  context_source: string;
+  contextSource: string;
+  reply_context: LineInboxAnalyzeResponse["reply_context"] | null;
+  replyContext: LineInboxAnalyzeResponse["reply_context"] | null;
   related_photo_ids: string[];
   relatedPhotoIds: string[];
   suggestedItems: string[];
@@ -151,6 +159,10 @@ type PendingQueueGroup = {
   aiTargetCarConfidence: string;
   matchReason: string;
   inheritedCarRowId: string;
+  context_source: string;
+  contextSource: string;
+  reply_context: LineInboxAnalyzeResponse["reply_context"] | null;
+  replyContext: LineInboxAnalyzeResponse["reply_context"] | null;
   related_photo_ids: string[];
   relatedPhotoIds: string[];
   suggestedItems: string[];
@@ -403,6 +415,8 @@ function extractStoredAttachments(
     aiTargetCarConfidence?: string;
     matchReason?: string;
     inheritedCarRowId?: string;
+    contextSource?: string;
+    replyContext?: LineInboxAnalyzeResponse["reply_context"] | null;
   } = {}
 ): PendingQueueAttachment[] {
   const inboxId = String(row.id ?? "").trim();
@@ -423,6 +437,8 @@ function extractStoredAttachments(
   const aiTargetCarConfidence = cleanString(overrides.aiTargetCarConfidence) || cleanString(payload.aiTargetCarConfidence);
   const matchReason = cleanString(overrides.matchReason) || cleanString(payload.matchReason);
   const inheritedCarRowId = cleanString(overrides.inheritedCarRowId);
+  const contextSource = cleanString(overrides.contextSource) || cleanString(payload.context_source);
+  const replyContext = overrides.replyContext ?? payload.reply_context ?? null;
   return (payload.line_attachments ?? [])
     .filter((attachment: LineInboxAttachmentMeta) => {
       return attachment.status === "stored" && Boolean(String(attachment.public_url ?? "").trim());
@@ -457,6 +473,10 @@ function extractStoredAttachments(
       aiTargetCarConfidence,
       matchReason,
       inheritedCarRowId,
+      context_source: contextSource,
+      contextSource,
+      reply_context: replyContext,
+      replyContext,
       sale: cleanString(overrides.sale) || String(payload.detected_car?.sale ?? "").trim(),
       needs_human_review: Boolean(payload.needs_human_review),
       status: "not_linked" as const,
@@ -621,6 +641,10 @@ function groupMessages(messages: PendingQueueMsg[]): PendingQueueGroup[] {
       if (!existing.aiTargetCarConfidence) existing.aiTargetCarConfidence = message.aiTargetCarConfidence;
       if (!existing.matchReason) existing.matchReason = message.matchReason;
       if (!existing.inheritedCarRowId) existing.inheritedCarRowId = message.inheritedCarRowId;
+      if (!existing.context_source) existing.context_source = message.context_source;
+      if (!existing.contextSource) existing.contextSource = message.contextSource;
+      if (!existing.reply_context) existing.reply_context = message.reply_context;
+      if (!existing.replyContext) existing.replyContext = message.replyContext;
       existing.related_photo_ids = attachmentIds(existing.attachments);
       existing.relatedPhotoIds = existing.related_photo_ids;
       existing.suggestedItems = Array.from(new Set([...existing.suggestedItems, ...message.suggestedItems]));
@@ -655,6 +679,10 @@ function groupMessages(messages: PendingQueueMsg[]): PendingQueueGroup[] {
       aiTargetCarConfidence: message.aiTargetCarConfidence,
       matchReason: message.matchReason,
       inheritedCarRowId: message.inheritedCarRowId,
+      context_source: message.context_source,
+      contextSource: message.contextSource,
+      reply_context: message.reply_context,
+      replyContext: message.replyContext,
       related_photo_ids: message.related_photo_ids,
       relatedPhotoIds: message.relatedPhotoIds,
       suggestedItems: message.suggestedItems,
@@ -780,6 +808,8 @@ export async function GET() {
         cleanString(payload.aiTargetCarConfidence) || cleanString(related?.payload?.aiTargetCarConfidence);
       const matchReason = cleanString(payload.matchReason) || cleanString(related?.payload?.matchReason);
       const inheritedCarRowId = inheritedCarRowIdForQueue(payload, row, related);
+      const contextSource = cleanString(payload.context_source) || cleanString(related?.payload?.context_source);
+      const replyContext = payload.reply_context ?? related?.payload?.reply_context ?? null;
       const needsHumanReview = Boolean(payload.needs_human_review || rowNeedsHumanReview);
       const queueItems =
         (payload.items ?? []).length > 0
@@ -843,6 +873,8 @@ export async function GET() {
         aiTargetCarConfidence,
         matchReason,
         inheritedCarRowId,
+        contextSource,
+        replyContext,
       };
       const messageAttachments = uniqueAttachments([
         ...extractStoredAttachments(payload, row, attachmentOverrides),
@@ -901,6 +933,10 @@ export async function GET() {
         aiTargetCarConfidence,
         matchReason,
         inheritedCarRowId,
+        context_source: contextSource,
+        contextSource,
+        reply_context: replyContext,
+        replyContext,
         related_photo_ids: relatedPhotoIds,
         relatedPhotoIds,
         suggestedItems,

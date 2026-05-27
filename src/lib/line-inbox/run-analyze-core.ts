@@ -12,6 +12,7 @@ export type RunLineInboxAnalyzeInput = {
   raw_text: string;
   car_row_id?: string | null;
   car_id?: number | null;
+  car_context_text?: string | null;
   attachmentsCount?: number;
   useAi?: boolean;
 };
@@ -262,6 +263,7 @@ export async function runLineInboxAnalyzeCore(
   input: RunLineInboxAnalyzeInput
 ): Promise<LineInboxAnalyzeResponse & { attachments_meta_count: number }> {
   const raw_text = String(input.raw_text ?? "").trim();
+  const car_context_text = String(input.car_context_text ?? "").trim();
   const car_row_id_in = String(input.car_row_id ?? "").trim();
   const carIdForTask = input.car_id != null && Number.isFinite(Number(input.car_id)) ? Number(input.car_id) : null;
   const attachmentsCount = Math.max(0, Math.floor(input.attachmentsCount ?? 0));
@@ -278,7 +280,7 @@ export async function runLineInboxAnalyzeCore(
   const detected = await resolveCarFromContext(supabase, {
     car_row_id: car_row_id_in || null,
     car_id: carIdForTask,
-    raw_text,
+    raw_text: [raw_text, car_context_text].filter(Boolean).join("\n"),
     aiTargetCarReference: aiDraft?.target_car_reference ?? null,
     aiTargetCarReason: aiDraft?.target_car_reason ?? null,
     aiTargetCarConfidence: aiDraft?.target_car_confidence ?? null,

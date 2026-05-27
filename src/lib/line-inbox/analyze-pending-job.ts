@@ -7,8 +7,15 @@ import {
   maybeAutoSaveAnalyzedLineInbox,
   type LineAutoSaveRunResult,
 } from "@/lib/line-inbox/auto-save";
+import {
+  getQuotedMessageIdFromAnalyzePayload,
+  previewReplyContextRawText,
+  withLineReplyAnalyzeContext,
+  type LineReplyAnalyzeContext,
+} from "@/lib/line-inbox/reply-context";
 import { runLineInboxAnalyzeCore } from "@/lib/line-inbox/run-analyze-core";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
+import type { LineInboxAnalyzeResponse } from "@/lib/line-inbox/types";
 
 export type AnalyzePendingOptions = {
   limit?: unknown;
@@ -27,6 +34,7 @@ type PendingInboxRow = {
   received_at?: string | null;
   workflow_status?: string | null;
   analyze_status?: string | null;
+  analyze_payload?: unknown;
 };
 
 type AnalyzePendingItemResult = {
@@ -73,6 +81,67 @@ function isMissingTableError(message: string): boolean {
   );
 }
 
+function cleanLine(value: unknown): string {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function isAnalyzePayload(body: unknown): body is LineInboxAnalyzeResponse {
+  if (!body || typeof body !== "object") return false;
+  const o = body as Record<string, unknown>;
+  return Boolean(o.detected_car && typeof o.detected_car === "object" && Array.isArray(o.items));
+}
+
+async function resolveLineReplyContext(
+  supabase: ReturnType<typeof createServiceRoleClient>,
+  row: PendingInboxRow
+): Promise<LineReplyAnalyzeContext | null> {
+  const quotedMessageId = getQuotedMessageIdFromAnalyzePayload(row.analyze_payload);
+  if (!quotedMessageId) return null;
+
+  let query = supabase
+    .from(LINE_INBOX_MESSAGES_TABLE)
+    .select("id,line_message_id,raw_text,source_type,group_id,user_id,workflow_status,analyze_status,analyze_payload,car_row_id")
+    .eq("line_message_id", quotedMessageId)
+    .limit(1);
+
+  const sourceType = cleanLine(row.source_type);
+  const groupId = cleanLine(row.group_id);
+  const userId = cleanLine(row.user_id);
+  if (sourceType) query = query.eq("source_type", sourceType);
+  if (groupId) query = query.eq("group_id", groupId);
+  if (!groupId && userId) query = query.eq("user_id", userId);
+
+  const { data, error } = await query.maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) {
+    return {
+      context_source: "reply_context",
+      quoted_message_id: quotedMessageId,
+      confidence: "low",
+      reason: "จากข้อความที่ reply: ไม่พบข้อความต้นฉบับใน inbox",
+    };
+  }
+
+  const parent = data as PendingInboxRow;
+  const parentPayload = isAnalyzePayload(parent.analyze_payload) ? parent.analyze_payload : null;
+  const sourceCarRowId =
+    cleanLine(parent.car_row_id) || cleanLine(parentPayload?.detected_car?.car_row_id);
+  return {
+    context_source: "reply_context",
+    quoted_message_id: quotedMessageId,
+    source_line_message_id: cleanLine(parent.line_message_id),
+    source_inbox_message_id: cleanLine(parent.id),
+    source_car_row_id: sourceCarRowId || undefined,
+    source_raw_text: cleanLine(parent.raw_text),
+    source_raw_text_preview: previewReplyContextRawText(parent.raw_text),
+    source_detected_car: parentPayload?.detected_car,
+    confidence: sourceCarRowId ? "high" : cleanLine(parent.raw_text) ? "medium" : "low",
+    reason: sourceCarRowId
+      ? "จากข้อความที่ reply: ใช้รถจากข้อความก่อนหน้า"
+      : "จากข้อความที่ reply: ใช้ข้อความก่อนหน้าเป็นบริบทรถ",
+  };
+}
+
 /**
  * Pending analyzer for webhook captures.
  *
@@ -91,7 +160,9 @@ export async function runAnalyzePendingJob(
   try {
     let query = supabase
       .from(LINE_INBOX_MESSAGES_TABLE)
-      .select("id,line_message_id,raw_text,source_type,group_id,user_id,received_at,workflow_status,analyze_status,car_row_id")
+      .select(
+        "id,line_message_id,raw_text,source_type,group_id,user_id,received_at,workflow_status,analyze_status,analyze_payload,car_row_id"
+      )
       .eq("workflow_status", "pending")
       .eq("analyze_status", "pending")
       .order("received_at", { ascending: true })
@@ -122,20 +193,24 @@ export async function runAnalyzePendingJob(
       const existingCarRowId = String(row.car_row_id ?? "").trim();
 
       try {
+        const replyContext = await resolveLineReplyContext(supabase, row);
+        const replyCarRowId = cleanLine(replyContext?.source_car_row_id);
         const payload = await runLineInboxAnalyzeCore(supabase, {
           raw_text: rawText,
-          car_row_id: existingCarRowId || null,
+          car_row_id: existingCarRowId || replyCarRowId || null,
+          car_context_text: replyContext?.source_raw_text ?? null,
           attachmentsCount: 0,
           useAi,
         });
-        const detectedCarRowId = String(payload.detected_car.car_row_id ?? "").trim();
+        const payloadWithReplyContext = withLineReplyAnalyzeContext(payload, replyContext);
+        const detectedCarRowId = String(payloadWithReplyContext.detected_car.car_row_id ?? "").trim();
         const carRowId = detectedCarRowId || existingCarRowId || null;
 
         await updateLineInboxMessageAnalyze(supabase, inboxId, {
           analyze_status: "ok",
           analyze_error: null,
-          analyze_payload: payload,
-          needs_human_review: payload.needs_human_review,
+          analyze_payload: payloadWithReplyContext,
+          needs_human_review: payloadWithReplyContext.needs_human_review,
           car_row_id: carRowId,
         });
         let autoSave: AnalyzePendingItemResult["auto_save"];
@@ -153,7 +228,7 @@ export async function runAnalyzePendingJob(
               analyze_status: "ok",
               car_row_id: carRowId,
             },
-            payload,
+            payload: payloadWithReplyContext,
           });
         } catch (error) {
           autoSave = {
@@ -171,8 +246,8 @@ export async function runAnalyzePendingJob(
         results.push({
           inbox_message_id: inboxId,
           analyze_status: "ok",
-          item_count: payload.items.length,
-          needs_human_review: payload.needs_human_review,
+          item_count: payloadWithReplyContext.items.length,
+          needs_human_review: payloadWithReplyContext.needs_human_review,
           car_row_id: carRowId,
           auto_save: autoSave,
         });
