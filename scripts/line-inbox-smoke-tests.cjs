@@ -78,6 +78,9 @@ const {
   buildLineOrderSearchRef,
   buildLineOrderReviewUrl,
 } = loadTsFile(path.join(root, "src/lib/line-inbox/review-link.ts"));
+const { deriveLineInboxMatchStatus } = loadTsFile(
+  path.join(root, "src/lib/line-inbox/car-match-status.ts")
+);
 const { extractStockNumbers } = loadTsFile(path.join(root, "src/lib/line-inbox/resolve-car.ts"));
 const {
   parseLineAllowedGroups,
@@ -255,6 +258,52 @@ assert.deepStrictEqual(
   extractStockNumbers("51072 เอาของ 31440"),
   ["51072", "31440"],
   "multiple real car refs are still candidates and not treated as mileage"
+);
+
+const waitingCarRecordText = [
+  "44582 Raptor Double Cab Raptor 2.0L 4WD AT BLACK 2025 ป้ายแดง",
+  "รถมาสัปดาห์ค่ะ",
+  "- ติดตั้ง โรเลอร์ AUTO ยี่ห้อ HAMMER",
+  "- ติดป้าย shazad",
+  "- กุญแจสำรองไม่ต้องซ่อนใส่ในพวงได้เลย",
+].join("\n");
+assert.deepStrictEqual(
+  deriveLineInboxMatchStatus({
+    rawText: waitingCarRecordText,
+    extractedCarCandidates: [
+      {
+        text: "44582 Raptor Double Cab Raptor 2.0L 4WD AT BLACK 2025 ป้ายแดง",
+        kind: "vehicle_context",
+        confidence: "high",
+      },
+    ],
+    matchReason: 'Multiple spec/model candidates from "44582 Raptor Double Cab Raptor 2.0L 4WD AT BLACK 2025 ป้ายแดง"',
+  }),
+  { matchStatus: "waiting_for_car_record", unmatchedReason: "pending_car_record" },
+  "strong vehicle-looking stock/spec text with no resolved car is shown as waiting for car record"
+);
+assert.strictEqual(
+  deriveLineInboxMatchStatus({
+    rawText: "Raptor Double Cab BLACK ป้ายแดง",
+    extractedCarCandidates: [{ text: "Raptor Double Cab BLACK ป้ายแดง", kind: "vehicle_context" }],
+    matchReason: 'Multiple spec/model candidates from "Raptor Double Cab BLACK ป้ายแดง"',
+  }).matchStatus,
+  "ambiguous_vehicle",
+  "vehicle context without stock/ref stays ambiguous instead of pending car record"
+);
+assert.strictEqual(
+  deriveLineInboxMatchStatus({ rawText: "ฝากดูให้หน่อย", extractedCarCandidates: [], matchReason: "No car candidates found" }).matchStatus,
+  "no_vehicle_context",
+  "plain no-car text stays no_vehicle_context"
+);
+assert.strictEqual(
+  deriveLineInboxMatchStatus({ carRowId: "car-row-1", rawText: waitingCarRecordText }).matchStatus,
+  "matched",
+  "resolved car rows remain matched"
+);
+assert(
+  splitLineTextForInbox(waitingCarRecordText).items.includes("ติดตั้ง โรเลอร์ AUTO ยี่ห้อ HAMMER"),
+  "waiting-for-record rows keep parsed work items visible"
 );
 
 assertItems(
@@ -594,6 +643,20 @@ assert.strictEqual(
 assert.strictEqual(
   evaluateLineAutoSaveEligibility({
     row: autoSaveRow,
+    payload: autoSavePayload({
+      detected_car: { ...autoSavePayload().detected_car, car_row_id: "" },
+      matchStatus: "waiting_for_car_record",
+      unmatchedReason: "pending_car_record",
+    }),
+    enabled: true,
+    allowedGroupIds: "*",
+  }).blocked_reason,
+  "pending_car_record",
+  "waiting-for-record rows are blocked from auto-save with a specific reason"
+);
+assert.strictEqual(
+  evaluateLineAutoSaveEligibility({
+    row: autoSaveRow,
     payload: autoSavePayload({ items: [] }),
     enabled: true,
     allowedGroupIds: "*",
@@ -828,6 +891,12 @@ assert(
   "pending queue exposes matched car/no-work rows with a review URL"
 );
 assert(
+  pendingQueueRoute.includes("waiting_for_car_record") &&
+    pendingQueueRoute.includes("unmatchedReason") &&
+    pendingQueueRoute.includes("pending_car_record"),
+  "pending queue exposes waiting-for-car-record status for likely new/unsynced vehicles"
+);
+assert(
   pendingQueueRoute.includes("isLineInboxNoiseOrSeparatorOnlyText(String(row.raw_text"),
   "pending queue hides separator/noise/header-only rows"
 );
@@ -897,6 +966,12 @@ assert(
     lineInboxToolbar.includes("Open car / add work manually") &&
     lineInboxToolbar.includes("jobCount = Math.max(actionCount, newCount)"),
   "AI LINE navigator shows matched-car/no-work rows as open-car manual review instead of new jobs"
+);
+assert(
+  lineInboxToolbar.includes("queueGroupIsWaitingForCarRecord") &&
+    lineInboxToolbar.includes("Car not in records yet") &&
+    lineInboxToolbar.includes("Waiting for car record"),
+  "AI LINE navigator labels likely new/unsynced vehicle rows separately from unclear car matches"
 );
 assert(
   lineInboxToolbar.includes("queueActionCount === 0 && queueManualReviewCount > 0"),

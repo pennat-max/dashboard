@@ -6,6 +6,11 @@ import { buildFallbackAnalyzeItemsFromRawText } from "@/lib/line-inbox/fallback-
 import { buildFallbackAnalyzePayloadFromRawText } from "@/lib/line-inbox/fallback-analyze-payload";
 import { isLineInboxNoiseOrSeparatorOnlyText } from "@/lib/line-inbox/split-line-text";
 import { buildLineOrderReviewUrl } from "@/lib/line-inbox/review-link";
+import {
+  deriveLineInboxMatchStatus,
+  type LineInboxMatchStatus,
+  type LineInboxUnmatchedReason,
+} from "@/lib/line-inbox/car-match-status";
 import type {
   DuplicateStatus,
   ExistingOrderItemRow,
@@ -86,6 +91,8 @@ type PendingQueueDetectedCar = {
   confidence: number;
 };
 
+type PendingQueueMatchStatus = LineInboxMatchStatus;
+
 type PendingQueueMsg = {
   inbox_id: string;
   received_at: string;
@@ -114,7 +121,9 @@ type PendingQueueMsg = {
   relatedPhotoIds: string[];
   suggestedItems: string[];
   extractionStatus: "ok" | "no_items" | "needs_manual_review" | "matched_no_work";
-  matchStatus: "matched" | "unresolved";
+  matchStatus: PendingQueueMatchStatus;
+  unmatchedReason: LineInboxUnmatchedReason;
+  unmatched_reason: LineInboxUnmatchedReason;
   reviewUrl: string;
   review_url: string;
   car_row_id: string;
@@ -158,7 +167,9 @@ type PendingQueueGroup = {
   relatedPhotoIds: string[];
   suggestedItems: string[];
   extractionStatus: "ok" | "no_items" | "needs_manual_review" | "matched_no_work";
-  matchStatus: "matched" | "unresolved";
+  matchStatus: PendingQueueMatchStatus;
+  unmatchedReason: LineInboxUnmatchedReason;
+  unmatched_reason: LineInboxUnmatchedReason;
   reviewUrl: string;
   review_url: string;
   sale: string;
@@ -596,6 +607,33 @@ function uniqueAttachments(items: PendingQueueAttachment[]): PendingQueueAttachm
   return out;
 }
 
+function matchStatusRank(status: PendingQueueMatchStatus): number {
+  switch (status) {
+    case "matched":
+      return 4;
+    case "waiting_for_car_record":
+      return 3;
+    case "ambiguous_vehicle":
+      return 2;
+    case "unresolved":
+      return 1;
+    case "no_vehicle_context":
+    default:
+      return 0;
+  }
+}
+
+function strongerMatchStatus(a: PendingQueueMatchStatus, b: PendingQueueMatchStatus): PendingQueueMatchStatus {
+  return matchStatusRank(b) > matchStatusRank(a) ? b : a;
+}
+
+function unmatchedReasonForStatus(status: PendingQueueMatchStatus, fallback: LineInboxUnmatchedReason): LineInboxUnmatchedReason {
+  if (status === "waiting_for_car_record") return "pending_car_record";
+  if (status === "ambiguous_vehicle" || status === "unresolved") return fallback || "multiple_candidates";
+  if (status === "no_vehicle_context") return "no_car_candidate";
+  return "";
+}
+
 function groupMessages(messages: PendingQueueMsg[]): PendingQueueGroup[] {
   const map = new Map<string, PendingQueueGroup>();
 
@@ -637,7 +675,9 @@ function groupMessages(messages: PendingQueueMsg[]): PendingQueueGroup[] {
           : existing.extractionStatus === "needs_manual_review" || message.extractionStatus === "needs_manual_review"
             ? "needs_manual_review"
             : "no_items";
-      existing.matchStatus = existing.car_row_id ? "matched" : "unresolved";
+      existing.matchStatus = existing.car_row_id ? "matched" : strongerMatchStatus(existing.matchStatus, message.matchStatus);
+      existing.unmatchedReason = unmatchedReasonForStatus(existing.matchStatus, existing.unmatchedReason || message.unmatchedReason);
+      existing.unmatched_reason = existing.unmatchedReason;
       if (!existing.reviewUrl) existing.reviewUrl = message.reviewUrl;
       if (!existing.review_url) existing.review_url = message.review_url;
       continue;
@@ -669,6 +709,8 @@ function groupMessages(messages: PendingQueueMsg[]): PendingQueueGroup[] {
       suggestedItems: message.suggestedItems,
       extractionStatus: message.extractionStatus,
       matchStatus: message.matchStatus,
+      unmatchedReason: message.unmatchedReason,
+      unmatched_reason: message.unmatched_reason,
       reviewUrl: message.reviewUrl,
       review_url: message.review_url,
       sale: message.sale,
@@ -890,7 +932,26 @@ export async function GET() {
             : needsHumanReview
               ? "needs_manual_review"
               : "no_items";
-      const matchStatus = car_row_id ? "matched" : "unresolved";
+      const matchMeta = deriveLineInboxMatchStatus({
+        carRowId: car_row_id,
+        rawText: row.raw_text,
+        extractedCarCandidates,
+        matchReason,
+      });
+      const storedMatchStatus = cleanString(payload.matchStatus);
+      const matchStatus =
+        car_row_id
+          ? "matched"
+          : storedMatchStatus === "waiting_for_car_record" ||
+              storedMatchStatus === "ambiguous_vehicle" ||
+              storedMatchStatus === "no_vehicle_context" ||
+              storedMatchStatus === "unresolved"
+            ? storedMatchStatus
+            : matchMeta.matchStatus;
+      const unmatchedReason =
+        matchStatus === "matched"
+          ? ""
+          : (cleanString(payload.unmatchedReason) as LineInboxUnmatchedReason) || matchMeta.unmatchedReason;
       const queueNeedsHumanReview = needsHumanReview || matchedNoWorkOnly;
       const reviewUrl = car_row_id
         ? buildLineOrderReviewUrl({ carRowId: car_row_id, plate: plateText || carTitle || fallbackTitle })
@@ -928,6 +989,8 @@ export async function GET() {
         suggestedItems,
         extractionStatus,
         matchStatus,
+        unmatchedReason,
+        unmatched_reason: unmatchedReason,
         reviewUrl,
         review_url: reviewUrl,
         car_row_id: car_row_id || "",
@@ -937,6 +1000,10 @@ export async function GET() {
         detected_car: detectedCarForQueue(payload, car_row_id || "", related),
         manual_review_reason: matchedNoWorkOnly
           ? "จับรถได้แล้ว แต่ยังไม่พบรายการงาน"
+          : matchStatus === "waiting_for_car_record"
+          ? "ระบบยังไม่พบรถคันนี้ในข้อมูลปัจจุบัน อาจเป็นรถที่ยังไม่เข้า Record / ยังไม่ sync / เลขอ้างอิงยังไม่ตรง กรุณาตรวจสอบอีกครั้ง"
+          : matchStatus === "ambiguous_vehicle"
+          ? "ข้อความนี้คล้ายข้อมูลรถหลายคัน กรุณาค้นหา/เลือกเองก่อนบันทึก"
           : manualReviewOnly
           ? car_row_id
             ? "AI ยังแยกงานไม่ได้ — รอตรวจด้วยมือ"

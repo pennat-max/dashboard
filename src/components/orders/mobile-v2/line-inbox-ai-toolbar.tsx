@@ -102,7 +102,9 @@ type PendingQueueMessage = {
   relatedPhotoIds?: string[];
   suggestedItems?: string[];
   extractionStatus?: "ok" | "no_items" | "needs_manual_review" | "matched_no_work";
-  matchStatus?: "matched" | "unresolved";
+  matchStatus?: "matched" | "waiting_for_car_record" | "ambiguous_vehicle" | "no_vehicle_context" | "unresolved";
+  unmatchedReason?: "" | "pending_car_record" | "multiple_candidates" | "no_car_candidate";
+  unmatched_reason?: "" | "pending_car_record" | "multiple_candidates" | "no_car_candidate";
   reviewUrl?: string;
   review_url?: string;
   car_row_id: string;
@@ -180,7 +182,9 @@ type PendingQueueGroup = {
   relatedPhotoIds?: string[];
   suggestedItems?: string[];
   extractionStatus?: "ok" | "no_items" | "needs_manual_review" | "matched_no_work";
-  matchStatus?: "matched" | "unresolved";
+  matchStatus?: "matched" | "waiting_for_car_record" | "ambiguous_vehicle" | "no_vehicle_context" | "unresolved";
+  unmatchedReason?: "" | "pending_car_record" | "multiple_candidates" | "no_car_candidate";
+  unmatched_reason?: "" | "pending_car_record" | "multiple_candidates" | "no_car_candidate";
   reviewUrl?: string;
   review_url?: string;
   sale: string;
@@ -505,6 +509,41 @@ function queueGroupIsUnresolved(group: PendingQueueGroup): boolean {
   return !queueGroupHasMatchedCar(group) && Boolean(group.is_unresolved);
 }
 
+function queueMessageIsWaitingForCarRecord(message: PendingQueueMessage): boolean {
+  return (
+    String(message.matchStatus ?? "").trim() === "waiting_for_car_record" ||
+    String(message.unmatchedReason ?? message.unmatched_reason ?? "").trim() === "pending_car_record"
+  );
+}
+
+function queueGroupIsWaitingForCarRecord(group: PendingQueueGroup): boolean {
+  return (
+    !queueGroupHasMatchedCar(group) &&
+    (String(group.matchStatus ?? "").trim() === "waiting_for_car_record" ||
+      String(group.unmatchedReason ?? group.unmatched_reason ?? "").trim() === "pending_car_record" ||
+      group.messages.some(queueMessageIsWaitingForCarRecord))
+  );
+}
+
+function queueMessageIsAmbiguousVehicle(message: PendingQueueMessage): boolean {
+  return (
+    !queueMessageHasMatchedCar(message) &&
+    !queueMessageIsWaitingForCarRecord(message) &&
+    (String(message.matchStatus ?? "").trim() === "ambiguous_vehicle" ||
+      String(message.unmatchedReason ?? message.unmatched_reason ?? "").trim() === "multiple_candidates")
+  );
+}
+
+function queueGroupIsAmbiguousVehicle(group: PendingQueueGroup): boolean {
+  return (
+    !queueGroupHasMatchedCar(group) &&
+    !queueGroupIsWaitingForCarRecord(group) &&
+    (String(group.matchStatus ?? "").trim() === "ambiguous_vehicle" ||
+      String(group.unmatchedReason ?? group.unmatched_reason ?? "").trim() === "multiple_candidates" ||
+      group.messages.some(queueMessageIsAmbiguousVehicle))
+  );
+}
+
 function queueMessageWorkActionLines(message: PendingQueueMessage): PendingQueueActionLine[] {
   return (message.action_lines ?? []).filter(
     (line) =>
@@ -571,13 +610,29 @@ function queueMessageRawText(message: PendingQueueMessage): string {
   return raw;
 }
 
-function queueMessageManualReviewTitle(uiLang: UiLang): string {
+function queueMessageManualReviewTitle(message: PendingQueueMessage, uiLang: UiLang): string {
+  if (queueMessageIsWaitingForCarRecord(message)) {
+    return uiLang === "en" ? "Waiting for car record" : "รอรถเข้าระบบ 🚧";
+  }
+  if (queueMessageIsAmbiguousVehicle(message)) {
+    return uiLang === "en" ? "Vehicle match needs review" : "ต้องตรวจรถเอง";
+  }
   return uiLang === "en" ? "Needs manual review" : "รอตรวจด้วยมือ";
 }
 
 function queueMessageManualReviewReason(message: PendingQueueMessage, uiLang: UiLang): string {
   const reason = String(message.manual_review_reason ?? "").trim();
   if (reason) return reason;
+  if (queueMessageIsWaitingForCarRecord(message)) {
+    return uiLang === "en"
+      ? "This looks like a vehicle from LINE, but it is not in the current car records yet. Check Record/sync/ref number before saving."
+      : "ระบบยังไม่พบรถคันนี้ในข้อมูลปัจจุบัน อาจเป็นรถที่ยังไม่เข้า Record / ยังไม่ sync / เลขอ้างอิงยังไม่ตรง กรุณาตรวจสอบอีกครั้ง";
+  }
+  if (queueMessageIsAmbiguousVehicle(message)) {
+    return uiLang === "en"
+      ? "Several vehicle candidates may match this text. Please choose or search manually."
+      : "ข้อความนี้คล้ายข้อมูลรถหลายคัน กรุณาค้นหา/เลือกเองก่อนบันทึก";
+  }
   if (queueMessageMatchedNoWork(message)) {
     return uiLang === "en" ? "No work items found yet." : "ยังไม่พบรายการงาน";
   }
@@ -925,6 +980,8 @@ type LineInboxCarPickerRow = {
   matchedNoWork: boolean;
   photoCount: number;
   isUnresolved: boolean;
+  isWaitingForCarRecord: boolean;
+  isAmbiguousVehicle: boolean;
   reviewUrl: string;
   manualReviewPreview: string;
   detectedCarLabel: string;
@@ -1429,6 +1486,8 @@ function useLineInboxBridgeState({
       const newCount = Math.max(0, group.total_new_lines ?? 0);
       const jobCount = Math.max(actionCount, newCount);
       const matchedNoWork = queueGroupMatchedNoWork(group);
+      const isWaitingForCarRecord = queueGroupIsWaitingForCarRecord(group);
+      const isAmbiguousVehicle = queueGroupIsAmbiguousVehicle(group);
       const photoCount = group.attachments?.length ?? 0;
       const manualReviewMessage = group.messages.find(queueMessageNeedsManualReview) ?? null;
       const fallbackTitle = String(group.fallback_title ?? group.fallbackTitle ?? "").trim();
@@ -1438,18 +1497,28 @@ function useLineInboxBridgeState({
         String(group.reviewUrl ?? group.review_url ?? "").trim() ||
         buildOrderReviewUrl({ carRowId: carRowId ?? undefined, plate: displayTitle || fallbackTitle });
       if (jobCount === 0 && manualReviewCount === 0 && photoCount === 0) continue;
+      const rowPlate = isWaitingForCarRecord
+        ? uiLang === "en"
+          ? "Waiting for car record"
+          : "รอรถเข้าระบบ 🚧"
+        : (matched?.fullPlate || (displayTitle !== "-" && displayTitle !== "ยังไม่จับรถ" ? displayTitle : "") || fallbackTitle || "").trim() || "-";
+      const rowSpec = isWaitingForCarRecord
+        ? displayTitle || fallbackDescription || String(group.car_title ?? "").trim() || matched?.car || ""
+        : String(group.car_title ?? "").trim() || matched?.car || fallbackDescription || "";
       rows.push({
         groupKey: group.group_key,
         orderId: matched?.id ?? null,
         carRowId,
-        plate: (matched?.fullPlate || (displayTitle !== "-" && displayTitle !== "ยังไม่จับรถ" ? displayTitle : "") || fallbackTitle || "").trim() || "-",
-        spec: String(group.car_title ?? "").trim() || matched?.car || fallbackDescription || "",
+        plate: rowPlate,
+        spec: rowSpec,
         sale: String(group.sale ?? "").trim() || String(matched?.sale ?? "").trim(),
         jobCount,
         manualReviewCount,
         matchedNoWork,
         photoCount,
         isUnresolved: queueGroupIsUnresolved(group),
+        isWaitingForCarRecord,
+        isAmbiguousVehicle,
         reviewUrl,
         manualReviewPreview: manualReviewMessage ? queueMessageRawText(manualReviewMessage).slice(0, 180) : "",
         detectedCarLabel: manualReviewMessage ? queueDetectedCarLabel(manualReviewMessage) : "",
@@ -2363,7 +2432,17 @@ function useLineInboxBridgeState({
               ) : null}
               {row.isUnresolved ? (
                 <span className="rounded-full bg-rose-50 px-1.5 py-0.5 text-rose-800 ring-1 ring-rose-200">
-                  {uiLang === "en" ? "Needs car match - manual review" : "ยังจับรถไม่ได้ — รอตรวจด้วยมือ"}
+                  {row.isWaitingForCarRecord
+                    ? uiLang === "en"
+                      ? "Car not in records yet"
+                      : "รถยังไม่มีข้อมูล"
+                    : row.isAmbiguousVehicle
+                      ? uiLang === "en"
+                        ? "Vehicle match unclear"
+                        : "ต้องตรวจรถเอง"
+                      : uiLang === "en"
+                        ? "Needs car match - manual review"
+                        : "ยังจับรถไม่ได้ — รอตรวจด้วยมือ"}
                 </span>
               ) : null}
             </div>
@@ -2378,7 +2457,11 @@ function useLineInboxBridgeState({
             {row.manualReviewCount > 0 ? (
               <div className="mt-2 rounded-xl bg-amber-50 px-2 py-2 text-[11px] font-medium leading-relaxed text-amber-950 ring-1 ring-amber-100">
                 <p className="font-bold">
-                  {row.isUnresolved
+                    {row.isWaitingForCarRecord
+                      ? uiLang === "en"
+                        ? "Waiting for car record"
+                        : "รอรถเข้าระบบ 🚧"
+                      : row.isUnresolved
                     ? uiLang === "en"
                       ? "AI could not split work items yet."
                       : "AI ยังแยกงานไม่ได้"
@@ -2396,7 +2479,13 @@ function useLineInboxBridgeState({
                     {row.detectedCarLabel}
                   </p>
                 ) : null}
-                {row.isUnresolved ? (
+                {row.isWaitingForCarRecord ? (
+                  <p className="mt-1 text-rose-700">
+                    {uiLang === "en"
+                      ? "The system cannot find this car in current records yet. Check Record/sync/ref number, then reprocess or search manually."
+                      : "ระบบยังไม่พบรถคันนี้ในข้อมูลปัจจุบัน อาจเป็นรถที่ยังไม่เข้า Record / ยังไม่ sync / เลขอ้างอิงยังไม่ตรง กรุณาตรวจสอบอีกครั้ง"}
+                  </p>
+                ) : row.isUnresolved ? (
                   <p className="mt-1 text-rose-700">{uiLang === "en" ? "Car is still unclear." : "ยังจับรถไม่ชัด"}</p>
                 ) : row.matchedNoWork ? (
                   <>
@@ -2639,7 +2728,7 @@ function useLineInboxBridgeState({
                         ? uiLang === "en"
                           ? "Car matched"
                           : "จับรถได้แล้ว ✅"
-                        : queueMessageManualReviewTitle(uiLang)}
+                        : queueMessageManualReviewTitle(m, uiLang)}
                     </p>
                     <p className="mt-0.5 font-medium">{queueMessageManualReviewReason(m, uiLang)}</p>
                   </div>
@@ -2761,6 +2850,30 @@ function useLineInboxBridgeState({
                         : "ข้าม / ทำเครื่องหมายว่าตรวจแล้ว"}
                   </Button>
                 </div>
+              </div>
+            ) : null}
+            {!showManual && queueMessageIsWaitingForCarRecord(m) ? (
+              <div className="mb-2.5 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-[12px] leading-relaxed text-amber-950">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold">{uiLang === "en" ? "Waiting for car record" : "รอรถเข้าระบบ 🚧"}</p>
+                    <p className="mt-0.5 font-medium">
+                      {uiLang === "en"
+                        ? "The work was parsed, but this vehicle is not in current records yet. Check Record/sync/ref number before saving."
+                        : "ระบบแยกรายการงานได้แล้ว แต่ยังไม่พบรถคันนี้ในข้อมูลปัจจุบัน อาจเป็นรถที่ยังไม่เข้า Record / ยังไม่ sync / เลขอ้างอิงยังไม่ตรง กรุณาตรวจสอบอีกครั้ง"}
+                    </p>
+                  </div>
+                  {m.received_at ? (
+                    <span className="shrink-0 rounded-full bg-white/80 px-2 py-1 text-[10px] font-semibold text-slate-600 ring-1 ring-amber-100">
+                      {formatQueueMessageReceivedAt(m.received_at, uiLang)}
+                    </span>
+                  ) : null}
+                </div>
+                {queueMessageRawText(m) ? (
+                  <p className="mt-2 line-clamp-2 whitespace-pre-wrap text-[11px] font-semibold text-slate-700">
+                    {queueMessageRawText(m)}
+                  </p>
+                ) : null}
               </div>
             ) : null}
             {displayLines.length > 0 ? (

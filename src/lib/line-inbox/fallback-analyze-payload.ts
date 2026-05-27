@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { buildFallbackAnalyzeItemsFromRawText } from "@/lib/line-inbox/fallback-analyze-items";
 import { hasTooManyLineAutoSaveItems } from "@/lib/line-inbox/auto-save-safety";
+import { deriveLineInboxMatchStatus } from "@/lib/line-inbox/car-match-status";
 import { fetchOrderItemsForTask, fetchOrderTaskIdForCar } from "@/lib/line-inbox/fetch-task-items";
 import { resolveCarFromContext } from "@/lib/line-inbox/resolve-car";
 import type { ExistingOrderItemRow, LineInboxAnalyzeResponse } from "@/lib/line-inbox/types";
@@ -28,6 +29,12 @@ export async function buildFallbackAnalyzePayloadFromRawText(
   }
 
   const items = buildFallbackAnalyzeItemsFromRawText(rawText, existingItems, Boolean(carRowId));
+  const matchMeta = deriveLineInboxMatchStatus({
+    carRowId,
+    rawText,
+    extractedCarCandidates: resolved.extractedCarCandidates ?? [],
+    matchReason: resolved.matchReason ?? "",
+  });
 
   return {
     detected_car: {
@@ -47,6 +54,8 @@ export async function buildFallbackAnalyzePayloadFromRawText(
     aiTargetCarReference: resolved.aiTargetCarReference ?? "",
     aiTargetCarConfidence: resolved.aiTargetCarConfidence ?? "",
     matchReason: resolved.matchReason ?? "",
+    matchStatus: matchMeta.matchStatus,
+    unmatchedReason: matchMeta.unmatchedReason,
     existing_items: existingItems,
     items,
     needs_human_review: !carRowId || items.length === 0 || hasTooManyLineAutoSaveItems(items.length),

@@ -44,6 +44,8 @@ export type LineInboxAnalyzeResponse = {
   aiTargetCarReference?: string;
   aiTargetCarConfidence?: string;
   matchReason?: string;
+  matchStatus?: "matched" | "waiting_for_car_record" | "ambiguous_vehicle" | "no_vehicle_context" | "unresolved";
+  unmatchedReason?: "" | "pending_car_record" | "multiple_candidates" | "no_car_candidate";
   existing_items?: ExistingOrderItemRow[];
   items: LineInboxAnalyzeItem[];
   needs_human_review: boolean;
