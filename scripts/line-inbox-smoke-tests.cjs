@@ -80,6 +80,7 @@ const {
 } = loadTsFile(path.join(root, "src/lib/line-inbox/review-link.ts"));
 const {
   extractLineInboxMileageCarReference,
+  extractThaiPlateCandidates,
   lineInboxPlateNumericSuffix,
   scoreLineInboxStockMatch,
   extractStockNumbers,
@@ -266,6 +267,31 @@ assert.deepStrictEqual(extractStockNumbers("95295 TRAVO 67500 KM"), ["95295"], "
 assert.deepStrictEqual(extractStockNumbers("51072 RAPTOR 39,800 km"), ["51072"], "stock/spec plus comma mileage ignores mileage number");
 assert.deepStrictEqual(extractStockNumbers("51072 \u0e40\u0e2d\u0e32\u0e02\u0e2d\u0e07 31440"), ["51072", "31440"], "multiple real car refs are not treated as mileage");
 assert.strictEqual(lineInboxPlateNumericSuffix("\u0e19\u0e02-6866"), "6866", "Thai plate suffix is extracted");
+assert.deepStrictEqual(
+  extractThaiPlateCandidates("3\u0e02\u0e07-368 FORTUNER 2WD 2.4 Legender AT SUV WHITE 22 pr97"),
+  ["3\u0e02\u0e07-368"],
+  "leading-digit Thai plate is extracted as the full plate candidate"
+);
+assert.deepStrictEqual(
+  extractThaiPlateCandidates("\u0e01\u0e01 1234 \u0e40\u0e0a\u0e47\u0e04\u0e23\u0e16"),
+  ["\u0e01\u0e011234"],
+  "spaced Thai plate is normalized for matching without losing lookup support"
+);
+assert.deepStrictEqual(
+  extractStockNumbers("3\u0e02\u0e07-368 FORTUNER 2WD 2.4 Legender AT SUV WHITE 22 pr97"),
+  [],
+  "year shorthand and PR/ref text do not become stock candidates for exact Thai plate messages"
+);
+assert(
+  scoreLineInboxStockMatch(
+    {
+      plate_number: "3\u0e02\u0e07-368",
+      spec: "3\u0e02\u0e07-368 FORTUNER 2WD 2.4 Legender AT SUV WHITE 22",
+    },
+    "368"
+  ) > scoreLineInboxStockMatch({ plate_number: "\u0e01\u0e29-3368" }, "368"),
+  "exact 3-digit plate suffix outranks longer plate suffix matches"
+);
 assert(scoreLineInboxStockMatch({ plate_number: "\u0e19\u0e02-6866" }, "6866") > scoreLineInboxStockMatch({ spec: "6866" }, "6866"), "plate suffix outranks loose spec match");
 assert.strictEqual(scoreLineInboxStockMatch({ row_id: "a18c7942-10fc-4d32-8059-5b97f86ec9e8" }, "6866"), 0, "UUID row_id substrings do not count as stock/ref matches");
 assert.strictEqual(scoreLineInboxStockMatch({ plate_number: "\u0e01\u0e01-6866" }, "6866"), scoreLineInboxStockMatch({ plate_number: "\u0e19\u0e02-6866" }, "6866"), "duplicate suffix plates score equally and remain ambiguous upstream");
