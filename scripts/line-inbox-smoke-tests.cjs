@@ -311,6 +311,31 @@ const raptor = assertItems(
 assert(raptor.ignored_vehicle_spec_lines.some((line) => line.includes("51072")), "51072 line is vehicle context");
 assert(raptor.ignored_noise_lines.includes("เพิ่ม"), "standalone เพิ่ม is control/noise");
 
+const koTho2692AddSectionText = [
+  "ทะเบียน กท-2692 ROCCO PRE 2.4 Hight AT Double_Cab PEARL_WHITE Aug20",
+  "*เพิ่ม*",
+  "",
+  "-พรมดำด้ายดำ",
+  "YAHYA",
+].join("\n");
+const koTho2692AddSection = assertItems(
+  koTho2692AddSectionText,
+  ["พรมดำด้ายดำ"],
+  "add section header turns following bullet line into a work item"
+);
+assert.strictEqual(
+  koTho2692AddSection.grouped_items[0]?.note,
+  "YAHYA",
+  "short customer/requester token after add-section item is stored as note context"
+);
+assert.strictEqual(
+  buildFallbackAnalyzeItemsFromRawText(koTho2692AddSectionText, [], true)[0]?.suggested_note,
+  "YAHYA",
+  "fallback analyze payload keeps add-section context as suggested note"
+);
+assertItems(["เพิ่ม", "-กันสาด"].join("\n"), ["กันสาด"], "เพิ่ม section accepts simple bullet accessory work");
+assertItems(["เพิ่มเติม", "-โรบาร์แร็ค"].join("\n"), ["โรบาร์แร็ค"], "เพิ่มเติม section accepts following bullet work");
+
 assertItems(
   ["95295 TRAVO 4WD 2.8 4TREX AT Standard SILVER Mar26", "คิ้วล้อมาแล้ว ไปเบิกกับพี่ตูน"].join("\n"),
   ["คิ้วล้อมาแล้ว ไปเบิกกับพี่ตูน"],
