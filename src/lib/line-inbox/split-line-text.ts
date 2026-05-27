@@ -41,6 +41,8 @@ const STRONG_WORK_INTENT_RE =
 const LINE_PHOTO_WORK_INTENT_RE =
   /(แต่ง|เหมือน\s*รูป|ตาม\s*(?:รูป|ภาพ)|รูปทุกอย่าง|ยกเลิก|ไม่ต้อง|เบิก|รอ\s*ตรวจ|รอตรวจ|เอา\s*รถ\s*ไป\s*เช็ค)/i;
 const STANDALONE_CONTROL_LINE_RE = /^(?:เพิ่ม|เพิ่มงาน|งานใหม่)$/i;
+const ADD_SECTION_HEADER_RE = /^(?:เพิ่ม|เพิ่มงาน|งานใหม่|เพิ่มเติม)$/i;
+const SECTION_BULLET_RE = /^\s*(?:[-•]|\*\s+)\s*\S/;
 const CAR_REFERENCE_META_RE =
   /(ใส่\s*ปี.*(?:chassis|chasis|เลขถัง|ตัวถัง)|(?:chassis|chasis|เลขถัง|ตัวถัง).*(?:ปี|link|ลิงก์|ถูก|ทุกครั้ง|หลายที่)|(?:ปี|link|ลิงก์).*(?:chassis|chasis|เลขถัง|ตัวถัง))/i;
 const REAL_WORK_EXCLUDING_GENERIC_ENTRY_RE =
@@ -138,6 +140,14 @@ function stripHeaderPrefixFromWorkLine(raw: string): string {
     if (rest && hasWorkIntent(rest)) return rest;
   }
   return clean;
+}
+
+function isAddSectionHeaderLine(raw: string): boolean {
+  return ADD_SECTION_HEADER_RE.test(sanitizeLine(raw));
+}
+
+function isSectionBulletLine(raw: string): boolean {
+  return SECTION_BULLET_RE.test(String(raw ?? ""));
 }
 
 export function classifyLineNoise(rawLine: string): LineNoiseClassification {
@@ -398,6 +408,15 @@ function looksLikeShortContinuationLine(raw: string): boolean {
   return /^[A-Za-z0-9&.'\-\s]+$/.test(raw);
 }
 
+function looksLikeShortSectionContextLine(raw: string): boolean {
+  const clean = sanitizeLine(raw);
+  if (!clean || clean.length > 36) return false;
+  if (hasWorkIntent(clean) || looksLikeVehicleContext(clean) || looksLikeMentionOnly(clean)) return false;
+  const tokens = semanticTokens(clean);
+  if (tokens.length === 0 || tokens.length > 3) return false;
+  return /^[A-Za-z0-9&.'\-\s]+$/.test(clean);
+}
+
 function addWorkItem(target: Array<{ text: string; note: string }>, value: string) {
   const clean = normalizeWorkItemText(value);
   if (!clean) return;
@@ -440,6 +459,17 @@ function addDetailToLast(target: Array<{ text: string; note: string }>, value: s
   if (!clean || target.length === 0) return false;
   const last = target[target.length - 1];
   if (!last || !canAcceptDetail(last.text)) return false;
+  const parts = last.note ? last.note.split(/\s*\/\s*/) : [];
+  if (!parts.some((part) => lineKey(part) === lineKey(clean))) parts.push(clean);
+  last.note = parts.join(" / ");
+  return true;
+}
+
+function addSectionContextNoteToLast(target: Array<{ text: string; note: string }>, value: string): boolean {
+  const clean = sanitizeLine(value);
+  if (!clean || target.length === 0) return false;
+  const last = target[target.length - 1];
+  if (!last) return false;
   const parts = last.note ? last.note.split(/\s*\/\s*/) : [];
   if (!parts.some((part) => lineKey(part) === lineKey(clean))) parts.push(clean);
   last.note = parts.join(" / ");
@@ -489,10 +519,46 @@ export function splitLineTextForInbox(text: string): SplitLineTextResult {
   }
 
   let contextBreak = true;
+  let addSectionOpen = false;
   for (const rawLine of lines) {
+    if (isAddSectionHeaderLine(rawLine)) {
+      addUnique(ignoredNoise, rawLine);
+      addSectionOpen = true;
+      contextBreak = false;
+      continue;
+    }
+
+    if (
+      addSectionOpen &&
+      groupedItems.length > 0 &&
+      looksLikeShortSectionContextLine(rawLine) &&
+      addSectionContextNoteToLast(groupedItems, rawLine)
+    ) {
+      contextBreak = false;
+      continue;
+    }
+
+    if (addSectionOpen && isSectionBulletLine(rawLine)) {
+      const sectionLine = cleanWorkLine(rawLine);
+      if (
+        sectionLine &&
+        !looksLikeShortSectionContextLine(sectionLine) &&
+        !looksLikeMentionOnly(sectionLine) &&
+        !looksLikeLinePersonContext(sectionLine) &&
+        !looksLikeCarReferenceMeta(sectionLine) &&
+        !looksLikeVehicleContext(sectionLine) &&
+        !looksLikeNoiseOnly(sectionLine)
+      ) {
+        addWorkLines(groupedItems, sectionLine);
+        contextBreak = false;
+        continue;
+      }
+    }
+
     const noiseType = classifyLineNoise(rawLine);
     if (noiseType !== "content") {
       addUnique(looksLikeMentionOnly(rawLine) || looksLikeLinePersonContext(rawLine) ? ignoredMentions : ignoredNoise, rawLine);
+      addSectionOpen = false;
       contextBreak = true;
       continue;
     }
@@ -507,6 +573,7 @@ export function splitLineTextForInbox(text: string): SplitLineTextResult {
 
     if (looksLikeMentionOnly(sourceLine)) {
       addUnique(ignoredMentions, rawLine);
+      addSectionOpen = false;
       contextBreak = true;
       continue;
     }
@@ -523,12 +590,14 @@ export function splitLineTextForInbox(text: string): SplitLineTextResult {
 
     if (looksLikeLinePersonContext(sourceLine)) {
       addUnique(ignoredMentions, rawLine);
+      addSectionOpen = false;
       contextBreak = true;
       continue;
     }
 
     if (looksLikeCarReferenceMeta(sourceLine)) {
       addUnique(ignoredNoise, rawLine);
+      addSectionOpen = false;
       contextBreak = true;
       continue;
     }
@@ -536,6 +605,7 @@ export function splitLineTextForInbox(text: string): SplitLineTextResult {
     const line = cleanWorkLine(sourceLine);
     if (!line) {
       addUnique((rawLine.match(MENTION_RE) ?? []).length > 0 ? ignoredMentions : ignoredNoise, rawLine);
+      addSectionOpen = false;
       contextBreak = true;
       continue;
     }
@@ -543,6 +613,7 @@ export function splitLineTextForInbox(text: string): SplitLineTextResult {
     const strippedMixedVehicleContext = lineKey(line) !== lineKey(sourceLine) && hasWorkIntent(line);
     if (looksLikeVehicleContext(line) || (!strippedMixedVehicleContext && looksLikeVehicleContext(sourceLine))) {
       addUnique(ignoredVehicle, rawLine);
+      addSectionOpen = false;
       contextBreak = true;
       continue;
     }
@@ -553,12 +624,14 @@ export function splitLineTextForInbox(text: string): SplitLineTextResult {
         continue;
       }
       addUnique(ignoredNoise, rawLine);
+      addSectionOpen = false;
       contextBreak = true;
       continue;
     }
 
     if (looksLikeNoiseOnly(line)) {
       addUnique((rawLine.match(MENTION_RE) ?? []).length > 0 ? ignoredMentions : ignoredNoise, rawLine);
+      addSectionOpen = false;
       contextBreak = true;
       continue;
     }
@@ -567,6 +640,7 @@ export function splitLineTextForInbox(text: string): SplitLineTextResult {
     addWorkLines(groupedItems, line);
     if (groupedItems.length === beforeCount) {
       addUnique(ignoredNoise, rawLine);
+      addSectionOpen = false;
       contextBreak = true;
     } else {
       contextBreak = false;
