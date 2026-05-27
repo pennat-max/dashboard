@@ -243,6 +243,9 @@ export function evaluateLineAutoSaveEligibility(params: {
   if (!isLineGroupAllowed(row.group_id, policy)) return { eligible: false, blocked_reason: "group_not_allowed" };
   if (isLineImageOnlyText(row.raw_text)) return { eligible: false, blocked_reason: "image_only" };
   if (isLineInboxNoiseOrSeparatorOnlyText(row.raw_text)) return { eligible: false, blocked_reason: "noise_or_separator" };
+  if (payload.unmatchedReason === "pending_car_record" || payload.matchStatus === "waiting_for_car_record") {
+    return { eligible: false, blocked_reason: "pending_car_record" };
+  }
   if (payload.needs_human_review) return { eligible: false, blocked_reason: "needs_human_review" };
 
   const carRowId = cleanLine(payload.detected_car?.car_row_id) || cleanLine(row.car_row_id);

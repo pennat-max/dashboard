@@ -31,7 +31,7 @@ export type ResolvedCar = {
   matchReason?: string;
 };
 
-type CarMatchRow = {
+export type CarMatchRow = {
   id?: unknown;
   row_id?: unknown;
   plate_number?: unknown;
@@ -55,6 +55,18 @@ const COMMON_TOKEN_RE = /^(?:THE|AND|FOR|WITH|CAR|AUTO|ป้ายแดง)$/i
 
 function safeString(value: unknown): string {
   return String(value ?? "").trim();
+}
+
+export function lineInboxPlateNumericSuffix(value: unknown): string {
+  const clean = safeString(value).replace(/\s+/g, "");
+  if (!clean) return "";
+  const thaiPlate = clean.match(/\d{0,2}[\u0E01-\u0E2E]{1,3}[-\s]?(\d{2,4})$/);
+  if (thaiPlate?.[1]) return thaiPlate[1];
+  const dashParts = clean.split("-").map((part) => part.trim()).filter(Boolean);
+  const lastPart = dashParts[dashParts.length - 1] ?? "";
+  if (/^\d{2,6}$/.test(lastPart)) return lastPart;
+  const trailingDigits = clean.match(/(\d{2,6})$/);
+  return trailingDigits?.[1] ?? "";
 }
 
 function normalizeSearch(value: string): string {
@@ -326,13 +338,40 @@ function extractVehicleTokens(text: string): string[] {
   return out.slice(0, 10);
 }
 
+export function scoreLineInboxStockMatch(row: CarMatchRow, stock: string): number {
+  const normalizedStock = normalizeSearch(stock);
+  if (!normalizedStock) return 0;
+
+  const id = normalizeSearch(safeString(row.id));
+  const rowId = normalizeSearch(safeString(row.row_id));
+  const plate = normalizeSearch(safeString(row.plate_number));
+  const chassis = normalizeSearch(safeString(row.chassis_number));
+  const spec = normalizeSearch(safeString(row.spec));
+  const plateSuffix = normalizeSearch(lineInboxPlateNumericSuffix(row.plate_number));
+
+  let score = 0;
+  if (plateSuffix && plateSuffix === normalizedStock) score += 10;
+  else if (plate === normalizedStock) score += 9;
+  else if (plate.endsWith(normalizedStock)) score += 8;
+  else if (plate.includes(normalizedStock)) score += 6;
+
+  if (spec.includes(normalizedStock)) score += 4;
+  if (chassis.includes(normalizedStock)) score += 4;
+
+  // row_id is usually a UUID. Only exact row/id matches are treated as car refs.
+  if (rowId === normalizedStock) score += 5;
+  if (id === normalizedStock) score += 5;
+
+  return score;
+}
+
 function scoreCandidate(row: CarMatchRow, contextLine: string): number {
   const haystack = normalizeSearch(carHaystack(row));
   const rawHaystack = carHaystack(row).toLowerCase();
   let score = 0;
 
   for (const stock of extractStockNumbers(contextLine)) {
-    if (haystack.includes(normalizeSearch(stock))) score += 5;
+    score += scoreLineInboxStockMatch(row, stock);
   }
 
   for (const token of extractVehicleTokens(contextLine)) {

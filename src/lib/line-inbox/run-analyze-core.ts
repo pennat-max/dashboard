@@ -6,6 +6,7 @@ import { runLineInboxAiAnalyze, type LineInboxAiAnalyzeDraft } from "@/lib/line-
 import { splitLineTextForInbox } from "@/lib/line-inbox/split-line-text";
 import { isLineInboxSystemAcknowledgementText } from "@/lib/line-inbox/acknowledgement";
 import { hasTooManyLineAutoSaveItems } from "@/lib/line-inbox/auto-save-safety";
+import { deriveLineInboxMatchStatus } from "@/lib/line-inbox/car-match-status";
 import type { ExistingOrderItemRow, LineInboxAnalyzeResponse } from "@/lib/line-inbox/types";
 
 export type RunLineInboxAnalyzeInput = {
@@ -335,6 +336,12 @@ export async function runLineInboxAnalyzeCore(
     ) ||
     hasTooManyLineAutoSaveItems(items.length) ||
     items.length === 0;
+  const matchMeta = deriveLineInboxMatchStatus({
+    carRowId: detected.car_row_id,
+    rawText: raw_text,
+    extractedCarCandidates: detected.extractedCarCandidates ?? [],
+    matchReason: detected.matchReason ?? "",
+  });
 
   return {
     detected_car: {
@@ -352,6 +359,8 @@ export async function runLineInboxAnalyzeCore(
     aiTargetCarReference: detected.aiTargetCarReference ?? aiDraft?.target_car_reference ?? "",
     aiTargetCarConfidence: detected.aiTargetCarConfidence ?? aiDraft?.target_car_confidence ?? "",
     matchReason: detected.matchReason ?? "",
+    matchStatus: matchMeta.matchStatus,
+    unmatchedReason: matchMeta.unmatchedReason,
     existing_items: existing,
     items,
     needs_human_review,

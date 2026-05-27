@@ -105,8 +105,12 @@ type PendingQueueMessage = {
   related_photo_ids?: string[];
   relatedPhotoIds?: string[];
   suggestedItems?: string[];
-  extractionStatus?: "ok" | "no_items" | "needs_manual_review";
-  matchStatus?: "matched" | "unresolved";
+  extractionStatus?: "ok" | "no_items" | "needs_manual_review" | "matched_no_work";
+  matchStatus?: "matched" | "waiting_for_car_record" | "ambiguous_vehicle" | "no_vehicle_context" | "unresolved";
+  unmatchedReason?: "" | "pending_car_record" | "multiple_candidates" | "no_car_candidate";
+  unmatched_reason?: "" | "pending_car_record" | "multiple_candidates" | "no_car_candidate";
+  reviewUrl?: string;
+  review_url?: string;
   car_row_id: string;
   sale?: string;
   raw_text?: string;
@@ -189,8 +193,12 @@ type PendingQueueGroup = {
   related_photo_ids?: string[];
   relatedPhotoIds?: string[];
   suggestedItems?: string[];
-  extractionStatus?: "ok" | "no_items" | "needs_manual_review";
-  matchStatus?: "matched" | "unresolved";
+  extractionStatus?: "ok" | "no_items" | "needs_manual_review" | "matched_no_work";
+  matchStatus?: "matched" | "waiting_for_car_record" | "ambiguous_vehicle" | "no_vehicle_context" | "unresolved";
+  unmatchedReason?: "" | "pending_car_record" | "multiple_candidates" | "no_car_candidate";
+  unmatched_reason?: "" | "pending_car_record" | "multiple_candidates" | "no_car_candidate";
+  reviewUrl?: string;
+  review_url?: string;
   sale: string;
   source_label?: string;
   source_type?: string;
@@ -501,6 +509,41 @@ function queueGroupIsUnresolved(group: PendingQueueGroup): boolean {
   return !queueGroupHasMatchedCar(group) && Boolean(group.is_unresolved);
 }
 
+function queueMessageIsWaitingForCarRecord(message: PendingQueueMessage): boolean {
+  return (
+    String(message.matchStatus ?? "").trim() === "waiting_for_car_record" ||
+    String(message.unmatchedReason ?? message.unmatched_reason ?? "").trim() === "pending_car_record"
+  );
+}
+
+function queueGroupIsWaitingForCarRecord(group: PendingQueueGroup): boolean {
+  return (
+    !queueGroupHasMatchedCar(group) &&
+    (String(group.matchStatus ?? "").trim() === "waiting_for_car_record" ||
+      String(group.unmatchedReason ?? group.unmatched_reason ?? "").trim() === "pending_car_record" ||
+      group.messages.some(queueMessageIsWaitingForCarRecord))
+  );
+}
+
+function queueMessageIsAmbiguousVehicle(message: PendingQueueMessage): boolean {
+  return (
+    !queueMessageHasMatchedCar(message) &&
+    !queueMessageIsWaitingForCarRecord(message) &&
+    (String(message.matchStatus ?? "").trim() === "ambiguous_vehicle" ||
+      String(message.unmatchedReason ?? message.unmatched_reason ?? "").trim() === "multiple_candidates")
+  );
+}
+
+function queueGroupIsAmbiguousVehicle(group: PendingQueueGroup): boolean {
+  return (
+    !queueGroupHasMatchedCar(group) &&
+    !queueGroupIsWaitingForCarRecord(group) &&
+    (String(group.matchStatus ?? "").trim() === "ambiguous_vehicle" ||
+      String(group.unmatchedReason ?? group.unmatched_reason ?? "").trim() === "multiple_candidates" ||
+      group.messages.some(queueMessageIsAmbiguousVehicle))
+  );
+}
+
 function queueMessageWorkActionLines(message: PendingQueueMessage): PendingQueueActionLine[] {
   return (message.action_lines ?? []).filter(
     (line) =>
@@ -574,6 +617,16 @@ function queueMessageManualReviewTitle(uiLang: UiLang): string {
 function queueMessageManualReviewReason(message: PendingQueueMessage, uiLang: UiLang): string {
   const reason = String(message.manual_review_reason ?? "").trim();
   if (reason) return reason;
+  if (queueMessageIsWaitingForCarRecord(message)) {
+    return uiLang === "en"
+      ? "This looks like a vehicle from LINE, but it is not in the current car records yet. Check Record/sync/ref number before saving."
+      : "ระบบยังไม่พบรถคันนี้ในข้อมูลปัจจุบัน อาจเป็นรถที่ยังไม่เข้า Record / ยังไม่ sync / เลขอ้างอิงยังไม่ตรง กรุณาตรวจสอบอีกครั้ง";
+  }
+  if (queueMessageIsAmbiguousVehicle(message)) {
+    return uiLang === "en"
+      ? "This LINE text matches multiple vehicle candidates. Search/select the car before saving."
+      : "ข้อความนี้คล้ายข้อมูลรถหลายคัน กรุณาค้นหา/เลือกเองก่อนบันทึก";
+  }
   if (queueMessageHasMatchedCar(message)) {
     return uiLang === "en"
       ? "AI could not split work items yet - manual review needed."
@@ -917,6 +970,8 @@ type LineInboxCarPickerRow = {
   manualReviewCount: number;
   photoCount: number;
   isUnresolved: boolean;
+  isWaitingForCarRecord: boolean;
+  isAmbiguousVehicle: boolean;
   manualReviewPreview: string;
   detectedCarLabel: string;
   extractedCarCandidates: LineInboxCarCandidate[];
@@ -1422,18 +1477,30 @@ function useLineInboxBridgeState({
       const fallbackTitle = String(group.fallback_title ?? group.fallbackTitle ?? "").trim();
       const fallbackDescription = String(group.fallback_description ?? group.fallbackDescription ?? "").trim();
       const displayTitle = queueGroupDisplayTitle(group, uiLang);
+      const isWaitingForCarRecord = queueGroupIsWaitingForCarRecord(group);
+      const isAmbiguousVehicle = queueGroupIsAmbiguousVehicle(group);
+      const rowPlate = isWaitingForCarRecord
+        ? uiLang === "en"
+          ? "Waiting for car record"
+          : "รอรถเข้าระบบ 🚧"
+        : "";
+      const rowSpec = isWaitingForCarRecord
+        ? displayTitle || fallbackDescription || String(group.car_title ?? "").trim() || matched?.car || ""
+        : "";
       if (jobCount === 0 && photoCount === 0) continue;
       rows.push({
         groupKey: group.group_key,
         orderId: matched?.id ?? null,
         carRowId,
-        plate: (matched?.fullPlate || (displayTitle !== "-" && displayTitle !== "ยังไม่จับรถ" ? displayTitle : "") || fallbackTitle || "").trim() || "-",
-        spec: String(group.car_title ?? "").trim() || matched?.car || fallbackDescription || "",
+        plate: rowPlate || (matched?.fullPlate || (displayTitle !== "-" && displayTitle !== "ยังไม่จับรถ" ? displayTitle : "") || fallbackTitle || "").trim() || "-",
+        spec: rowSpec || String(group.car_title ?? "").trim() || matched?.car || fallbackDescription || "",
         sale: String(group.sale ?? "").trim() || String(matched?.sale ?? "").trim(),
         jobCount,
         manualReviewCount,
         photoCount,
         isUnresolved: queueGroupIsUnresolved(group),
+        isWaitingForCarRecord,
+        isAmbiguousVehicle,
         manualReviewPreview: manualReviewMessage ? queueMessageRawText(manualReviewMessage).slice(0, 180) : "",
         detectedCarLabel: manualReviewMessage ? queueDetectedCarLabel(manualReviewMessage) : "",
         extractedCarCandidates: group.extractedCarCandidates ?? manualReviewMessage?.extractedCarCandidates ?? [],
@@ -2343,6 +2410,16 @@ function useLineInboxBridgeState({
                   {uiLang === "en" ? "Manual review" : "รอตรวจด้วยมือ"}
                 </span>
               ) : null}
+              {row.isWaitingForCarRecord ? (
+                <span className="rounded-full bg-sky-50 px-1.5 py-0.5 text-sky-800 ring-1 ring-sky-200">
+                  {uiLang === "en" ? "Waiting for car record" : "รถยังไม่มีข้อมูล"}
+                </span>
+              ) : null}
+              {row.isAmbiguousVehicle ? (
+                <span className="rounded-full bg-orange-50 px-1.5 py-0.5 text-orange-800 ring-1 ring-orange-200">
+                  {uiLang === "en" ? "Multiple car candidates" : "พบรถหลายคัน"}
+                </span>
+              ) : null}
               {row.isUnresolved ? (
                 <span className="rounded-full bg-rose-50 px-1.5 py-0.5 text-rose-800 ring-1 ring-rose-200">
                   {uiLang === "en" ? "Needs car match - manual review" : "ยังจับรถไม่ได้ — รอตรวจด้วยมือ"}
@@ -2366,7 +2443,15 @@ function useLineInboxBridgeState({
             {row.manualReviewCount > 0 ? (
               <div className="mt-2 rounded-xl bg-amber-50 px-2 py-2 text-[11px] font-medium leading-relaxed text-amber-950 ring-1 ring-amber-100">
                 <p className="font-bold">
-                  {row.isUnresolved
+                  {row.isWaitingForCarRecord
+                    ? uiLang === "en"
+                      ? "Waiting for car record"
+                      : "รอรถเข้าระบบ 🚧"
+                    : row.isAmbiguousVehicle
+                      ? uiLang === "en"
+                        ? "Multiple vehicle candidates"
+                        : "พบรถหลายคัน — รอตรวจ"
+                      : row.isUnresolved
                     ? uiLang === "en"
                       ? "AI could not split work items yet."
                       : "AI ยังแยกงานไม่ได้"
@@ -2380,7 +2465,15 @@ function useLineInboxBridgeState({
                     {row.detectedCarLabel}
                   </p>
                 ) : null}
-                {row.isUnresolved ? (
+                {row.isWaitingForCarRecord ? (
+                  <p className="mt-1 text-sky-800">
+                    {uiLang === "en" ? "Car is not in the current records yet." : "รถยังไม่มีข้อมูลในระบบ"}
+                  </p>
+                ) : row.isAmbiguousVehicle ? (
+                  <p className="mt-1 text-orange-700">
+                    {uiLang === "en" ? "Select the correct car before saving." : "กรุณาเลือก/ค้นรถให้ชัดก่อนบันทึก"}
+                  </p>
+                ) : row.isUnresolved ? (
                   <p className="mt-1 text-rose-700">{uiLang === "en" ? "Car is still unclear." : "ยังจับรถไม่ชัด"}</p>
                 ) : (
                   <p className="mt-1 font-semibold text-emerald-800">
