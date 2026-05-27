@@ -11,6 +11,13 @@ import {
   type LineInboxMatchStatus,
   type LineInboxUnmatchedReason,
 } from "@/lib/line-inbox/car-match-status";
+import {
+  lineInboxQueueFilterCounts,
+  lineInboxQueueGroupMatchesFilter,
+  parseLineInboxQueueFilter,
+  todayYmdBangkokForLineInboxQueue,
+  type LineInboxQueueFilterCounts,
+} from "@/lib/line-inbox/pending-queue-view";
 import type {
   DuplicateStatus,
   ExistingOrderItemRow,
@@ -22,6 +29,10 @@ import type {
 
 export const dynamic = "force-dynamic";
 const LINE_IMAGE_AFTER_TEXT_WINDOW_MS = 5 * 60 * 1000;
+const LINE_PENDING_QUEUE_ROW_LIMIT = 500;
+const LINE_PENDING_QUEUE_SUMMARY_ATTACHMENT_LIMIT = 3;
+const LINE_PENDING_QUEUE_SUMMARY_RECENT_ATTACHMENT_LIMIT = 12;
+const LINE_PENDING_QUEUE_FALLBACK_CONCURRENCY = 8;
 
 type PendingQueueNewLine = {
   item_index: number;
@@ -775,24 +786,116 @@ function groupMessages(messages: PendingQueueMsg[]): PendingQueueGroup[] {
   });
 }
 
+function trimQueueSummaryText(value: unknown, max = 500): string {
+  const clean = cleanString(value);
+  return clean.length > max ? `${clean.slice(0, max).trim()}...` : clean;
+}
+
+function summarizeQueueAttachment(attachment: PendingQueueAttachment): PendingQueueAttachment {
+  return {
+    ...attachment,
+    raw_text_preview: trimQueueSummaryText(attachment.raw_text_preview ?? attachment.rawTextPreview, 180),
+    rawTextPreview: trimQueueSummaryText(attachment.rawTextPreview ?? attachment.raw_text_preview, 180),
+    fallback_description: trimQueueSummaryText(attachment.fallback_description ?? attachment.fallbackDescription, 180),
+    fallbackDescription: trimQueueSummaryText(attachment.fallbackDescription ?? attachment.fallback_description, 180),
+  };
+}
+
+function summarizeQueueMessage(message: PendingQueueMsg): PendingQueueMsg {
+  const attachments = uniqueAttachments(message.attachments).slice(0, LINE_PENDING_QUEUE_SUMMARY_ATTACHMENT_LIMIT);
+  return {
+    ...message,
+    raw_text: trimQueueSummaryText(message.raw_text),
+    raw_text_preview: trimQueueSummaryText(message.raw_text_preview ?? message.rawTextPreview, 180),
+    rawTextPreview: trimQueueSummaryText(message.rawTextPreview ?? message.raw_text_preview, 180),
+    fallback_description: trimQueueSummaryText(message.fallback_description ?? message.fallbackDescription, 220),
+    fallbackDescription: trimQueueSummaryText(message.fallbackDescription ?? message.fallback_description, 220),
+    existing_items: [],
+    attachments: attachments.map(summarizeQueueAttachment),
+  };
+}
+
+function summarizeQueueGroup(group: PendingQueueGroup): PendingQueueGroup {
+  const attachments = uniqueAttachments(group.attachments);
+  const summaryAttachments = attachments
+    .slice(0, LINE_PENDING_QUEUE_SUMMARY_ATTACHMENT_LIMIT)
+    .map(summarizeQueueAttachment);
+  return {
+    ...group,
+    fallback_description: trimQueueSummaryText(group.fallback_description ?? group.fallbackDescription, 220),
+    fallbackDescription: trimQueueSummaryText(group.fallbackDescription ?? group.fallback_description, 220),
+    rawTextPreview: trimQueueSummaryText(group.rawTextPreview, 180),
+    existing_items: [],
+    attachments: summaryAttachments,
+    messages: group.messages.map(summarizeQueueMessage),
+    line_photo_count: attachments.length,
+    linePhotoCount: attachments.length,
+    related_photo_ids: attachmentIds(summaryAttachments),
+    relatedPhotoIds: attachmentIds(summaryAttachments),
+  };
+}
+
+function queueTotalsForGroups(groups: PendingQueueGroup[]): {
+  totalNew: number;
+  totalAction: number;
+  totalManualReview: number;
+} {
+  return groups.reduce(
+    (acc, group) => {
+      acc.totalNew += Math.max(0, Number(group.total_new_lines ?? 0));
+      acc.totalAction += Math.max(0, Number(group.total_action_lines ?? 0));
+      acc.totalManualReview += Math.max(0, Number(group.total_manual_reviews ?? 0));
+      return acc;
+    },
+    { totalNew: 0, totalAction: 0, totalManualReview: 0 }
+  );
+}
+
+async function mapLineInboxQueueWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T) => Promise<R>
+): Promise<R[]> {
+  if (items.length === 0) return [];
+  const limit = Math.max(1, Math.min(concurrency, items.length));
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const current = nextIndex;
+      nextIndex += 1;
+      results[current] = await mapper(items[current]);
+    }
+  }
+
+  await Promise.all(Array.from({ length: limit }, worker));
+  return results;
+}
+
 /**
  * GET /api/line-inbox/pending-queue
  * Rows from webhook: workflow pending + analyze ok -> action queue suggestions for staff review.
  */
-export async function GET() {
+export async function GET(request: Request) {
   const gate = await requireMutateRole();
   if (!gate.ok) return gate.response;
 
   try {
+    const url = new URL(request.url);
+    const mode = String(url.searchParams.get("mode") ?? "full").trim();
+    const summaryMode = mode === "summary";
+    const filter = parseLineInboxQueueFilter(url.searchParams.get("filter"));
+    const todayYmd = todayYmdBangkokForLineInboxQueue();
     const supabase = createServiceRoleClient();
     const { data, error } = await supabase
       .from(LINE_INBOX_MESSAGES_TABLE)
       .select(
         "id,line_message_id,received_at,raw_text,source_type,group_id,user_id,workflow_status,analyze_status,analyze_payload,car_row_id,needs_human_review"
       )
-      .in("workflow_status", ["pending", "confirmed"])
+      .eq("workflow_status", "pending")
       .order("received_at", { ascending: false })
-      .limit(500);
+      .limit(LINE_PENDING_QUEUE_ROW_LIMIT);
 
     if (error) {
       const m = error.message.toLowerCase();
@@ -805,6 +908,7 @@ export async function GET() {
           total_new_lines: 0,
           total_action_lines: 0,
           total_manual_reviews: 0,
+          filter_counts: { all: 0, today: 0, yesterday: 0, manual: 0 } satisfies LineInboxQueueFilterCounts,
           messages: [] as PendingQueueMsg[],
           groups: [] as PendingQueueGroup[],
           recent_attachments: [] as PendingQueueAttachment[],
@@ -816,11 +920,31 @@ export async function GET() {
 
     const messages: PendingQueueMsg[] = [];
     const recentAttachments: PendingQueueAttachment[] = [];
-    let totalNew = 0;
-    let totalAction = 0;
-    let totalManualReview = 0;
 
     const rows = (data ?? []) as PendingQueueDbRow[];
+    const fallbackRows = rows.filter((row) => {
+      const id = cleanString(row.id);
+      if (!id || cleanString(row.workflow_status) !== "pending") return false;
+      if (isLineInboxNoiseOrSeparatorOnlyText(String(row.raw_text ?? ""))) return false;
+      if (isLineImageOnlyText(row.raw_text) && findNearbyTextContext(row, rows)) return false;
+      const storedPayload = analyzePayloadOrNull(row.analyze_payload);
+      if (storedPayload && cleanString(row.analyze_status) === "ok") return false;
+      return canBuildFallbackPayloadForRow(row);
+    });
+    const fallbackEntries = await mapLineInboxQueueWithConcurrency(
+      fallbackRows,
+      LINE_PENDING_QUEUE_FALLBACK_CONCURRENCY,
+      async (row) => ({
+        id: cleanString(row.id),
+        payload: await buildFallbackAnalyzePayloadFromRawText(supabase, {
+          raw_text: row.raw_text,
+          car_row_id: row.car_row_id,
+        }),
+      })
+    );
+    const fallbackPayloads = new Map<string, LineInboxAnalyzeResponse | null>(
+      fallbackEntries.map((entry) => [entry.id, entry.payload])
+    );
 
     for (const row of rows) {
       const id = String(row.id ?? "").trim();
@@ -837,12 +961,7 @@ export async function GET() {
       const payload =
         storedPayload && cleanString(row.analyze_status) === "ok"
           ? storedPayload
-          : canBuildFallbackPayloadForRow(row)
-            ? await buildFallbackAnalyzePayloadFromRawText(supabase, {
-                raw_text: row.raw_text,
-                car_row_id: row.car_row_id,
-              })
-            : storedPayload;
+          : fallbackPayloads.get(id) ?? storedPayload;
       if (!payload) continue;
 
       const followingImages = findFollowingImageContexts(row, rows);
@@ -1003,9 +1122,6 @@ export async function GET() {
               ? "ข้อความนี้คล้ายข้อมูลรถหลายคัน กรุณาค้นหา/เลือกเองก่อนบันทึก"
               : "";
 
-      totalNew += newEntries.length;
-      totalAction += actionEntriesForMessage.length;
-      totalManualReview += manualReviewOnly || matchedNoWorkOnly ? 1 : 0;
       messages.push({
         inbox_id: id,
         received_at: String(row.received_at ?? ""),
@@ -1064,16 +1180,26 @@ export async function GET() {
       });
     }
 
-    const recentUniqueAttachments = uniqueAttachments(recentAttachments).slice(0, 40);
     const groups = groupMessages(messages);
+    const filterCounts = lineInboxQueueFilterCounts(groups, todayYmd);
+    const filteredGroups = groups.filter((group) => lineInboxQueueGroupMatchesFilter(group, filter, todayYmd));
+    const responseGroups = summaryMode ? filteredGroups.map(summarizeQueueGroup) : filteredGroups;
+    const responseMessages = responseGroups.flatMap((group) => group.messages);
+    const responseTotals = queueTotalsForGroups(responseGroups);
+    const responseAttachments = uniqueAttachments(responseGroups.flatMap((group) => group.attachments));
+    const recentUniqueAttachments = (responseAttachments.length ? responseAttachments : uniqueAttachments(recentAttachments))
+      .slice(0, summaryMode ? LINE_PENDING_QUEUE_SUMMARY_RECENT_ATTACHMENT_LIMIT : 40);
 
     return NextResponse.json({
       ok: true,
-      total_new_lines: totalNew,
-      total_action_lines: totalAction,
-      total_manual_reviews: totalManualReview,
-      messages,
-      groups,
+      mode: summaryMode ? "summary" : "full",
+      filter,
+      filter_counts: filterCounts,
+      total_new_lines: responseTotals.totalNew,
+      total_action_lines: responseTotals.totalAction,
+      total_manual_reviews: responseTotals.totalManualReview,
+      messages: responseMessages,
+      groups: responseGroups,
       recent_attachments: recentUniqueAttachments,
     });
   } catch (e) {

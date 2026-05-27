@@ -101,6 +101,12 @@ const {
   evaluateLineAutoSaveEligibility,
 } = loadTsFile(path.join(root, "src/lib/line-inbox/auto-save.ts"));
 const { LINE_AUTO_SAVE_MAX_ITEMS } = loadTsFile(path.join(root, "src/lib/line-inbox/auto-save-safety.ts"));
+const {
+  LINE_INBOX_QUEUE_REFRESH_MS,
+  parseLineInboxQueueFilter,
+  lineInboxQueueFilterCounts,
+  lineInboxQueueGroupMatchesFilter,
+} = loadTsFile(path.join(root, "src/lib/line-inbox/pending-queue-view.ts"));
 
 const specificGroupPolicy = parseLineAllowedGroups("C-test-group,C-real-group");
 assert.strictEqual(specificGroupPolicy.allowAllGroups, false, "specific group allow-list does not allow all groups");
@@ -112,6 +118,35 @@ assert.strictEqual(isLineGroupAllowed("C-any-group", emptyGroupPolicy), false, "
 assert.strictEqual(isLineGroupAllowed("C-any-group", parseLineAllowedGroups("*")), true, "wildcard allows all groups");
 assert.strictEqual(isLineGroupAllowed("C-any-group", parseLineAllowedGroups("ALL")), true, "ALL allows all groups");
 assert.strictEqual(isLineGroupAllowed("", parseLineAllowedGroups("*")), false, "wildcard still requires a real group id");
+assert.strictEqual(LINE_INBOX_QUEUE_REFRESH_MS, 5 * 60 * 1000, "AI LINE queue refresh interval is five minutes");
+assert.strictEqual(parseLineInboxQueueFilter("manual"), "manual", "manual review queue filter parses");
+assert.strictEqual(parseLineInboxQueueFilter("bad-filter"), "all", "unknown queue filter falls back to all");
+const queueFilterToday = "2026-05-27";
+const queueFilterGroups = [
+  {
+    total_manual_reviews: 0,
+    messages: [{ received_at: "2026-05-27T08:00:00+07:00", action_line_count: 1, new_line_count: 0 }],
+    attachments: [],
+  },
+  {
+    total_manual_reviews: 0,
+    messages: [{ received_at: "2026-05-26T08:00:00+07:00", action_line_count: 0, new_line_count: 1 }],
+    attachments: [],
+  },
+  {
+    total_manual_reviews: 1,
+    messages: [{ received_at: "2026-05-25T08:00:00+07:00", needs_human_review: true, extractionStatus: "needs_manual_review" }],
+    attachments: [],
+  },
+];
+assert.strictEqual(lineInboxQueueGroupMatchesFilter(queueFilterGroups[0], "today", queueFilterToday), true, "today filter returns today's groups");
+assert.strictEqual(lineInboxQueueGroupMatchesFilter(queueFilterGroups[1], "yesterday", queueFilterToday), true, "yesterday filter returns yesterday's groups");
+assert.strictEqual(lineInboxQueueGroupMatchesFilter(queueFilterGroups[2], "manual", queueFilterToday), true, "manual filter returns manual review groups");
+assert.deepStrictEqual(
+  lineInboxQueueFilterCounts(queueFilterGroups, queueFilterToday),
+  { all: 3, today: 1, yesterday: 1, manual: 1 },
+  "pending queue filter counts are computed from all pending groups"
+);
 const receiptReply = buildLineWebhookReceiptAcknowledgementText();
 assert(receiptReply.includes("รับข้อความแล้วค่ะ"), "webhook receipt acknowledgement says the message was received");
 assert(!receiptReply.includes("บันทึกงาน"), "webhook receipt acknowledgement must not claim work was saved");
@@ -991,7 +1026,33 @@ assert(
   !pendingQueueRoute.includes('gte("received_at"') && !pendingQueueRoute.includes('lte("received_at"'),
   "pending queue API does not default-hide older pending rows by date"
 );
-assert(pendingQueueRoute.includes(".limit(500)"), "pending queue can return a larger all-pending window");
+assert(
+  pendingQueueRoute.includes("LINE_PENDING_QUEUE_ROW_LIMIT = 500") &&
+    pendingQueueRoute.includes(".limit(LINE_PENDING_QUEUE_ROW_LIMIT)"),
+  "pending queue can return a larger all-pending window"
+);
+assert(
+  pendingQueueRoute.includes('mode === "summary"') &&
+    pendingQueueRoute.includes("summarizeQueueGroup") &&
+    pendingQueueRoute.includes("filter_counts"),
+  "pending queue supports lightweight summary responses with filter counts"
+);
+assert(
+  pendingQueueRoute.includes("parseLineInboxQueueFilter") &&
+    pendingQueueRoute.includes("lineInboxQueueGroupMatchesFilter"),
+  "pending queue applies server-side all/today/yesterday/manual filters"
+);
+assert(
+  pendingQueueRoute.includes("LINE_PENDING_QUEUE_SUMMARY_ATTACHMENT_LIMIT") &&
+    pendingQueueRoute.includes("LINE_PENDING_QUEUE_SUMMARY_RECENT_ATTACHMENT_LIMIT"),
+  "pending queue summary caps initial photo payloads"
+);
+assert(
+  pendingQueueRoute.includes("LINE_PENDING_QUEUE_FALLBACK_CONCURRENCY") &&
+    pendingQueueRoute.includes("mapLineInboxQueueWithConcurrency") &&
+    pendingQueueRoute.includes("fallbackPayloads"),
+  "pending queue precomputes fallback analysis with bounded concurrency"
+);
 assert(
   pendingQueueRoute.includes("isLineImageOnlyText(row.raw_text) && related"),
   "pending queue groups image rows under the previous text row"
@@ -1060,12 +1121,18 @@ assert(
   "AI LINE navigator no longer defaults to today-only filtering"
 );
 assert(
-  lineInboxToolbar.includes("5 * 60 * 1000"),
+  lineInboxToolbar.includes("LINE_INBOX_QUEUE_REFRESH_MS"),
   "AI LINE pending queue refreshes every five minutes"
 );
 assert(
-  lineInboxToolbar.includes("nextDrafts[rowKey] = prev[rowKey] ?? queueActionDraftForLine") &&
-    lineInboxToolbar.includes("new Set(prev[m.inbox_id] ?? [])"),
+  lineInboxToolbar.includes("mode: \"summary\"") &&
+    lineInboxToolbar.includes("filter: queueDateFilter") &&
+    lineInboxToolbar.includes("AbortController"),
+  "AI LINE drawer fetches the lightweight filtered queue with a timeout"
+);
+assert(
+  lineInboxToolbar.includes("const nextDrafts: Record<string, QueueActionDraft> = { ...prev }") &&
+    lineInboxToolbar.includes("const nextDes: Record<string, Set<number>> = { ...prev }"),
   "AI LINE auto-refresh preserves staged action drafts and deselections by row id"
 );
 assert(lineInboxToolbar.includes("รีเฟรช"), "AI LINE drawer keeps a manual refresh button");
