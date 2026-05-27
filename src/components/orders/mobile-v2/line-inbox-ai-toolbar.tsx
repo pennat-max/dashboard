@@ -21,6 +21,13 @@ import {
   buildLineCarDisplayLabel,
   buildLineOrderReviewUrl,
 } from "@/lib/line-inbox/review-link";
+import {
+  LINE_INBOX_QUEUE_REFRESH_MS,
+  lineInboxQueueGroupMatchesFilter,
+  todayYmdBangkokForLineInboxQueue,
+  type LineInboxQueueFilter,
+  type LineInboxQueueFilterCounts,
+} from "@/lib/line-inbox/pending-queue-view";
 import type {
   DuplicateStatus,
   ExistingOrderItemRow,
@@ -986,7 +993,7 @@ type LineInboxCarPickerRow = {
   latestMessageAt: number;
 };
 
-type LineInboxQueueDateFilter = "all" | "today" | "yesterday" | "manual";
+type LineInboxQueueDateFilter = LineInboxQueueFilter;
 
 type LineInboxBridgeContextValue = {
   uiLang: UiLang;
@@ -996,24 +1003,6 @@ type LineInboxBridgeContextValue = {
   overlays: ReactNode;
   renderCarAiSection: (orderId: string, carRowId: string | null, active: boolean) => ReactNode;
 };
-
-function todayYmdBangkok(): string {
-  return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Bangkok" });
-}
-
-function addBangkokCalendarDays(ymd: string, days: number): string {
-  const t = Date.parse(`${ymd}T12:00:00+07:00`);
-  if (!Number.isFinite(t)) return "";
-  return new Date(t + days * 24 * 60 * 60 * 1000).toLocaleDateString("en-CA", {
-    timeZone: "Asia/Bangkok",
-  });
-}
-
-function ymdBangkokFromIso(iso: string): string {
-  const t = Date.parse(iso);
-  if (!Number.isFinite(t)) return "";
-  return new Date(t).toLocaleDateString("en-CA", { timeZone: "Asia/Bangkok" });
-}
 
 function groupLatestReceivedMs(group: PendingQueueGroup): number {
   let max = 0;
@@ -1028,30 +1017,16 @@ function groupLatestReceivedMs(group: PendingQueueGroup): number {
   return max;
 }
 
-function groupHasLineWorkOnYmd(group: PendingQueueGroup, ymd: string): boolean {
-  const messageOnDate = group.messages.some((m) => {
-    if (ymdBangkokFromIso(m.received_at) !== ymd) return false;
-    const jobs = queueMessageActionCount(m) + Math.max(0, m.new_line_count ?? 0);
-    return jobs > 0 || queueMessageNeedsManualReview(m);
-  });
-  const photoOnDate = (group.attachments ?? []).some((a) => ymdBangkokFromIso(a.received_at) === ymd);
-  return messageOnDate || photoOnDate;
-}
-
-function groupHasManualReview(group: PendingQueueGroup): boolean {
-  return Math.max(0, group.total_manual_reviews ?? 0) > 0 || group.messages.some(queueMessageNeedsManualReview);
-}
-
 function groupMatchesLineInboxFilter(
   group: PendingQueueGroup,
   filter: LineInboxQueueDateFilter,
   todayYmd: string
 ): boolean {
-  if (filter === "all") return true;
-  if (filter === "manual") return groupHasManualReview(group);
-  if (filter === "today") return groupHasLineWorkOnYmd(group, todayYmd);
-  if (filter === "yesterday") return groupHasLineWorkOnYmd(group, addBangkokCalendarDays(todayYmd, -1));
-  return true;
+  return lineInboxQueueGroupMatchesFilter(group, filter, todayYmd);
+}
+
+function queueGroupPhotoCount(group: PendingQueueGroup): number {
+  return Math.max(0, Number(group.linePhotoCount ?? group.line_photo_count ?? group.attachments?.length ?? 0));
 }
 
 function formatLatestLineMessageTime(ms: number, uiLang: UiLang): string {
@@ -1161,21 +1136,41 @@ function useLineInboxBridgeState({
   const [queueTotalNew, setQueueTotalNew] = useState(0);
   const [queueTotalAction, setQueueTotalAction] = useState(0);
   const [queueTotalManualReview, setQueueTotalManualReview] = useState(0);
+  const [queueFilterCounts, setQueueFilterCounts] = useState<LineInboxQueueFilterCounts>({
+    all: 0,
+    today: 0,
+    yesterday: 0,
+    manual: 0,
+  });
   const [queueTab, setQueueTab] = useState<"actions" | "messages" | "photos">("actions");
   const [queueDateFilter, setQueueDateFilter] = useState<LineInboxQueueDateFilter>("all");
   const [queueDrafts, setQueueDrafts] = useState<Record<string, QueueActionDraft>>({});
   /** Unchecked = not saved when user clicks save (default: all lines selected) */
   const [queueDeselected, setQueueDeselected] = useState<Record<string, Set<number>>>({});
   const [queueLoading, setQueueLoading] = useState(false);
+  const [queueError, setQueueError] = useState<string | null>(null);
   const [savingInboxId, setSavingInboxId] = useState<string | null>(null);
   const queueSigRef = useRef<string>("");
+  const queueHasLoadedRef = useRef(false);
 
-  const fetchQueue = useCallback(async () => {
-    setQueueLoading(true);
+  const fetchQueue = useCallback(async (options: { background?: boolean } = {}) => {
+    const background = Boolean(options.background);
+    if (!background) setQueueLoading(true);
+    setQueueError(null);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 15_000);
     try {
-      const res = await fetch("/api/line-inbox/pending-queue", { credentials: "same-origin" });
+      const params = new URLSearchParams({
+        mode: "summary",
+        filter: queueDateFilter,
+      });
+      const res = await fetch(`/api/line-inbox/pending-queue?${params.toString()}`, {
+        credentials: "same-origin",
+        signal: controller.signal,
+      });
       const data = (await res.json()) as {
         ok?: boolean;
+        filter_counts?: Partial<LineInboxQueueFilterCounts>;
         total_new_lines?: number;
         total_action_lines?: number;
         total_manual_reviews?: number;
@@ -1188,12 +1183,26 @@ function useLineInboxBridgeState({
       const list = data.messages ?? [];
       const groups = data.groups ?? [];
       const attachments = (data.recent_attachments ?? []).filter((attachment) => attachment.url);
+      const todayYmd = todayYmdBangkokForLineInboxQueue();
+      const fallbackCounts: LineInboxQueueFilterCounts = {
+        all: groups.length,
+        today: groups.filter((group) => groupMatchesLineInboxFilter(group, "today", todayYmd)).length,
+        yesterday: groups.filter((group) => groupMatchesLineInboxFilter(group, "yesterday", todayYmd)).length,
+        manual: groups.filter((group) => groupMatchesLineInboxFilter(group, "manual", todayYmd)).length,
+      };
+      setQueueFilterCounts({
+        all: Number(data.filter_counts?.all ?? fallbackCounts.all) || 0,
+        today: Number(data.filter_counts?.today ?? fallbackCounts.today) || 0,
+        yesterday: Number(data.filter_counts?.yesterday ?? fallbackCounts.yesterday) || 0,
+        manual: Number(data.filter_counts?.manual ?? fallbackCounts.manual) || 0,
+      });
       setQueueTotalNew(typeof data.total_new_lines === "number" ? data.total_new_lines : 0);
       setQueueTotalAction(typeof data.total_action_lines === "number" ? data.total_action_lines : 0);
       setQueueTotalManualReview(typeof data.total_manual_reviews === "number" ? data.total_manual_reviews : 0);
       setQueueMessages(list);
       setQueueGroups(groups);
       setQueueAttachments(attachments);
+      queueHasLoadedRef.current = true;
 
       const sig = list
         .map(
@@ -1206,12 +1215,12 @@ function useLineInboxBridgeState({
       if (sig !== queueSigRef.current) {
         queueSigRef.current = sig;
         setQueueDeselected((prev) => {
-          const nextDes: Record<string, Set<number>> = {};
+          const nextDes: Record<string, Set<number>> = { ...prev };
           for (const m of list) nextDes[m.inbox_id] = new Set(prev[m.inbox_id] ?? []);
           return nextDes;
         });
         setQueueDrafts((prev) => {
-          const nextDrafts: Record<string, QueueActionDraft> = {};
+          const nextDrafts: Record<string, QueueActionDraft> = { ...prev };
           for (const group of groups) {
             const fallbackAssignee = resolveSaleStaffForOrder(group.sale, saleAssigneesBySale);
             for (const message of group.messages) {
@@ -1224,26 +1233,38 @@ function useLineInboxBridgeState({
           return nextDrafts;
         });
       }
-    } catch {
-      setQueueMessages([]);
-      setQueueGroups([]);
-      setQueueAttachments([]);
-      setQueueTotalNew(0);
-      setQueueTotalAction(0);
-      setQueueTotalManualReview(0);
+    } catch (e) {
+      const msg = e instanceof Error && e.name === "AbortError"
+        ? uiLang === "en"
+          ? "LINE queue took too long to load. Try refresh."
+          : "โหลดคิว LINE นานเกินไป ลองกดรีเฟรชอีกครั้ง"
+        : e instanceof Error
+          ? e.message
+          : String(e);
+      setQueueError(msg);
+      if (!background) {
+        setQueueMessages([]);
+        setQueueGroups([]);
+        setQueueAttachments([]);
+        setQueueTotalNew(0);
+        setQueueTotalAction(0);
+        setQueueTotalManualReview(0);
+        queueHasLoadedRef.current = false;
+      }
     } finally {
-      setQueueLoading(false);
+      window.clearTimeout(timeout);
+      if (!background) setQueueLoading(false);
     }
-  }, [saleAssigneesBySale]);
+  }, [queueDateFilter, saleAssigneesBySale, uiLang]);
 
   useEffect(() => {
     void fetchQueue();
-    const t = window.setInterval(() => void fetchQueue(), 5 * 60 * 1000);
+    const t = window.setInterval(() => void fetchQueue({ background: true }), LINE_INBOX_QUEUE_REFRESH_MS);
     return () => window.clearInterval(t);
   }, [fetchQueue]);
 
   useEffect(() => {
-    if (open) void fetchQueue();
+    if (open) void fetchQueue({ background: queueHasLoadedRef.current });
   }, [open, fetchQueue]);
 
   useEffect(() => {
@@ -1432,7 +1453,10 @@ function useLineInboxBridgeState({
     0,
     queueTotalNew || queueMessages.reduce((sum, message) => sum + Math.max(0, message.new_line_count || 0), 0)
   );
-  const queuePhotoCount = queueAttachments.length;
+  const queuePhotoCount =
+    queueGroups.length > 0
+      ? queueGroups.reduce((sum, group) => sum + queueGroupPhotoCount(group), 0)
+      : queueAttachments.length;
   const queueMessagesWithNewLines = useMemo(
     () => queueMessages.filter((message) => (message.new_line_count || 0) > 0 && message.new_lines.length > 0),
     [queueMessages]
@@ -1460,7 +1484,7 @@ function useLineInboxBridgeState({
       : "งานใหม่";
 
   const carPickerRows = useMemo((): LineInboxCarPickerRow[] => {
-    const todayYmd = todayYmdBangkok();
+    const todayYmd = todayYmdBangkokForLineInboxQueue();
     const rows: LineInboxCarPickerRow[] = [];
     for (const group of queueGroups) {
       if (!groupMatchesLineInboxFilter(group, queueDateFilter, todayYmd)) continue;
@@ -1472,7 +1496,7 @@ function useLineInboxBridgeState({
       const actionCount = Math.max(0, group.total_action_lines ?? 0);
       const newCount = Math.max(0, group.total_new_lines ?? 0);
       const jobCount = Math.max(actionCount, newCount) + manualReviewCount;
-      const photoCount = group.attachments?.length ?? 0;
+      const photoCount = queueGroupPhotoCount(group);
       const manualReviewMessage = group.messages.find(queueMessageNeedsManualReview) ?? null;
       const fallbackTitle = String(group.fallback_title ?? group.fallbackTitle ?? "").trim();
       const fallbackDescription = String(group.fallback_description ?? group.fallbackDescription ?? "").trim();
@@ -1525,40 +1549,41 @@ function useLineInboxBridgeState({
   }, [orders, queueDateFilter, queueGroups, uiLang]);
 
   /** Badge = number of cars/groups with pending LINE/AI work (not line count). */
-  const lineInboxCarCount = queueGroups.filter((group) => {
+  const filteredLineInboxCarCount = queueGroups.filter((group) => {
     const manualReviewCount = Math.max(0, group.total_manual_reviews ?? 0);
     const actionCount = Math.max(0, group.total_action_lines ?? 0);
     const newCount = Math.max(0, group.total_new_lines ?? 0);
-    const photoCount = group.attachments?.length ?? 0;
+    const photoCount = queueGroupPhotoCount(group);
     return Math.max(actionCount, newCount) + manualReviewCount > 0 || photoCount > 0;
   }).length;
+  const lineInboxCarCount = queueFilterCounts.all || filteredLineInboxCarCount;
 
   const queueDateFilterOptions = useMemo(() => {
-    const todayYmd = todayYmdBangkok();
+    const todayYmd = todayYmdBangkokForLineInboxQueue();
     const options: Array<{ value: LineInboxQueueDateFilter; label: string; count: number }> = [
       {
         value: "all",
         label: uiLang === "en" ? "All pending" : "รอดำเนินการทั้งหมด",
-        count: lineInboxCarCount,
+        count: queueFilterCounts.all || lineInboxCarCount,
       },
       {
         value: "today",
         label: uiLang === "en" ? "Today" : "วันนี้",
-        count: queueGroups.filter((group) => groupMatchesLineInboxFilter(group, "today", todayYmd)).length,
+        count: queueFilterCounts.today || queueGroups.filter((group) => groupMatchesLineInboxFilter(group, "today", todayYmd)).length,
       },
       {
         value: "yesterday",
         label: uiLang === "en" ? "Yesterday" : "เมื่อวาน",
-        count: queueGroups.filter((group) => groupMatchesLineInboxFilter(group, "yesterday", todayYmd)).length,
+        count: queueFilterCounts.yesterday || queueGroups.filter((group) => groupMatchesLineInboxFilter(group, "yesterday", todayYmd)).length,
       },
       {
         value: "manual",
         label: uiLang === "en" ? "Manual review" : "ต้องตรวจเอง",
-        count: queueGroups.filter((group) => groupMatchesLineInboxFilter(group, "manual", todayYmd)).length,
+        count: queueFilterCounts.manual || queueGroups.filter((group) => groupMatchesLineInboxFilter(group, "manual", todayYmd)).length,
       },
     ];
     return options;
-  }, [lineInboxCarCount, queueGroups, uiLang]);
+  }, [lineInboxCarCount, queueFilterCounts, queueGroups, uiLang]);
 
   const toggleQueueLine = useCallback((inboxId: string, itemIndex: number) => {
     setQueueDeselected((prev) => {
@@ -2593,14 +2618,32 @@ function useLineInboxBridgeState({
               </div>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-3 pt-2">
-              {queueLoading ? (
+              {queueError ? (
+                <div className="my-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-center text-xs font-semibold text-amber-900">
+                  <p>{queueError}</p>
+                  <button
+                    type="button"
+                    onClick={() => void fetchQueue()}
+                    className="mt-2 min-h-8 rounded-full bg-white px-3 text-[11px] font-bold text-amber-900 ring-1 ring-amber-200 touch-manipulation"
+                  >
+                    {uiLang === "en" ? "Try again" : "ลองใหม่"}
+                  </button>
+                </div>
+              ) : queueLoading && carPickerRows.length === 0 ? (
                 <p className="py-6 text-center text-sm text-slate-500">{uiLang === "en" ? "Loading…" : "กำลังโหลด…"}</p>
               ) : carPickerRows.length === 0 ? (
                 <p className="py-6 text-center text-sm text-slate-500">
                   {uiLang === "en" ? "No pending LINE work for this filter." : "ไม่มีงาน LINE รอดำเนินการในตัวกรองนี้"}
                 </p>
               ) : (
-                carDrawerList
+                <>
+                  {queueLoading ? (
+                    <p className="pb-2 text-center text-[11px] font-semibold text-slate-500">
+                      {uiLang === "en" ? "Refreshing..." : "กำลังรีเฟรช..."}
+                    </p>
+                  ) : null}
+                  {carDrawerList}
+                </>
               )}
             </div>
             <div className="shrink-0 px-4 py-3">
@@ -2650,7 +2693,7 @@ function useLineInboxBridgeState({
       {group.attachments.length > 0 ? (
         <div>
           <p className="mb-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-500">
-            {uiLang === "en" ? "LINE photos" : "รูปจาก LINE"} ({group.attachments.length})
+            {uiLang === "en" ? "LINE photos" : "รูปจาก LINE"} ({queueGroupPhotoCount(group)})
           </p>
           <div className="flex gap-2 overflow-x-auto pb-1">
             {group.attachments.slice(0, 8).map((attachment) => (
