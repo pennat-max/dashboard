@@ -67,6 +67,24 @@ function likeToken(value: string): string {
   return value.replace(/[%*,()]/g, "").trim();
 }
 
+function isMileageNumberContext(text: string, index: number, token: string): boolean {
+  const before = text.slice(Math.max(0, index - 24), index);
+  const after = text.slice(index + token.length, index + token.length + 24);
+  if (/(?:mileage|odo|odometer)\s*$/i.test(before)) return true;
+  if (/(?:\u0e01\u0e23\u0e2d\s*\u0e44\u0e21\u0e25\u0e4c|\u0e40\u0e25\u0e02\s*\u0e44\u0e21\u0e25\u0e4c|\u0e44\u0e21\u0e25\u0e4c)\s*$/i.test(before)) {
+    return true;
+  }
+  return /^\s*[\).,]*\s*(?:km|kms|\u0e01\u0e21\.?|\u0e01\u0e34\u0e42\u0e25(?:\u0e40\u0e21\u0e15\u0e23)?)/i.test(after);
+}
+
+export function extractLineInboxMileageCarReference(line: string): string {
+  const clean = safeString(line).replace(/\s+/g, " ");
+  const thaiPlate = clean.match(/^\s*(\d{0,2}[\u0E01-\u0E2E]{1,3}[-\s]?\d{2,4})\s*(?:[-\u2013\u2014:]|\s)\s*(?:\d{2,3}(?:,\d{3})|\d{4,6})\s*(?:km|kms|\u0e01\u0e21\.?|\u0e01\u0e34\u0e42\u0e25)/i);
+  if (thaiPlate?.[1]) return safeString(thaiPlate[1]);
+  const numeric = clean.match(/^\s*(\d{4,6})\s*(?:[-\u2013\u2014:]|\s)\s*(?:\d{2,3}(?:,\d{3})|\d{4,6})\s*(?:km|kms|\u0e01\u0e21\.?|\u0e01\u0e34\u0e42\u0e25)/i);
+  return safeString(numeric?.[1]);
+}
+
 function carHaystack(row: CarMatchRow): string {
   return [
     row.id,
@@ -86,10 +104,11 @@ function carHaystack(row: CarMatchRow): string {
     .join(" ");
 }
 
-function extractStockNumbers(text: string): string[] {
+export function extractStockNumbers(text: string): string[] {
   const out: string[] = [];
   for (const m of text.matchAll(STOCK_NUMBER_RE)) {
     const token = m[0];
+    if (isMileageNumberContext(text, m.index ?? 0, token)) continue;
     if (/^(?:19|20)\d{2}$/.test(token)) continue;
     if (!out.includes(token)) out.push(token);
   }
@@ -227,6 +246,19 @@ function collectCarCandidates(
     ...split.ignored_vehicle_spec_lines,
     ...explicitIdentityLines,
   ]);
+
+  for (const line of allLines) {
+    const mileageRef = extractLineInboxMileageCarReference(line);
+    if (!mileageRef) continue;
+    addCarCandidate(out, {
+      text: mileageRef,
+      source: "rule",
+      kind: "stock_or_plate",
+      confidence: "high",
+      reason: "plate/ref + mileage context",
+      line,
+    });
+  }
 
   for (const line of contextLines) {
     if (vehicleSignalScoreForCandidate(line) < 2) continue;

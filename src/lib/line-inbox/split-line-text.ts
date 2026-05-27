@@ -89,6 +89,45 @@ function isDecorationOnlyLine(raw: string): boolean {
   return /[^\s]/.test(source) && /[\p{Emoji_Presentation}\p{Extended_Pictographic}\u{2600}-\u{27BF}%^*:/\\|_.=+-]/u.test(source);
 }
 
+const LINE_EMOJI_SHORTCODE_WORD_RE =
+  /\b(?:heart|hearts|eyes|moon|smile|laugh|cry|sad|happy|love|kiss|wink|blush|angry|fire|star|sparkle|sparkles|flower|rose|clap|thumbs?|ok|pray|cool|wow|zzz|sleep|tear|tears?)\b/i;
+
+function isLineEmojiShortcodeOnlyLine(raw: string): boolean {
+  const source = String(raw ?? "").replace(/\s+/g, " ").trim();
+  if (!source) return false;
+
+  const compact = source.replace(/\s+/g, "");
+  const matches = [...source.matchAll(/\(([^()]{1,48})\)/g)];
+  if (matches.length === 0) return false;
+  if (matches.map((match) => match[0].replace(/\s+/g, "")).join("") !== compact) return false;
+
+  return matches.every((match) => {
+    const label = String(match[1] ?? "").replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+    if (!label || /[\d\u0E00-\u0E7F]/.test(label)) return false;
+    if (!/^[A-Za-z][A-Za-z ]{0,44}$/.test(label)) return false;
+    return LINE_EMOJI_SHORTCODE_WORD_RE.test(label);
+  });
+}
+
+function formatMileageNumber(value: string): string {
+  const digits = String(value ?? "").replace(/[^\d]/g, "");
+  if (!digits) return "";
+  return Number(digits).toLocaleString("en-US");
+}
+
+function extractMileageWorkItemFromLine(raw: string): string {
+  const clean = sanitizeLine(raw);
+  const match = clean.match(
+    /(?:\b(?:mileage|odo|odometer)\b|(?:\u0e01\u0e23\u0e2d\s*\u0e44\u0e21\u0e25\u0e4c|\u0e40\u0e25\u0e02\s*\u0e44\u0e21\u0e25\u0e4c|\u0e44\u0e21\u0e25\u0e4c))?\s*(\d{2,3}(?:,\d{3})|\d{4,6})\s*(?:km|kms|\u0e01\u0e21\.?|\u0e01\u0e34\u0e42\u0e25(?:\u0e40\u0e21\u0e15\u0e23)?)/i
+  );
+  if (!match) return "";
+  const mileage = formatMileageNumber(match[1] ?? "");
+  const isExplicitMileageLine = /^(?:\b(?:mileage|odo|odometer)\b|(?:\u0e01\u0e23\u0e2d\s*\u0e44\u0e21\u0e25\u0e4c|\u0e40\u0e25\u0e02\s*\u0e44\u0e21\u0e25\u0e4c|\u0e44\u0e21\u0e25\u0e4c))/i.test(clean);
+  const matchedText = match[0] ?? "";
+  const unit = isExplicitMileageLine && /(?:\u0e01\u0e21\.?|\u0e01\u0e34\u0e42\u0e25)/i.test(matchedText) ? "\u0e01\u0e21." : "KM";
+  return mileage ? `\u0e01\u0e23\u0e2d\u0e44\u0e21\u0e25\u0e4c ${mileage} ${unit}` : "";
+}
+
 function stripHeaderPrefixFromWorkLine(raw: string): string {
   const clean = sanitizeLine(raw);
   if (!clean) return clean;
@@ -108,6 +147,8 @@ export function classifyLineNoise(rawLine: string): LineNoiseClassification {
 
   const clean = sanitizeLine(raw);
   if (!clean) return "noise";
+
+  if (isLineEmojiShortcodeOnlyLine(raw)) return "decoration";
 
   const strippedHeader = stripHeaderPrefixFromWorkLine(clean);
   if (lineKey(strippedHeader) !== lineKey(clean) && hasWorkIntent(strippedHeader)) return "content";
@@ -456,6 +497,13 @@ export function splitLineTextForInbox(text: string): SplitLineTextResult {
     }
 
     const sourceLine = stripHeaderPrefixFromWorkLine(rawLine);
+    const mileageWorkItem = extractMileageWorkItemFromLine(sourceLine);
+    if (mileageWorkItem) {
+      addWorkItem(groupedItems, mileageWorkItem);
+      contextBreak = false;
+      continue;
+    }
+
     if (looksLikeMentionOnly(sourceLine)) {
       addUnique(ignoredMentions, rawLine);
       contextBreak = true;
