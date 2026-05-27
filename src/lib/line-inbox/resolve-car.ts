@@ -46,6 +46,9 @@ type CarMatchRow = {
 };
 
 const STOCK_NUMBER_RE = /\b\d{4,6}\b/g;
+const MILEAGE_UNIT_AFTER_RE = /^\s*(?:k\.?m\.?|kms?|กม\.?|กิโล(?:เมตร)?)(?:\s|\.|$)/i;
+const MILEAGE_KEYWORD_BEFORE_RE =
+  /(?:กรอ\s*ไมล์|เลข\s*ไมล์|ไมล์|mileage|odo(?:meter)?|เลข\s*กิโล|กิโล)\s*[:#：-]?\s*$/i;
 const THAI_PLATE_RE = /(?<![\u0E00-\u0E7F])\d{0,2}[\u0E01-\u0E2E]{1,3}[-\s]?\d{2,4}/g;
 const THAI_STOCK_IDENTITY_RE =
   /^(?:ทะเบียน|เลขทะเบียน|stock|สต็อก|สต๊อก|ref|reference)\s*[:#：-]?\s*(\d{4,6})\b/i;
@@ -86,11 +89,23 @@ function carHaystack(row: CarMatchRow): string {
     .join(" ");
 }
 
-function extractStockNumbers(text: string): string[] {
+function isMileageNumberMatch(text: string, match: RegExpMatchArray): boolean {
+  const token = match[0];
+  const index = match.index ?? text.indexOf(token);
+  if (index < 0) return false;
+
+  const before = text.slice(Math.max(0, index - 32), index);
+  const after = text.slice(index + token.length, index + token.length + 32);
+
+  return MILEAGE_UNIT_AFTER_RE.test(after) || MILEAGE_KEYWORD_BEFORE_RE.test(before);
+}
+
+export function extractStockNumbers(text: string): string[] {
   const out: string[] = [];
   for (const m of text.matchAll(STOCK_NUMBER_RE)) {
     const token = m[0];
     if (/^(?:19|20)\d{2}$/.test(token)) continue;
+    if (isMileageNumberMatch(text, m)) continue;
     if (!out.includes(token)) out.push(token);
   }
   return out.slice(0, 5);
@@ -294,13 +309,37 @@ function extractVehicleTokens(text: string): string[] {
   return out.slice(0, 10);
 }
 
+function scoreStockMatch(row: CarMatchRow, stock: string): number {
+  const normalizedStock = normalizeSearch(stock);
+  if (!normalizedStock) return 0;
+
+  const id = normalizeSearch(safeString(row.id));
+  const rowId = normalizeSearch(safeString(row.row_id));
+  const plate = normalizeSearch(safeString(row.plate_number));
+  const chassis = normalizeSearch(safeString(row.chassis_number));
+  const spec = normalizeSearch(safeString(row.spec));
+
+  let score = 0;
+  if (plate.endsWith(normalizedStock)) score += 8;
+  else if (plate.includes(normalizedStock)) score += 6;
+
+  if (spec.includes(normalizedStock)) score += 4;
+  if (chassis.includes(normalizedStock)) score += 4;
+
+  // row_id is often a UUID, so only exact matches should count as stock/ref.
+  if (rowId === normalizedStock) score += 5;
+  if (id === normalizedStock) score += 5;
+
+  return score;
+}
+
 function scoreCandidate(row: CarMatchRow, contextLine: string): number {
   const haystack = normalizeSearch(carHaystack(row));
   const rawHaystack = carHaystack(row).toLowerCase();
   let score = 0;
 
   for (const stock of extractStockNumbers(contextLine)) {
-    if (haystack.includes(normalizeSearch(stock))) score += 5;
+    score += scoreStockMatch(row, stock);
   }
 
   for (const token of extractVehicleTokens(contextLine)) {

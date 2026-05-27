@@ -78,6 +78,7 @@ const {
   buildLineOrderSearchRef,
   buildLineOrderReviewUrl,
 } = loadTsFile(path.join(root, "src/lib/line-inbox/review-link.ts"));
+const { extractStockNumbers } = loadTsFile(path.join(root, "src/lib/line-inbox/resolve-car.ts"));
 const {
   parseLineAllowedGroups,
   isLineGroupAllowed,
@@ -218,6 +219,42 @@ assertItems(
   "12345 งานสี",
   ["12345 งานสี"],
   "does not strip leading generic number without vehicle context"
+);
+
+assert.deepStrictEqual(
+  extractStockNumbers("6866 - 67500 KM"),
+  ["6866"],
+  "mileage number after stock ref is ignored as a car candidate"
+);
+assert.deepStrictEqual(
+  extractStockNumbers("6866 - 67,500 KM"),
+  ["6866"],
+  "comma-formatted mileage does not add another car candidate"
+);
+assert.deepStrictEqual(
+  extractStockNumbers("นข-6866 67500 KM"),
+  ["6866"],
+  "Thai plate suffix remains a candidate while mileage is ignored"
+);
+assert.deepStrictEqual(
+  extractStockNumbers("กรอไมล์ 67500 KM"),
+  [],
+  "mileage-only work text does not produce a car candidate"
+);
+assert.deepStrictEqual(
+  extractStockNumbers("95295 TRAVO 67500 KM"),
+  ["95295"],
+  "stock/spec candidate is kept while trailing mileage is ignored"
+);
+assert.deepStrictEqual(
+  extractStockNumbers("51072 RAPTOR 39,800 km"),
+  ["51072"],
+  "stock candidate is kept while comma mileage is ignored"
+);
+assert.deepStrictEqual(
+  extractStockNumbers("51072 เอาของ 31440"),
+  ["51072", "31440"],
+  "multiple real car refs are still candidates and not treated as mileage"
 );
 
 assertItems(
