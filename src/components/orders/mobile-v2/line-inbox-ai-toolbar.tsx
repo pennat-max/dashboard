@@ -480,6 +480,7 @@ function queueMessageNeedsManualReview(message: PendingQueueMessage): boolean {
   const flagged =
     Boolean(message.needs_human_review) ||
     String(message.extractionStatus ?? "").trim() === "needs_manual_review" ||
+    String(message.extractionStatus ?? "").trim() === "matched_no_work" ||
     String(message.extractionStatus ?? "").trim() === "no_items";
   const hasImagePlaceholderOnly =
     (message.action_lines ?? []).some((line) =>
@@ -551,6 +552,78 @@ function queueGroupIsAmbiguousVehicle(group: PendingQueueGroup): boolean {
   );
 }
 
+type LineInboxQueueCardKind = "actionable" | "matched_no_work" | "waiting_for_car_record" | "unresolved";
+
+function queueMessageIsMatchedNoWork(message: PendingQueueMessage): boolean {
+  if (queueMessageHasWorkItems(message)) return false;
+  if (queueMessageIsWaitingForCarRecord(message)) return false;
+  return (
+    String(message.extractionStatus ?? "").trim() === "matched_no_work" ||
+    (queueMessageHasMatchedCar(message) && !queueMessageHasWorkItems(message))
+  );
+}
+
+function queueMessageCardKind(message: PendingQueueMessage): LineInboxQueueCardKind {
+  if (queueMessageHasWorkItems(message)) return "actionable";
+  if (queueMessageIsWaitingForCarRecord(message)) return "waiting_for_car_record";
+  if (queueMessageIsMatchedNoWork(message)) return "matched_no_work";
+  return "unresolved";
+}
+
+function queueMessageStatusHeadline(message: PendingQueueMessage, uiLang: UiLang): string {
+  switch (queueMessageCardKind(message)) {
+    case "matched_no_work":
+      return uiLang === "en" ? "Car matched" : "จับรถได้แล้ว ✅";
+    case "waiting_for_car_record":
+      return uiLang === "en" ? "Waiting for car record" : "รอรถเข้าระบบ 🚧";
+    case "unresolved":
+      return uiLang === "en" ? "Car not identified yet" : "ยังไม่รู้ว่ารถคันไหน";
+    default:
+      return uiLang === "en" ? "New LINE work" : "งานใหม่จาก LINE";
+  }
+}
+
+function queueMessageStatusSubline(message: PendingQueueMessage, uiLang: UiLang): string {
+  const reason = String(message.manual_review_reason ?? "").trim();
+  switch (queueMessageCardKind(message)) {
+    case "matched_no_work":
+      return uiLang === "en"
+        ? "No actionable work item found. Open this car to add tasks manually."
+        : "ยังไม่พบรายการงาน\nแตะเพื่อเปิดรถคันนี้และเพิ่มงานเอง";
+    case "waiting_for_car_record":
+      return (
+        reason ||
+        (uiLang === "en"
+          ? "This vehicle is not in the current records yet. It may not be in Record / not synced / ref mismatch."
+          : "ระบบยังไม่พบรถคันนี้ในข้อมูลปัจจุบัน\nอาจเป็นรถที่ยังไม่เข้า Record / ยังไม่ sync / เลขอ้างอิงยังไม่ตรง")
+      );
+    case "unresolved":
+      return uiLang === "en"
+        ? "Choose or search for a car, or skip this message."
+        : "กรุณาเลือก/ค้นหารถเอง หรือข้าม";
+    default:
+      return "";
+  }
+}
+
+/** Primary label for queue cards — never use raw LINE text as the car title when car_row_id is missing. */
+function queueMessagePrimaryCarLabel(message: PendingQueueMessage, uiLang: UiLang): string {
+  const carRowId = String(message.car_row_id ?? "").trim();
+  if (carRowId) {
+    const detected = queueDetectedCarLabel(message);
+    if (detected) return detected;
+    const titled = queueMessageDisplayTitle(message, uiLang);
+    if (titled && titled !== "-" && titled !== "ยังไม่จับรถ") return titled;
+  }
+  const aiRef = String(message.aiTargetCarReference ?? "").trim();
+  if (aiRef) return aiRef;
+  const detected = queueDetectedCarLabel(message);
+  if (detected) return detected;
+  const candidates = queueCandidateLabels(message.extractedCarCandidates);
+  if (candidates.length > 0) return candidates[0] ?? "";
+  return "";
+}
+
 function queueMessageWorkActionLines(message: PendingQueueMessage): PendingQueueActionLine[] {
   return (message.action_lines ?? []).filter(
     (line) =>
@@ -617,8 +690,8 @@ function queueMessageRawText(message: PendingQueueMessage): string {
   return raw;
 }
 
-function queueMessageManualReviewTitle(uiLang: UiLang): string {
-  return uiLang === "en" ? "Needs manual review" : "รอตรวจด้วยมือ";
+function queueMessageManualReviewTitle(message: PendingQueueMessage, uiLang: UiLang): string {
+  return queueMessageStatusHeadline(message, uiLang);
 }
 
 function queueMessageManualReviewReason(message: PendingQueueMessage, uiLang: UiLang): string {
@@ -1303,6 +1376,57 @@ function useLineInboxBridgeState({
     return filtered;
   }, [carSearch, orders, selected]);
 
+  const ordersByCarRowId = useMemo(() => {
+    const map = new Map<string, LineInboxAiOrderPick>();
+    for (const order of orders) {
+      const id = String(order.carRowId ?? "").trim();
+      if (id) map.set(id, order);
+    }
+    return map;
+  }, [orders]);
+
+  const openCarFromQueue = useCallback(
+    (message: PendingQueueMessage, group: PendingQueueGroup) => {
+      const carRowId = String(message.car_row_id ?? group.car_row_id ?? "").trim();
+      const plateHint =
+        queueMessagePrimaryCarLabel(message, uiLang) ||
+        queueDetectedCarLabel(message) ||
+        String(message.plate_display ?? "").trim() ||
+        "-";
+      let order = carRowId ? ordersByCarRowId.get(carRowId) ?? null : null;
+      if (!order && plateHint && plateHint !== "-") {
+        const plateKey = normalizeLookup(plateHint);
+        order =
+          orders.find((o) => {
+            const fullPlateKey = normalizeLookup(o.fullPlate);
+            return fullPlateKey === plateKey || fullPlateKey.includes(plateKey) || plateKey.includes(fullPlateKey);
+          }) ?? null;
+      }
+      setOpen(false);
+      onPickCar?.({
+        orderId: order?.id ?? null,
+        carRowId: carRowId || order?.carRowId || null,
+        plate: order?.fullPlate || plateHint,
+      });
+    },
+    [onPickCar, orders, ordersByCarRowId, uiLang]
+  );
+
+  const searchCarFromQueue = useCallback(
+    (message: PendingQueueMessage) => {
+      const plateHint =
+        queueMessagePrimaryCarLabel(message, uiLang) ||
+        queueDetectedCarLabel(message) ||
+        String(message.aiTargetCarReference ?? "").trim() ||
+        String(message.plate_display ?? "").trim() ||
+        "-";
+      setOpen(false);
+      if (plateHint && plateHint !== "-") setCarSearch(plateHint);
+      onPickCar?.({ orderId: null, carRowId: null, plate: plateHint });
+    },
+    [onPickCar, uiLang]
+  );
+
   const detectedOrder = useMemo(() => {
     if (!detected) return null;
 
@@ -1503,26 +1627,40 @@ function useLineInboxBridgeState({
       const displayTitle = queueGroupDisplayTitle(group, uiLang);
       const isWaitingForCarRecord = queueGroupIsWaitingForCarRecord(group);
       const isAmbiguousVehicle = queueGroupIsAmbiguousVehicle(group);
+      const isUnresolved = queueGroupIsUnresolved(group);
+      const primaryLabel = manualReviewMessage ? queueMessagePrimaryCarLabel(manualReviewMessage, uiLang) : "";
       const rowPlate = isWaitingForCarRecord
         ? uiLang === "en"
           ? "Waiting for car record"
           : "รอรถเข้าระบบ 🚧"
-        : "";
+        : isUnresolved
+          ? uiLang === "en"
+            ? "Car not identified"
+            : "ยังไม่รู้ว่ารถคันไหน"
+          : "";
       const rowSpec = isWaitingForCarRecord
-        ? displayTitle || fallbackDescription || String(group.car_title ?? "").trim() || matched?.car || ""
-        : "";
+        ? primaryLabel || displayTitle || fallbackDescription || String(group.car_title ?? "").trim() || matched?.car || ""
+        : isUnresolved
+          ? primaryLabel || String(group.aiTargetCarReference ?? "").trim() || fallbackDescription || ""
+          : "";
       if (jobCount === 0 && photoCount === 0) continue;
       rows.push({
         groupKey: group.group_key,
         orderId: matched?.id ?? null,
         carRowId,
-        plate: rowPlate || (matched?.fullPlate || (displayTitle !== "-" && displayTitle !== "ยังไม่จับรถ" ? displayTitle : "") || fallbackTitle || "").trim() || "-",
+        plate:
+          rowPlate ||
+          matched?.fullPlate ||
+          primaryLabel ||
+          (displayTitle !== "-" && displayTitle !== "ยังไม่จับรถ" ? displayTitle : "") ||
+          (isUnresolved ? "-" : fallbackTitle) ||
+          "-",
         spec: rowSpec || String(group.car_title ?? "").trim() || matched?.car || fallbackDescription || "",
         sale: String(group.sale ?? "").trim() || String(matched?.sale ?? "").trim(),
         jobCount,
         manualReviewCount,
         photoCount,
-        isUnresolved: queueGroupIsUnresolved(group),
+        isUnresolved,
         isWaitingForCarRecord,
         isAmbiguousVehicle,
         manualReviewPreview: manualReviewMessage ? queueMessageRawText(manualReviewMessage).slice(0, 180) : "",
@@ -2466,69 +2604,48 @@ function useLineInboxBridgeState({
               </p>
             ) : null}
             {row.manualReviewCount > 0 ? (
-              <div className="mt-2 rounded-xl bg-amber-50 px-2 py-2 text-[11px] font-medium leading-relaxed text-amber-950 ring-1 ring-amber-100">
+              <div
+                className={cn(
+                  "mt-2 rounded-xl px-2 py-2 text-[11px] font-medium leading-relaxed ring-1",
+                  row.isWaitingForCarRecord
+                    ? "bg-sky-50 text-sky-950 ring-sky-100"
+                    : row.isUnresolved
+                      ? "bg-rose-50 text-rose-950 ring-rose-100"
+                      : "bg-emerald-50 text-emerald-950 ring-emerald-100"
+                )}
+                onClick={(event) => event.stopPropagation()}
+              >
                 <p className="font-bold">
                   {row.isWaitingForCarRecord
                     ? uiLang === "en"
                       ? "Waiting for car record"
                       : "รอรถเข้าระบบ 🚧"
-                    : row.isAmbiguousVehicle
+                    : row.isUnresolved
                       ? uiLang === "en"
-                        ? "Multiple vehicle candidates"
-                        : "พบรถหลายคัน — รอตรวจ"
-                      : row.isUnresolved
-                    ? uiLang === "en"
-                      ? "AI could not split work items yet."
-                      : "AI ยังแยกงานไม่ได้"
-                    : uiLang === "en"
-                      ? "Review LINE work manually"
-                      : "รอตรวจงานจาก LINE"}
+                        ? "Car not identified yet"
+                        : "ยังไม่รู้ว่ารถคันไหน"
+                      : uiLang === "en"
+                        ? "Car matched"
+                        : "จับรถได้แล้ว ✅"}
                 </p>
-                {row.detectedCarLabel ? (
-                  <p className="mt-1 line-clamp-2 text-slate-700">
-                    {uiLang === "en" ? "Detected car: " : "รถที่จับได้: "}
-                    {row.detectedCarLabel}
-                  </p>
-                ) : null}
-                {row.isWaitingForCarRecord ? (
-                  <p className="mt-1 text-sky-800">
-                    {uiLang === "en" ? "Car is not in the current records yet." : "รถยังไม่มีข้อมูลในระบบ"}
-                  </p>
-                ) : row.isAmbiguousVehicle ? (
-                  <p className="mt-1 text-orange-700">
-                    {uiLang === "en" ? "Select the correct car before saving." : "กรุณาเลือก/ค้นรถให้ชัดก่อนบันทึก"}
-                  </p>
-                ) : row.isUnresolved ? (
-                  <p className="mt-1 text-rose-700">{uiLang === "en" ? "Car is still unclear." : "ยังจับรถไม่ชัด"}</p>
-                ) : (
-                  <p className="mt-1 font-semibold text-emerald-800">
-                    {uiLang === "en" ? "Car matched - review work manually." : "จับรถได้แล้ว — รอตรวจงาน"}
-                  </p>
-                )}
-                {row.carRowId ? (
-                  <p className="mt-1 break-all text-[10px] text-slate-500">car_row_id: {row.carRowId}</p>
-                ) : null}
-                {row.aiTargetCarReference ? (
-                  <p className="mt-1 text-[10px] font-semibold text-slate-600">
-                    {uiLang === "en" ? "AI target: " : "AI ชี้รถ: "}
-                    {row.aiTargetCarReference}
-                    {row.aiTargetCarConfidence ? ` · ${row.aiTargetCarConfidence}` : ""}
-                  </p>
-                ) : null}
-                {queueCandidateLabels(row.extractedCarCandidates).length > 0 ? (
-                  <p className="mt-1 line-clamp-3 text-[10px] text-slate-600">
-                    {uiLang === "en" ? "Candidates: " : "ตัวเลือกที่พบ: "}
-                    {queueCandidateLabels(row.extractedCarCandidates).join(" · ")}
-                  </p>
-                ) : null}
-                {row.matchReason ? (
-                  <p className="mt-1 line-clamp-2 text-[10px] text-slate-500">
-                    {uiLang === "en" ? "Match: " : "เหตุผล match: "}
-                    {row.matchReason}
-                  </p>
+                <p className="mt-1 whitespace-pre-wrap text-[11px]">
+                  {row.isWaitingForCarRecord
+                    ? uiLang === "en"
+                      ? "Not in current car records yet."
+                      : "ระบบยังไม่พบรถคันนี้ในข้อมูลปัจจุบัน"
+                    : row.isUnresolved
+                      ? uiLang === "en"
+                        ? "Search or skip from the card."
+                        : "กรุณาเลือก/ค้นหารถเอง หรือข้าม"
+                      : uiLang === "en"
+                        ? "No work items found yet."
+                        : "ยังไม่พบรายการงาน"}
+                </p>
+                {row.detectedCarLabel && !row.isUnresolved ? (
+                  <p className="mt-1 line-clamp-2 text-sm font-bold text-slate-800">{row.detectedCarLabel}</p>
                 ) : null}
                 {row.manualReviewPreview ? (
-                  <p className="mt-1 line-clamp-4 whitespace-pre-wrap text-slate-800">{row.manualReviewPreview}</p>
+                  <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-[10px] text-slate-500">{row.manualReviewPreview}</p>
                 ) : null}
               </div>
             ) : null}
@@ -2728,56 +2845,59 @@ function useLineInboxBridgeState({
           });
         })();
         const fallbackAssignee = resolveSaleStaffForOrder(group.sale, saleAssigneesBySale);
-        const matchedCar = queueMessageHasMatchedCar(m) || queueGroupHasMatchedCar(group);
         const selectedActions = selectedQueueActionsForInbox(m, fallbackAssignee);
+        const cardKind = queueMessageCardKind(m);
+        const primaryCarLabel = queueMessagePrimaryCarLabel(m, uiLang);
+        const newWorkCount = displayLines.filter((line) => line.duplicate_status === "new").length;
+        const manualCardTone =
+          cardKind === "matched_no_work"
+            ? "border-emerald-200 bg-emerald-50 text-emerald-950"
+            : cardKind === "waiting_for_car_record"
+              ? "border-sky-200 bg-sky-50 text-sky-950"
+              : "border-rose-200 bg-rose-50 text-rose-950";
         return (
           <div key={m.inbox_id} className="rounded-xl bg-white px-2.5 py-2.5 ring-1 ring-slate-200/80">
             {showManual ? (
-              <div className="mb-2.5 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-[12px] leading-relaxed text-amber-950">
+              <div
+                className={cn(
+                  "mb-2.5 rounded-xl border px-3 py-2.5 text-[12px] leading-relaxed",
+                  manualCardTone
+                )}
+              >
                 <div className="flex flex-wrap items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="text-sm font-bold">{queueMessageManualReviewTitle(uiLang)}</p>
-                    <p className="mt-0.5 font-medium">{queueMessageManualReviewReason(m, uiLang)}</p>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-bold leading-snug">{queueMessageManualReviewTitle(m, uiLang)}</p>
+                    <p className="mt-1 whitespace-pre-wrap text-[12px] font-medium leading-relaxed opacity-95">
+                      {queueMessageStatusSubline(m, uiLang)}
+                    </p>
                   </div>
                   {m.received_at ? (
-                    <span className="shrink-0 rounded-full bg-white/80 px-2 py-1 text-[10px] font-semibold text-slate-600 ring-1 ring-amber-100">
+                    <span className="shrink-0 rounded-full bg-white/80 px-2 py-1 text-[10px] font-semibold text-slate-600 ring-1 ring-white/60">
                       {formatQueueMessageReceivedAt(m.received_at, uiLang)}
                     </span>
                   ) : null}
                 </div>
+                {primaryCarLabel ? (
+                  <p className="mt-2 text-sm font-bold text-slate-900">{primaryCarLabel}</p>
+                ) : null}
                 {m.source_label || m.group_id_display ? (
                   <p className="mt-2 text-[10px] font-semibold text-slate-500">
                     {[m.source_label, m.group_id_display ? `group: ${m.group_id_display}` : ""].filter(Boolean).join(" · ")}
                   </p>
                 ) : null}
                 {String(m.contextSource ?? m.context_source ?? "").trim() === "reply_context" ? (
-                  <p className="mt-2 rounded-lg bg-sky-50 px-2 py-1 text-[10px] font-semibold text-sky-800 ring-1 ring-sky-100">
+                  <p className="mt-2 rounded-lg bg-white/70 px-2 py-1 text-[10px] font-semibold text-sky-800 ring-1 ring-white/80">
                     {uiLang === "en" ? "Referenced from previous LINE message" : "อ้างอิงจากข้อความก่อนหน้า"}
                     {String(m.replyContext?.source_raw_text_preview ?? m.reply_context?.source_raw_text_preview ?? "").trim()
                       ? ` · ${String(m.replyContext?.source_raw_text_preview ?? m.reply_context?.source_raw_text_preview ?? "").trim()}`
                       : ""}
                   </p>
                 ) : null}
-                {queueDetectedCarLabel(m) ? (
-                  <p className="mt-2 font-semibold text-slate-800">
-                    {uiLang === "en" ? "Detected car: " : "รถที่จับได้: "}
-                    {queueDetectedCarLabel(m)}
-                  </p>
-                ) : null}
-                {!matchedCar ? (
-                  <p className="mt-2 font-semibold text-rose-700">
-                    {uiLang === "en" ? "Car is still unclear." : "ยังจับรถไม่ชัด"}
-                  </p>
-                ) : (
-                  <p className="mt-1 font-semibold text-emerald-800">
-                    {uiLang === "en" ? "Car matched - review work manually." : "จับรถได้แล้ว — รอตรวจงาน"}
-                  </p>
-                )}
                 {m.car_row_id ? (
                   <p className="mt-1 break-all text-[10px] font-medium text-slate-500">car_row_id: {m.car_row_id}</p>
                 ) : null}
-                {m.aiTargetCarReference ? (
-                  <p className="mt-1 text-[10px] font-semibold text-slate-600">
+                {m.aiTargetCarReference && !primaryCarLabel ? (
+                  <p className="mt-1 text-[11px] font-semibold text-slate-700">
                     {uiLang === "en" ? "AI target: " : "AI ชี้รถ: "}
                     {m.aiTargetCarReference}
                     {m.aiTargetCarConfidence ? ` · ${m.aiTargetCarConfidence}` : ""}
@@ -2794,11 +2914,6 @@ function useLineInboxBridgeState({
                     {uiLang === "en" ? "Match: " : "เหตุผล match: "}
                     {m.matchReason}
                   </p>
-                ) : null}
-                {queueMessageRawText(m) ? (
-                  <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-lg bg-white/85 p-2 text-[11px] leading-relaxed text-slate-800 ring-1 ring-amber-100">
-                    {queueMessageRawText(m)}
-                  </pre>
                 ) : null}
                 {lineAttachments.length > 0 ? (
                   <div className="mt-2">
@@ -2821,28 +2936,140 @@ function useLineInboxBridgeState({
                     </div>
                   </div>
                 ) : null}
-                <div className="mt-3">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    disabled={savingInboxId === m.inbox_id}
-                    onClick={() => void skipQueueCard(m)}
-                    className="min-h-11 w-full touch-manipulation"
-                  >
-                    {savingInboxId === m.inbox_id
-                      ? uiLang === "en"
-                        ? "Saving…"
-                        : "กำลังบันทึก…"
-                      : uiLang === "en"
-                        ? "Skip / mark reviewed"
-                        : "ข้าม / ทำเครื่องหมายว่าตรวจแล้ว"}
-                  </Button>
+                {queueMessageRawText(m) ? (
+                  <div className="mt-2">
+                    <p className="mb-1 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                      {uiLang === "en" ? "Original LINE text" : "ข้อความ LINE ต้นฉบับ"}
+                    </p>
+                    <pre className="max-h-32 overflow-auto whitespace-pre-wrap rounded-lg bg-white/70 p-2 text-[11px] leading-relaxed text-slate-600 ring-1 ring-white/80">
+                      {queueMessageRawText(m)}
+                    </pre>
+                  </div>
+                ) : null}
+                <div className="mt-3 flex flex-col gap-2">
+                  {cardKind === "matched_no_work" ? (
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={!messageCarRowId}
+                        onClick={() => openCarFromQueue(m, group)}
+                        className="min-h-11 touch-manipulation bg-emerald-700 hover:bg-emerald-800"
+                      >
+                        {uiLang === "en" ? "Open this car" : "เปิดรถคันนี้"}
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={savingInboxId === m.inbox_id}
+                        onClick={() => void skipQueueCard(m)}
+                        className="min-h-11 touch-manipulation"
+                      >
+                        {savingInboxId === m.inbox_id
+                          ? uiLang === "en"
+                            ? "Saving…"
+                            : "กำลังบันทึก…"
+                          : uiLang === "en"
+                            ? "Skip"
+                            : "ข้าม"}
+                      </Button>
+                    </div>
+                  ) : cardKind === "waiting_for_car_record" ? (
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={queueLoading}
+                        onClick={() => void fetchQueue()}
+                        className="min-h-11 touch-manipulation"
+                      >
+                        {uiLang === "en" ? "Check again" : "ตรวจอีกครั้ง"}
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={() => searchCarFromQueue(m)}
+                        className="min-h-11 touch-manipulation bg-sky-700 hover:bg-sky-800"
+                      >
+                        {uiLang === "en" ? "Search car" : "ค้นหารถเอง"}
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={savingInboxId === m.inbox_id}
+                        onClick={() => void skipQueueCard(m)}
+                        className="min-h-11 touch-manipulation"
+                      >
+                        {savingInboxId === m.inbox_id
+                          ? uiLang === "en"
+                            ? "Saving…"
+                            : "กำลังบันทึก…"
+                          : uiLang === "en"
+                            ? "Skip"
+                            : "ข้าม"}
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={() => searchCarFromQueue(m)}
+                        className="min-h-11 touch-manipulation bg-violet-700 hover:bg-violet-800"
+                      >
+                        {uiLang === "en" ? "Search car" : "ค้นหารถ"}
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={savingInboxId === m.inbox_id}
+                        onClick={() => void skipQueueCard(m)}
+                        className="min-h-11 touch-manipulation"
+                      >
+                        {savingInboxId === m.inbox_id
+                          ? uiLang === "en"
+                            ? "Saving…"
+                            : "กำลังบันทึก…"
+                          : uiLang === "en"
+                            ? "Skip"
+                            : "ข้าม"}
+                      </Button>
+                    </div>
+                  )}
                 </div>
               </div>
             ) : null}
             {displayLines.length > 0 ? (
             <>
+            <div className="mb-2.5 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="inline-flex min-h-8 items-center rounded-full bg-emerald-100 px-3 text-xs font-bold text-emerald-900 ring-1 ring-emerald-200">
+                  {uiLang === "en"
+                    ? `${newWorkCount || displayLines.length} new job(s)`
+                    : `งานใหม่ ${newWorkCount || displayLines.length}`}
+                </span>
+                {selectedActions.length > 0 ? (
+                  <span className="text-[11px] font-semibold text-slate-600">
+                    {uiLang === "en"
+                      ? `${selectedActions.length} selected to save`
+                      : `เลือกบันทึก ${selectedActions.length} รายการ`}
+                  </span>
+                ) : null}
+              </div>
+              {messageCarRowId ? (
+                <button
+                  type="button"
+                  onClick={() => openCarFromQueue(m, group)}
+                  className="min-h-9 shrink-0 rounded-full bg-violet-100 px-3 text-[11px] font-bold text-violet-900 ring-1 ring-violet-200 touch-manipulation active:bg-violet-200"
+                >
+                  {uiLang === "en" ? "Open car" : "เปิดรถ"}
+                </button>
+              ) : null}
+            </div>
             <ul className="space-y-2.5">
               {displayLines.map((line) => {
                 const rowKey = queueSuggestionRowKey(m.inbox_id, line.item_index);

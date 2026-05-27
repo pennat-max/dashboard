@@ -6342,21 +6342,31 @@ export function MobileOrderTrackingHome({
 
   const focusLineInboxCar = useCallback(
     async (payload: LineInboxPickCarPayload) => {
-      if (!payload.orderId) return;
-      setLineInboxFocusOrderId(payload.orderId);
+      const plateQ = String(payload.plate ?? "").trim();
+      if (plateQ && plateQ !== "-") setVehicleSearch(sanitizeVehicleSearchInput(plateQ));
+
+      let orderId = String(payload.orderId ?? "").trim() || null;
+      const carRowId = String(payload.carRowId ?? "").trim();
+      if (!orderId && carRowId) {
+        orderId = mappedOrders.find((o) => String(o.carRowId ?? "").trim() === carRowId)?.id ?? null;
+      }
+      if (!orderId && plateQ && plateQ !== "-") {
+        orderId = mappedOrders.find((o) => matchesVehicleSearch(o, plateQ))?.id ?? null;
+      }
+      if (!orderId) return;
+
+      setLineInboxFocusOrderId(orderId);
       setSaleFilters(new Set());
       setSaleStatusFilters(new Set());
       setStaffFilters(new Set());
       setItemStatusFilters(new Set());
-      const q = String(payload.plate ?? "").trim();
-      if (q && q !== "-") setVehicleSearch(sanitizeVehicleSearchInput(q));
 
-      const order = mappedOrders.find((o) => o.id === payload.orderId);
+      const order = mappedOrders.find((o) => o.id === orderId);
       if (order && orderChipCacheExperimentEnabled) {
         await hydrateExperimentDetails([order]);
       }
 
-      const idx = visible.findIndex((o) => o.id === payload.orderId);
+      const idx = visible.findIndex((o) => o.id === orderId);
       if (idx >= 0) {
         setVisibleLimit((prev) => Math.max(prev, idx + 1));
         setExperimentRequestedCount((prev) =>
@@ -6365,7 +6375,7 @@ export function MobileOrderTrackingHome({
       }
 
       const tryScroll = (attempt = 0) => {
-        const el = document.getElementById(`order-card-${payload.orderId}`);
+        const el = document.getElementById(`order-card-${orderId}`);
         if (el) {
           el.scrollIntoView({ behavior: "smooth", block: "start" });
           window.requestAnimationFrame(() => {
