@@ -80,8 +80,13 @@ const {
 } = loadTsFile(path.join(root, "src/lib/line-inbox/review-link.ts"));
 const {
   extractLineInboxMileageCarReference,
+  lineInboxPlateNumericSuffix,
+  scoreLineInboxStockMatch,
   extractStockNumbers,
 } = loadTsFile(path.join(root, "src/lib/line-inbox/resolve-car.ts"));
+const { deriveLineInboxMatchStatus } = loadTsFile(
+  path.join(root, "src/lib/line-inbox/car-match-status.ts")
+);
 const {
   extractLineQuotedMessageId,
   makeLineReplyCaptureAnalyzePayload,
@@ -199,6 +204,53 @@ assert.deepStrictEqual(extractStockNumbers("\u0e19\u0e02-6866 67500 KM"), ["6866
 assert.deepStrictEqual(extractStockNumbers("95295 TRAVO 67500 KM"), ["95295"], "stock/spec plus mileage ignores mileage number");
 assert.deepStrictEqual(extractStockNumbers("51072 RAPTOR 39,800 km"), ["51072"], "stock/spec plus comma mileage ignores mileage number");
 assert.deepStrictEqual(extractStockNumbers("51072 \u0e40\u0e2d\u0e32\u0e02\u0e2d\u0e07 31440"), ["51072", "31440"], "multiple real car refs are not treated as mileage");
+assert.strictEqual(lineInboxPlateNumericSuffix("\u0e19\u0e02-6866"), "6866", "Thai plate suffix is extracted");
+assert(scoreLineInboxStockMatch({ plate_number: "\u0e19\u0e02-6866" }, "6866") > scoreLineInboxStockMatch({ spec: "6866" }, "6866"), "plate suffix outranks loose spec match");
+assert.strictEqual(scoreLineInboxStockMatch({ row_id: "a18c7942-10fc-4d32-8059-5b97f86ec9e8" }, "6866"), 0, "UUID row_id substrings do not count as stock/ref matches");
+assert.strictEqual(scoreLineInboxStockMatch({ plate_number: "\u0e01\u0e01-6866" }, "6866"), scoreLineInboxStockMatch({ plate_number: "\u0e19\u0e02-6866" }, "6866"), "duplicate suffix plates score equally and remain ambiguous upstream");
+const waitingCarRecordText = [
+  "44582 Raptor Double Cab Raptor 2.0L 4WD AT BLACK 2025 \u0e1b\u0e49\u0e32\u0e22\u0e41\u0e14\u0e07",
+  "\u0e23\u0e16\u0e21\u0e32\u0e2a\u0e31\u0e1b\u0e14\u0e32\u0e2b\u0e4c\u0e04\u0e48\u0e30",
+  "\u0e15\u0e34\u0e14\u0e15\u0e31\u0e49\u0e07 \u0e42\u0e23\u0e40\u0e25\u0e2d\u0e23\u0e4c AUTO \u0e22\u0e35\u0e48\u0e2b\u0e49\u0e2d HAMMER",
+].join("\n");
+assert.deepStrictEqual(
+  deriveLineInboxMatchStatus({
+    rawText: waitingCarRecordText,
+    extractedCarCandidates: [
+      {
+        text: "44582 Raptor Double Cab Raptor 2.0L 4WD AT BLACK 2025 \u0e1b\u0e49\u0e32\u0e22\u0e41\u0e14\u0e07",
+        kind: "vehicle_context",
+        confidence: "high",
+      },
+    ],
+    matchReason: 'Multiple spec/model candidates from "44582 Raptor"',
+  }),
+  { matchStatus: "waiting_for_car_record", unmatchedReason: "pending_car_record" },
+  "strong vehicle-looking stock/spec text with no resolved car waits for car record"
+);
+assert.strictEqual(
+  deriveLineInboxMatchStatus({
+    rawText: "Raptor Double Cab BLACK \u0e1b\u0e49\u0e32\u0e22\u0e41\u0e14\u0e07",
+    extractedCarCandidates: [{ text: "Raptor Double Cab BLACK \u0e1b\u0e49\u0e32\u0e22\u0e41\u0e14\u0e07", kind: "vehicle_context" }],
+    matchReason: 'Multiple spec/model candidates from "Raptor Double Cab"',
+  }).matchStatus,
+  "ambiguous_vehicle",
+  "vehicle context without stock/ref stays ambiguous"
+);
+assert.strictEqual(
+  deriveLineInboxMatchStatus({ rawText: "\u0e1d\u0e32\u0e01\u0e14\u0e39\u0e43\u0e2b\u0e49\u0e2b\u0e19\u0e48\u0e2d\u0e22", extractedCarCandidates: [], matchReason: "No car candidates found" }).matchStatus,
+  "no_vehicle_context",
+  "plain no-car text stays no_vehicle_context"
+);
+assert.strictEqual(
+  deriveLineInboxMatchStatus({ carRowId: "car-row-1", rawText: waitingCarRecordText }).matchStatus,
+  "matched",
+  "resolved car rows stay matched"
+);
+assert(
+  splitLineTextForInbox(waitingCarRecordText).items.includes("\u0e15\u0e34\u0e14\u0e15\u0e31\u0e49\u0e07 \u0e42\u0e23\u0e40\u0e25\u0e2d\u0e23\u0e4c AUTO \u0e22\u0e35\u0e48\u0e2b\u0e49\u0e2d HAMMER"),
+  "waiting-for-record rows keep parsed work items visible"
+);
 const separatorReset = splitLineTextForInbox(`${thaiFilmAround}\n==========\n${thaiDoorPercent}`);
 assert.deepStrictEqual(separatorReset.items, [thaiFilmAround], "separator between blocks does not create a detail item");
 assert.strictEqual(separatorReset.grouped_items[0]?.note ?? "", "", "separator resets detail grouping context");
@@ -650,6 +702,20 @@ assert.strictEqual(
 );
 assert.strictEqual(
   evaluateLineAutoSaveEligibility({
+    row: autoSaveRow,
+    payload: autoSavePayload({
+      detected_car: { ...autoSavePayload().detected_car, car_row_id: "" },
+      matchStatus: "waiting_for_car_record",
+      unmatchedReason: "pending_car_record",
+    }),
+    enabled: true,
+    allowedGroupIds: "*",
+  }).blocked_reason,
+  "pending_car_record",
+  "waiting-for-car-record rows are blocked from auto-save with a specific reason"
+);
+assert.strictEqual(
+  evaluateLineAutoSaveEligibility({
     row: { ...autoSaveRow, raw_text: "4380 - 47000 KM." },
     payload: autoSavePayload({
       detected_car: { ...autoSavePayload().detected_car, car_row_id: "", plate_text: "4380", confidence: 0 },
@@ -904,6 +970,9 @@ for (const token of [
   "linePhotoCount",
   "extractionStatus",
   "matchStatus",
+  "unmatchedReason",
+  "waiting_for_car_record",
+  "pending_car_record",
   "buildFallbackAnalyzeItemsFromRawText",
   "action_line_count: actionEntriesForMessage.length",
   "isLineInboxNoiseOrSeparatorOnlyText",

@@ -5,6 +5,12 @@ import { LINE_INBOX_MESSAGES_TABLE } from "@/lib/line-inbox/line-inbox-messages"
 import { buildFallbackAnalyzeItemsFromRawText } from "@/lib/line-inbox/fallback-analyze-items";
 import { buildFallbackAnalyzePayloadFromRawText } from "@/lib/line-inbox/fallback-analyze-payload";
 import { isLineInboxNoiseOrSeparatorOnlyText } from "@/lib/line-inbox/split-line-text";
+import { buildLineOrderReviewUrl } from "@/lib/line-inbox/review-link";
+import {
+  deriveLineInboxMatchStatus,
+  type LineInboxMatchStatus,
+  type LineInboxUnmatchedReason,
+} from "@/lib/line-inbox/car-match-status";
 import type {
   DuplicateStatus,
   ExistingOrderItemRow,
@@ -89,6 +95,8 @@ type PendingQueueDetectedCar = {
   confidence: number;
 };
 
+type PendingQueueMatchStatus = LineInboxMatchStatus;
+
 type PendingQueueMsg = {
   inbox_id: string;
   received_at: string;
@@ -120,8 +128,12 @@ type PendingQueueMsg = {
   related_photo_ids: string[];
   relatedPhotoIds: string[];
   suggestedItems: string[];
-  extractionStatus: "ok" | "no_items" | "needs_manual_review";
-  matchStatus: "matched" | "unresolved";
+  extractionStatus: "ok" | "no_items" | "needs_manual_review" | "matched_no_work";
+  matchStatus: PendingQueueMatchStatus;
+  unmatchedReason: LineInboxUnmatchedReason;
+  unmatched_reason: LineInboxUnmatchedReason;
+  reviewUrl: string;
+  review_url: string;
   car_row_id: string;
   sale: string;
   raw_text: string;
@@ -166,8 +178,12 @@ type PendingQueueGroup = {
   related_photo_ids: string[];
   relatedPhotoIds: string[];
   suggestedItems: string[];
-  extractionStatus: "ok" | "no_items" | "needs_manual_review";
-  matchStatus: "matched" | "unresolved";
+  extractionStatus: "ok" | "no_items" | "needs_manual_review" | "matched_no_work";
+  matchStatus: PendingQueueMatchStatus;
+  unmatchedReason: LineInboxUnmatchedReason;
+  unmatched_reason: LineInboxUnmatchedReason;
+  reviewUrl: string;
+  review_url: string;
   sale: string;
   source_label: string;
   source_type: string;
@@ -611,6 +627,36 @@ function uniqueAttachments(items: PendingQueueAttachment[]): PendingQueueAttachm
   return out;
 }
 
+function matchStatusRank(status: PendingQueueMatchStatus): number {
+  switch (status) {
+    case "matched":
+      return 4;
+    case "waiting_for_car_record":
+      return 3;
+    case "ambiguous_vehicle":
+      return 2;
+    case "unresolved":
+      return 1;
+    case "no_vehicle_context":
+    default:
+      return 0;
+  }
+}
+
+function strongerMatchStatus(a: PendingQueueMatchStatus, b: PendingQueueMatchStatus): PendingQueueMatchStatus {
+  return matchStatusRank(b) > matchStatusRank(a) ? b : a;
+}
+
+function unmatchedReasonForStatus(
+  status: PendingQueueMatchStatus,
+  fallback: LineInboxUnmatchedReason
+): LineInboxUnmatchedReason {
+  if (status === "waiting_for_car_record") return "pending_car_record";
+  if (status === "ambiguous_vehicle" || status === "unresolved") return fallback || "multiple_candidates";
+  if (status === "no_vehicle_context") return "no_car_candidate";
+  return "";
+}
+
 function groupMessages(messages: PendingQueueMsg[]): PendingQueueGroup[] {
   const map = new Map<string, PendingQueueGroup>();
 
@@ -651,10 +697,19 @@ function groupMessages(messages: PendingQueueMsg[]): PendingQueueGroup[] {
       existing.extractionStatus =
         existing.extractionStatus === "ok" || message.extractionStatus === "ok"
           ? "ok"
+          : existing.extractionStatus === "matched_no_work" || message.extractionStatus === "matched_no_work"
+            ? "matched_no_work"
           : existing.extractionStatus === "needs_manual_review" || message.extractionStatus === "needs_manual_review"
             ? "needs_manual_review"
             : "no_items";
-      existing.matchStatus = existing.car_row_id ? "matched" : "unresolved";
+      existing.matchStatus = existing.car_row_id ? "matched" : strongerMatchStatus(existing.matchStatus, message.matchStatus);
+      existing.unmatchedReason = unmatchedReasonForStatus(
+        existing.matchStatus,
+        existing.unmatchedReason || message.unmatchedReason
+      );
+      existing.unmatched_reason = existing.unmatchedReason;
+      if (!existing.reviewUrl) existing.reviewUrl = message.reviewUrl;
+      if (!existing.review_url) existing.review_url = message.review_url;
       continue;
     }
 
@@ -688,6 +743,10 @@ function groupMessages(messages: PendingQueueMsg[]): PendingQueueGroup[] {
       suggestedItems: message.suggestedItems,
       extractionStatus: message.extractionStatus,
       matchStatus: message.matchStatus,
+      unmatchedReason: message.unmatchedReason,
+      unmatched_reason: message.unmatched_reason,
+      reviewUrl: message.reviewUrl,
+      review_url: message.review_url,
       sale: message.sale,
       source_label: message.source_label,
       source_type: message.source_type,
@@ -854,6 +913,7 @@ export async function GET() {
         });
       });
       const manualReviewOnly = needsHumanReview && actionEntries.length === 0;
+      const matchedNoWorkOnly = Boolean(car_row_id) && manualReviewOnly;
 
       if (actionEntries.length === 0 && !manualReviewOnly) continue;
 
@@ -903,12 +963,49 @@ export async function GET() {
       );
       const suggestedItems = actionEntriesForMessage.map((entry) => entry.suggested_item_name).filter(Boolean);
       const extractionStatus =
-        actionEntriesForMessage.length > 0 ? "ok" : needsHumanReview ? "needs_manual_review" : "no_items";
-      const matchStatus = car_row_id ? "matched" : "unresolved";
+        actionEntriesForMessage.length > 0
+          ? "ok"
+          : matchedNoWorkOnly
+            ? "matched_no_work"
+            : needsHumanReview
+              ? "needs_manual_review"
+              : "no_items";
+      const matchMeta = deriveLineInboxMatchStatus({
+        carRowId: car_row_id,
+        rawText: row.raw_text,
+        extractedCarCandidates,
+        matchReason,
+      });
+      const storedMatchStatus = cleanString(payload.matchStatus);
+      const matchStatus: PendingQueueMatchStatus =
+        car_row_id
+          ? "matched"
+          : storedMatchStatus === "waiting_for_car_record" ||
+              storedMatchStatus === "ambiguous_vehicle" ||
+              storedMatchStatus === "no_vehicle_context" ||
+              storedMatchStatus === "unresolved"
+            ? storedMatchStatus
+            : matchMeta.matchStatus;
+      const unmatchedReason: LineInboxUnmatchedReason =
+        matchStatus === "matched"
+          ? ""
+          : (cleanString(payload.unmatchedReason) as LineInboxUnmatchedReason) || matchMeta.unmatchedReason;
+      const queueNeedsHumanReview = needsHumanReview || matchedNoWorkOnly;
+      const reviewUrl = car_row_id
+        ? buildLineOrderReviewUrl({ carRowId: car_row_id, plate: plateText || carTitle || fallbackTitle })
+        : "";
+      const manualReviewReason =
+        matchedNoWorkOnly
+          ? "จับรถได้แล้ว แต่ยังไม่พบรายการงาน"
+          : matchStatus === "waiting_for_car_record"
+            ? "ระบบยังไม่พบรถคันนี้ในข้อมูลปัจจุบัน อาจเป็นรถที่ยังไม่เข้า Record / ยังไม่ sync / เลขอ้างอิงยังไม่ตรง กรุณาตรวจสอบอีกครั้ง"
+            : matchStatus === "ambiguous_vehicle"
+              ? "ข้อความนี้คล้ายข้อมูลรถหลายคัน กรุณาค้นหา/เลือกเองก่อนบันทึก"
+              : "";
 
       totalNew += newEntries.length;
       totalAction += actionEntriesForMessage.length;
-      totalManualReview += manualReviewOnly ? 1 : 0;
+      totalManualReview += manualReviewOnly || matchedNoWorkOnly ? 1 : 0;
       messages.push({
         inbox_id: id,
         received_at: String(row.received_at ?? ""),
@@ -942,23 +1039,27 @@ export async function GET() {
         suggestedItems,
         extractionStatus,
         matchStatus,
+        unmatchedReason,
+        unmatched_reason: unmatchedReason,
+        reviewUrl,
+        review_url: reviewUrl,
         car_row_id: car_row_id || "",
         sale,
         raw_text: String(row.raw_text ?? "").trim(),
         raw_text_preview: fallbackDescription.slice(0, 120),
         detected_car: detectedCarForQueue(payload, car_row_id || "", related),
-        manual_review_reason: manualReviewOnly
+        manual_review_reason: manualReviewReason || (manualReviewOnly
           ? car_row_id
             ? "AI ยังแยกงานไม่ได้ — รอตรวจด้วยมือ"
             : "AI ยังแยกงานไม่ได้"
-          : "",
+          : ""),
         new_lines: newEntries,
         new_line_count: newEntries.length,
         action_lines: actionEntriesForMessage,
         action_line_count: actionEntriesForMessage.length,
         existing_items: uniqueExistingItems(payload.existing_items ?? []),
         attachments: messageAttachments,
-        needs_human_review: needsHumanReview,
+        needs_human_review: queueNeedsHumanReview,
         group_anchor_id: relatedTextMessageId || (isLineImageOnlyText(row.raw_text) ? imageOnlyFallbackGroupAnchor(row) : id),
       });
     }
