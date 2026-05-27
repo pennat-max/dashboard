@@ -120,6 +120,7 @@ assert.strictEqual(isLineGroupAllowed("C-any-group", parseLineAllowedGroups("ALL
 assert.strictEqual(isLineGroupAllowed("", parseLineAllowedGroups("*")), false, "wildcard still requires a real group id");
 assert.strictEqual(LINE_INBOX_QUEUE_REFRESH_MS, 5 * 60 * 1000, "AI LINE queue refresh interval is five minutes");
 assert.strictEqual(parseLineInboxQueueFilter("manual"), "manual", "manual review queue filter parses");
+assert.strictEqual(parseLineInboxQueueFilter("waiting_for_car"), "waiting_for_car", "waiting-for-car queue filter parses");
 assert.strictEqual(parseLineInboxQueueFilter("bad-filter"), "all", "unknown queue filter falls back to all");
 const queueFilterToday = "2026-05-27";
 const queueFilterGroups = [
@@ -138,13 +139,38 @@ const queueFilterGroups = [
     messages: [{ received_at: "2026-05-25T08:00:00+07:00", needs_human_review: true, extractionStatus: "needs_manual_review" }],
     attachments: [],
   },
+  {
+    total_manual_reviews: 1,
+    matchStatus: "waiting_for_car_record",
+    unmatchedReason: "pending_car_record",
+    messages: [
+      {
+        received_at: "2026-05-27T09:00:00+07:00",
+        needs_human_review: true,
+        extractionStatus: "needs_manual_review",
+        matchStatus: "waiting_for_car_record",
+        unmatchedReason: "pending_car_record",
+      },
+    ],
+    attachments: [],
+  },
 ];
 assert.strictEqual(lineInboxQueueGroupMatchesFilter(queueFilterGroups[0], "today", queueFilterToday), true, "today filter returns today's groups");
 assert.strictEqual(lineInboxQueueGroupMatchesFilter(queueFilterGroups[1], "yesterday", queueFilterToday), true, "yesterday filter returns yesterday's groups");
 assert.strictEqual(lineInboxQueueGroupMatchesFilter(queueFilterGroups[2], "manual", queueFilterToday), true, "manual filter returns manual review groups");
+assert.strictEqual(
+  lineInboxQueueGroupMatchesFilter(queueFilterGroups[3], "waiting_for_car", queueFilterToday),
+  true,
+  "waiting-for-car filter returns pending car record groups"
+);
+assert.strictEqual(
+  lineInboxQueueGroupMatchesFilter(queueFilterGroups[3], "manual", queueFilterToday),
+  false,
+  "waiting-for-car groups are excluded from manual review filter"
+);
 assert.deepStrictEqual(
   lineInboxQueueFilterCounts(queueFilterGroups, queueFilterToday),
-  { all: 3, today: 1, yesterday: 1, manual: 1 },
+  { all: 4, today: 1, yesterday: 1, manual: 1, waiting_for_car: 1 },
   "pending queue filter counts are computed from all pending groups"
 );
 const receiptReply = buildLineWebhookReceiptAcknowledgementText();
@@ -1137,9 +1163,11 @@ assert(
 assert(
   lineInboxToolbar.includes('value: "today"') &&
     lineInboxToolbar.includes('value: "yesterday"') &&
-    lineInboxToolbar.includes('value: "manual"'),
-  "AI LINE navigator exposes today/yesterday/manual review filters"
+    lineInboxToolbar.includes('value: "manual"') &&
+    lineInboxToolbar.includes('value: "waiting_for_car"'),
+  "AI LINE navigator exposes today/yesterday/manual/waiting-for-car filters"
 );
+assert(lineInboxToolbar.includes("รอรถเข้า"), "AI LINE navigator shows waiting-for-car filter label");
 assert(
   lineInboxToolbar.includes("groupMatchesLineInboxFilter(group, queueDateFilter") &&
     !lineInboxToolbar.includes("groupHasLineWorkToday"),

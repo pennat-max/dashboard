@@ -908,7 +908,7 @@ export async function GET(request: Request) {
           total_new_lines: 0,
           total_action_lines: 0,
           total_manual_reviews: 0,
-          filter_counts: { all: 0, today: 0, yesterday: 0, manual: 0 } satisfies LineInboxQueueFilterCounts,
+          filter_counts: { all: 0, today: 0, yesterday: 0, manual: 0, waiting_for_car: 0 } satisfies LineInboxQueueFilterCounts,
           messages: [] as PendingQueueMsg[],
           groups: [] as PendingQueueGroup[],
           recent_attachments: [] as PendingQueueAttachment[],
