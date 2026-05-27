@@ -167,6 +167,17 @@ const thaiAddMoreAwning = "\u0e40\u0e1e\u0e34\u0e48\u0e21\u0e40\u0e15\u0e34\u0e2
 const thaiAwning = "\u0e01\u0e31\u0e19\u0e2a\u0e32\u0e14";
 const thaiFilmAround = "\u0e15\u0e34\u0e14\u0e1f\u0e34\u0e25\u0e4c\u0e21\u0e23\u0e2d\u0e1a\u0e04\u0e31\u0e19";
 const thaiDoorPercent = "\u0e1b\u0e23\u0e30\u0e15\u0e39 80%";
+const lineAnnouncementText = [
+  "อัพเดท กล้องกระจกมองหลัง ดิจิตอล และ จอแอนดรอยด์",
+  "สินค้าต้องสั่งล่วงหน้า 1-2 วันนะครับ",
+  "@All",
+].join("\n");
+const googleSheetLink = "https://docs.google.com/spreadsheets/d/abc123/edit";
+const carSpecificWorkWithLink = [
+  "กท-2692 ROCCO PRE 2.4 Hight AT Double_Cab PEARL_WHITE Aug20",
+  "ติดกล้องกระจกมองหลัง",
+  googleSheetLink,
+].join("\n");
 assert.strictEqual(classifyLineNoise(separatorOnly), "separator", "equals-only separator is classified");
 assert.strictEqual(classifyLineNoise("----------"), "separator", "dash-only separator is classified");
 assert.strictEqual(classifyLineNoise("__________"), "separator", "underscore-only separator is classified");
@@ -190,6 +201,17 @@ assert.strictEqual(
   classifyLineNoise("PRO4X 4WD 2.3 AT (2026)"),
   "content",
   "vehicle/year parenthesized text remains content"
+);
+assert.strictEqual(classifyLineNoise(googleSheetLink), "noise", "Google Sheet reference link is classified as noise");
+assert.strictEqual(
+  classifyLineNoise("อัพเดท กล้องกระจกมองหลัง ดิจิตอล และ จอแอนดรอยด์"),
+  "noise",
+  "general product announcement is classified as noise"
+);
+assert.strictEqual(
+  classifyLineNoise("อัพเดท กันสาด"),
+  "content",
+  "non-product update with real work remains actionable"
 );
 assert.strictEqual(
   isLineInboxSeparatorOrManualHeaderOnlyText(separatorOnly),
@@ -222,6 +244,15 @@ assert.strictEqual(
   "separator plus manual-review header is recognized as queue noise"
 );
 assert.deepStrictEqual(splitLineTextForInbox("\u{1F697}\u{1F6FB}\u2728").items, [], "emoji-only line is ignored");
+assert.deepStrictEqual(splitLineTextForInbox(lineAnnouncementText).items, [], "announcement + @All produces no actionable work item");
+assert.deepStrictEqual(splitLineTextForInbox(googleSheetLink).items, [], "Google Sheet link-only message produces no actionable work item");
+assert.strictEqual(isLineInboxNoiseOrSeparatorOnlyText(lineAnnouncementText), true, "announcement-only text is recognized as queue noise");
+assert.strictEqual(isLineInboxNoiseOrSeparatorOnlyText(googleSheetLink), true, "reference link-only text is recognized as queue noise");
+assert.deepStrictEqual(
+  splitLineTextForInbox(carSpecificWorkWithLink).items,
+  ["ติดกล้องกระจกมองหลัง"],
+  "car-specific work remains actionable when a reference link is present"
+);
 assertItems(thaiAwning, [thaiAwning], "normal work line remains unchanged");
 assertItems(thaiAddMoreAwning, [thaiAwning], "header prefix with real work keeps the work part");
 const thaiMileage47500 = "\u0e01\u0e23\u0e2d\u0e44\u0e21\u0e25\u0e4c 47,000 KM";
@@ -672,6 +703,26 @@ assert.strictEqual(
   }).blocked_reason,
   "noise_or_separator",
   "LINE emoji shortcode-only rows are blocked from auto-save"
+);
+assert.strictEqual(
+  evaluateLineAutoSaveEligibility({
+    row: { ...autoSaveRow, raw_text: lineAnnouncementText },
+    payload: autoSavePayload(),
+    enabled: true,
+    allowedGroupIds: "C-real-group",
+  }).blocked_reason,
+  "noise_or_separator",
+  "announcement-only rows are blocked from auto-save"
+);
+assert.strictEqual(
+  evaluateLineAutoSaveEligibility({
+    row: { ...autoSaveRow, raw_text: googleSheetLink },
+    payload: autoSavePayload(),
+    enabled: true,
+    allowedGroupIds: "C-real-group",
+  }).blocked_reason,
+  "noise_or_separator",
+  "reference-link-only rows are blocked from auto-save"
 );
 
 assert.strictEqual(
