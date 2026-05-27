@@ -32,6 +32,11 @@ const THAI_STOCK_IDENTITY_RE =
 const LEADING_CAR_IDENTITY_RE =
   /^(?:ทะเบียน|เลขทะเบียน|stock|สต็อก|สต๊อก|ref|reference)\s*[:#：-]?\s*\d{4,6}\b|^\d{0,2}[\u0E01-\u0E2E]{1,3}[-\s]?\d{2,4}\b|^[A-HJ-NPR-Z0-9]{17}\b/i;
 const LEADING_NUMERIC_STOCK_RE = /^\d{4,6}\b/;
+const MILEAGE_VALUE_UNIT_RE =
+  /(\d{2,3}(?:,\d{3})+|\d{4,6})\s*(k\.?m\.?|kms?|กม\.?|กิโล(?:เมตร)?)/i;
+const MILEAGE_WORK_PREFIX_RE =
+  /(?:กรอ\s*ไมล์|เลข\s*ไมล์|ไมล์|mileage|odo(?:meter)?|เลข\s*กิโล|กิโล)\s*[:#：-]?\s*$/i;
+const THAI_MILEAGE_WORK_PREFIX = "กรอไมล์";
 const MIXED_LINE_WORK_START_RE =
   /(คิ้วล้อ|กรอไมล์|เลขไมล์|กุญแจ|กันสาด|กันแมลง|โรบาร์|สปอร์ตบาร์|โรลเลอร์|สติ๊กเกอร์|สติกเกอร์|ฟิล์ม|บันได|กันชน|กันแคร้ง|แร็ค|แรค|ฝาครอบ|ไฟ|กล้อง|เซ็นเซอร์|แม็ก|แม้ค|ยาง|ล้อ|แบต|แบตเตอรี่|โช้ค|ยกสูง|เอกสาร|ซ่อม|เปลี่ยน|ขาด|แตก|เสีย|หาย|ต้องสั่ง|สั่ง|ส่งอู่|ทำสี|ตรวจ|เช็ค|ติดตั้ง|ติด|เพิ่ม|ใส่|แปลง|ล้าง|ขัด|เคลือบ|เก็บงาน|ประเมิน|รับงาน|แต่งเหมือน\s*รูป|เหมือน\s*รูป|ตาม\s*(?:รูป|ภาพ)|ยกเลิก|ไม่ต้องติด|ไม่เอา|เอาออก|เบิก|รอ\s*ตรวจ|รอตรวจ|เอา\s*รถ\s*ไป\s*เช็ค)/i;
 const WORK_INTENT_RE =
@@ -299,6 +304,40 @@ function normalizeWorkItemText(raw: string): string {
     .replace(/ฟิล์ม\s*รอบคัน/gi, "ฟิล์มรอบคัน");
 }
 
+function formatMileageValue(raw: string): string {
+  const digits = String(raw ?? "").replace(/\D/g, "");
+  if (!digits) return "";
+  return digits.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+
+function normalizeMileageUnit(raw: string): string {
+  return /[ก-ฮ]/.test(raw) ? raw : "KM";
+}
+
+function hasCarRefBeforeMileage(raw: string): boolean {
+  const clean = sanitizeLine(raw).replace(/[-–—:|/]+$/g, "").trim();
+  if (!clean) return false;
+  const hasThaiPlateLike = THAI_PLATE_RE.test(clean);
+  THAI_PLATE_RE.lastIndex = 0;
+  if (hasThaiPlateLike || CHASSIS_RE.test(clean) || THAI_STOCK_IDENTITY_RE.test(clean)) return true;
+  return /^\d{4,6}\b/.test(clean);
+}
+
+function mileageWorkItemFromLine(raw: string): string {
+  const clean = sanitizeLine(raw);
+  const match = clean.match(MILEAGE_VALUE_UNIT_RE);
+  if (!match || match.index == null) return "";
+
+  const before = clean.slice(0, match.index);
+  const hasMileagePrefix = MILEAGE_WORK_PREFIX_RE.test(before);
+  const hasCarRefPrefix = hasCarRefBeforeMileage(before);
+  if (!hasMileagePrefix && !hasCarRefPrefix) return "";
+
+  const mileageValue = formatMileageValue(match[1] ?? "");
+  if (!mileageValue) return "";
+  return `${THAI_MILEAGE_WORK_PREFIX} ${mileageValue} ${normalizeMileageUnit(match[2] ?? "KM")}`;
+}
+
 function startsWithCarIdentity(raw: string): boolean {
   if (LEADING_CAR_IDENTITY_RE.test(raw)) return true;
   const stock = raw.match(LEADING_NUMERIC_STOCK_RE);
@@ -448,6 +487,13 @@ export function splitLineTextForInbox(text: string): SplitLineTextResult {
 
   let contextBreak = true;
   for (const rawLine of lines) {
+    const mileageWorkItem = mileageWorkItemFromLine(rawLine);
+    if (mileageWorkItem) {
+      addWorkItem(groupedItems, mileageWorkItem);
+      contextBreak = false;
+      continue;
+    }
+
     const noiseType = classifyLineNoise(rawLine);
     if (noiseType !== "content") {
       addUnique(looksLikeMentionOnly(rawLine) || looksLikeLinePersonContext(rawLine) ? ignoredMentions : ignoredNoise, rawLine);

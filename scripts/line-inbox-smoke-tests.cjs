@@ -258,6 +258,36 @@ assert.deepStrictEqual(
 );
 
 assertItems(
+  "6866 - 67500 KM",
+  ["กรอไมล์ 67,500 KM"],
+  "plate/ref plus raw mileage becomes a mileage work item"
+);
+assertItems(
+  "6866 - 67,500 KM",
+  ["กรอไมล์ 67,500 KM"],
+  "plate/ref plus comma mileage becomes a normalized mileage work item"
+);
+assertItems(
+  "นข-6866 - 67500 KM",
+  ["กรอไมล์ 67,500 KM"],
+  "Thai plate plus raw mileage becomes a mileage work item"
+);
+assertItems(
+  "95295 - 39800 KM",
+  ["กรอไมล์ 39,800 KM"],
+  "stock/ref plus raw mileage becomes a mileage work item"
+);
+assertItems(
+  "กรอไมล์ 67500 KM",
+  ["กรอไมล์ 67,500 KM"],
+  "mileage work without car is still extracted for manual review"
+);
+assert(
+  !splitLineTextForInbox("51072 เอาของ 31440").items.some((item) => item.includes("กรอไมล์")),
+  "multiple real car refs are not converted into mileage work"
+);
+
+assertItems(
   "เปลี่ยนแม้ค ยาง ตามรูป",
   ["เปลี่ยนแม้ค ยาง ตามรูป"],
   "normal work line without car prefix remains unchanged"
