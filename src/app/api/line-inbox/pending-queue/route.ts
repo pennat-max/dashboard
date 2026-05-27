@@ -668,6 +668,14 @@ function unmatchedReasonForStatus(
   return "";
 }
 
+function pendingQueueMessageIsWaitingForCarRecord(message: PendingQueueMsg): boolean {
+  return message.matchStatus === "waiting_for_car_record" || message.unmatchedReason === "pending_car_record";
+}
+
+function pendingQueueMessageCountsAsManualReview(message: PendingQueueMsg): boolean {
+  return Boolean(message.needs_human_review) && message.action_line_count === 0 && !pendingQueueMessageIsWaitingForCarRecord(message);
+}
+
 function groupMessages(messages: PendingQueueMsg[]): PendingQueueGroup[] {
   const map = new Map<string, PendingQueueGroup>();
 
@@ -680,7 +688,7 @@ function groupMessages(messages: PendingQueueMsg[]): PendingQueueGroup[] {
       existing.messages.push(message);
       existing.total_action_lines += message.action_line_count;
       existing.total_new_lines += message.new_line_count;
-      existing.total_manual_reviews += message.needs_human_review && message.action_line_count === 0 ? 1 : 0;
+      existing.total_manual_reviews += pendingQueueMessageCountsAsManualReview(message) ? 1 : 0;
       existing.existing_items = uniqueExistingItems([...existing.existing_items, ...message.existing_items]);
       existing.attachments = uniqueAttachments([...existing.attachments, ...message.attachments]);
       existing.line_photo_count = existing.attachments.length;
@@ -765,7 +773,7 @@ function groupMessages(messages: PendingQueueMsg[]): PendingQueueGroup[] {
       is_unresolved: !message.car_row_id,
       total_action_lines: message.action_line_count,
       total_new_lines: message.new_line_count,
-      total_manual_reviews: message.needs_human_review && message.action_line_count === 0 ? 1 : 0,
+      total_manual_reviews: pendingQueueMessageCountsAsManualReview(message) ? 1 : 0,
       existing_items: uniqueExistingItems(message.existing_items),
       attachments: uniqueAttachments(message.attachments),
       messages: [message],
