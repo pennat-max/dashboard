@@ -9,6 +9,11 @@ import {
   buildLineWebhookReceiptAcknowledgementText,
   isLineInboxSystemAcknowledgementText,
 } from "@/lib/line-inbox/acknowledgement";
+import {
+  extractLineQuotedMessageId,
+  extractLineQuoteToken,
+  makeLineReplyCaptureAnalyzePayload,
+} from "@/lib/line-inbox/reply-context";
 import { isLineInboxNoiseOrSeparatorOnlyText } from "@/lib/line-inbox/split-line-text";
 import { replyLineTextMessage } from "@/lib/line/push-message";
 import {
@@ -25,7 +30,15 @@ type LineEvent = {
   type?: string;
   mode?: string;
   timestamp?: number;
-  message?: { type?: string; id?: string; text?: string; fileName?: string; fileSize?: number };
+  message?: {
+    type?: string;
+    id?: string;
+    text?: string;
+    fileName?: string;
+    fileSize?: number;
+    quotedMessageId?: string;
+    quoteToken?: string;
+  };
   source?: { type?: string; groupId?: string; userId?: string; roomId?: string };
   replyToken?: string;
 };
@@ -62,9 +75,15 @@ async function captureTextMessage(params: {
   userId: string | null;
   rawText: string;
   replyToken: string | undefined;
+  quotedMessageId?: string | null;
+  quoteToken?: string | null;
   receivedAt?: string | undefined;
 }): Promise<CaptureLineMessageResult> {
   const supabase = createServiceRoleClient();
+  const replyContextPayload = makeLineReplyCaptureAnalyzePayload({
+    quotedMessageId: params.quotedMessageId,
+    quoteToken: params.quoteToken,
+  });
 
   return insertLineInboxMessage(supabase, {
     line_message_id: params.lineMessageId,
@@ -75,6 +94,7 @@ async function captureTextMessage(params: {
     raw_text: params.rawText,
     reply_token: params.replyToken ?? null,
     received_at: params.receivedAt,
+    analyze_payload: replyContextPayload ?? undefined,
   });
 }
 
@@ -284,6 +304,8 @@ export async function POST(request: Request) {
     if (!src?.type) continue;
 
     const replyToken = typeof ev.replyToken === "string" ? ev.replyToken : undefined;
+    const quotedMessageId = extractLineQuotedMessageId(msg);
+    const quoteToken = extractLineQuoteToken(msg);
     const receivedAt = receivedAtFromLineTimestamp(ev.timestamp);
     const runCapture = async (
       sourceType: "group" | "user" | "room",
@@ -299,6 +321,8 @@ export async function POST(request: Request) {
           userId,
           rawText: text,
           replyToken,
+          quotedMessageId,
+          quoteToken,
           receivedAt,
         });
       }

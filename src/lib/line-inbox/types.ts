@@ -44,6 +44,18 @@ export type LineInboxAnalyzeResponse = {
   aiTargetCarReference?: string;
   aiTargetCarConfidence?: string;
   matchReason?: string;
+  context_source?: "reply_context" | string;
+  reply_context?: {
+    context_source: "reply_context";
+    quoted_message_id: string;
+    source_line_message_id?: string;
+    source_inbox_message_id?: string;
+    source_car_row_id?: string;
+    source_raw_text_preview?: string;
+    source_detected_car?: Partial<LineInboxAnalyzeResponse["detected_car"]>;
+    confidence?: "high" | "medium" | "low";
+    reason?: string;
+  };
   existing_items?: ExistingOrderItemRow[];
   items: LineInboxAnalyzeItem[];
   needs_human_review: boolean;

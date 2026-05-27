@@ -98,6 +98,10 @@ type PendingQueueMessage = {
   aiTargetCarConfidence?: string;
   matchReason?: string;
   inheritedCarRowId?: string;
+  context_source?: string;
+  contextSource?: string;
+  reply_context?: LineInboxAnalyzeResponse["reply_context"] | null;
+  replyContext?: LineInboxAnalyzeResponse["reply_context"] | null;
   related_photo_ids?: string[];
   relatedPhotoIds?: string[];
   suggestedItems?: string[];
@@ -148,6 +152,10 @@ type PendingQueueAttachment = {
   aiTargetCarConfidence?: string;
   matchReason?: string;
   inheritedCarRowId?: string;
+  context_source?: string;
+  contextSource?: string;
+  reply_context?: LineInboxAnalyzeResponse["reply_context"] | null;
+  replyContext?: LineInboxAnalyzeResponse["reply_context"] | null;
   sale?: string;
   needs_human_review?: boolean;
   status?: "not_linked" | "attached" | "ignored" | string;
@@ -174,6 +182,10 @@ type PendingQueueGroup = {
   aiTargetCarConfidence?: string;
   matchReason?: string;
   inheritedCarRowId?: string;
+  context_source?: string;
+  contextSource?: string;
+  reply_context?: LineInboxAnalyzeResponse["reply_context"] | null;
+  replyContext?: LineInboxAnalyzeResponse["reply_context"] | null;
   related_photo_ids?: string[];
   relatedPhotoIds?: string[];
   suggestedItems?: string[];
@@ -911,6 +923,8 @@ type LineInboxCarPickerRow = {
   aiTargetCarReference: string;
   aiTargetCarConfidence: string;
   matchReason: string;
+  contextSource: string;
+  replyContextPreview: string;
   sourceLabel: string;
   groupIdDisplay: string;
   fallbackSubtitle: string;
@@ -1426,6 +1440,14 @@ function useLineInboxBridgeState({
         aiTargetCarReference: String(group.aiTargetCarReference ?? manualReviewMessage?.aiTargetCarReference ?? "").trim(),
         aiTargetCarConfidence: String(group.aiTargetCarConfidence ?? manualReviewMessage?.aiTargetCarConfidence ?? "").trim(),
         matchReason: String(group.matchReason ?? manualReviewMessage?.matchReason ?? "").trim(),
+        contextSource: String(group.contextSource ?? group.context_source ?? manualReviewMessage?.contextSource ?? manualReviewMessage?.context_source ?? "").trim(),
+        replyContextPreview: String(
+          group.replyContext?.source_raw_text_preview ??
+            group.reply_context?.source_raw_text_preview ??
+            manualReviewMessage?.replyContext?.source_raw_text_preview ??
+            manualReviewMessage?.reply_context?.source_raw_text_preview ??
+            ""
+        ).trim(),
         sourceLabel: String(group.source_label ?? manualReviewMessage?.source_label ?? "").trim(),
         groupIdDisplay: String(group.group_id_display ?? manualReviewMessage?.group_id_display ?? "").trim(),
         fallbackSubtitle: String(group.fallback_subtitle ?? group.fallbackSubtitle ?? "").trim(),
@@ -2335,6 +2357,12 @@ function useLineInboxBridgeState({
             {row.fallbackSubtitle ? (
               <p className="mt-1 line-clamp-2 text-[10px] font-medium text-slate-500">{row.fallbackSubtitle}</p>
             ) : null}
+            {row.contextSource === "reply_context" ? (
+              <p className="mt-1 rounded-lg bg-sky-50 px-2 py-1 text-[10px] font-semibold text-sky-800 ring-1 ring-sky-100">
+                {uiLang === "en" ? "Referenced from previous LINE message" : "อ้างอิงจากข้อความก่อนหน้า"}
+                {row.replyContextPreview ? ` · ${row.replyContextPreview}` : ""}
+              </p>
+            ) : null}
             {row.manualReviewCount > 0 ? (
               <div className="mt-2 rounded-xl bg-amber-50 px-2 py-2 text-[11px] font-medium leading-relaxed text-amber-950 ring-1 ring-amber-100">
                 <p className="font-bold">
@@ -2584,6 +2612,14 @@ function useLineInboxBridgeState({
                 {m.source_label || m.group_id_display ? (
                   <p className="mt-2 text-[10px] font-semibold text-slate-500">
                     {[m.source_label, m.group_id_display ? `group: ${m.group_id_display}` : ""].filter(Boolean).join(" · ")}
+                  </p>
+                ) : null}
+                {String(m.contextSource ?? m.context_source ?? "").trim() === "reply_context" ? (
+                  <p className="mt-2 rounded-lg bg-sky-50 px-2 py-1 text-[10px] font-semibold text-sky-800 ring-1 ring-sky-100">
+                    {uiLang === "en" ? "Referenced from previous LINE message" : "อ้างอิงจากข้อความก่อนหน้า"}
+                    {String(m.replyContext?.source_raw_text_preview ?? m.reply_context?.source_raw_text_preview ?? "").trim()
+                      ? ` · ${String(m.replyContext?.source_raw_text_preview ?? m.reply_context?.source_raw_text_preview ?? "").trim()}`
+                      : ""}
                   </p>
                 ) : null}
                 {queueDetectedCarLabel(m) ? (
