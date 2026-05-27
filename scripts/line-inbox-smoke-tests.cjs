@@ -79,6 +79,10 @@ const {
   buildLineOrderReviewUrl,
 } = loadTsFile(path.join(root, "src/lib/line-inbox/review-link.ts"));
 const {
+  extractLineInboxMileageCarReference,
+  extractStockNumbers,
+} = loadTsFile(path.join(root, "src/lib/line-inbox/resolve-car.ts"));
+const {
   parseLineAllowedGroups,
   isLineGroupAllowed,
 } = loadTsFile(path.join(root, "src/lib/line/allowed-groups.ts"));
@@ -126,6 +130,22 @@ assert.strictEqual(classifyLineNoise("....."), "separator", "dot-only separator 
 assert.strictEqual(classifyLineNoise("= = = = ="), "separator", "spaced separator is classified");
 assert.strictEqual(classifyLineNoise(thaiWaitManualReview), "header", "manual-review header is classified");
 assert.strictEqual(classifyLineNoise("\u{1F697}\u{1F6FB}\u2728"), "decoration", "emoji-only line is classified as decoration");
+assert.strictEqual(classifyLineNoise("(heart eyes Moon)(heart eyes Moon)"), "decoration", "LINE emoji shortcode-only line is classified as decoration");
+assert.deepStrictEqual(
+  splitLineTextForInbox("(heart eyes Moon)(heart eyes Moon)").items,
+  [],
+  "LINE emoji shortcode-only text should not produce actionable work items"
+);
+assert.strictEqual(
+  isLineInboxNoiseOrSeparatorOnlyText("(heart eyes Moon)(heart eyes Moon)"),
+  true,
+  "LINE emoji shortcode-only text is recognized as queue noise"
+);
+assert.strictEqual(
+  classifyLineNoise("PRO4X 4WD 2.3 AT (2026)"),
+  "content",
+  "vehicle/year parenthesized text remains content"
+);
 assert.strictEqual(
   isLineInboxSeparatorOrManualHeaderOnlyText(separatorOnly),
   true,
@@ -159,6 +179,21 @@ assert.strictEqual(
 assert.deepStrictEqual(splitLineTextForInbox("\u{1F697}\u{1F6FB}\u2728").items, [], "emoji-only line is ignored");
 assertItems(thaiAwning, [thaiAwning], "normal work line remains unchanged");
 assertItems(thaiAddMoreAwning, [thaiAwning], "header prefix with real work keeps the work part");
+const thaiMileage47500 = "\u0e01\u0e23\u0e2d\u0e44\u0e21\u0e25\u0e4c 47,000 KM";
+const thaiMileage67500 = "\u0e01\u0e23\u0e2d\u0e44\u0e21\u0e25\u0e4c 67,500 KM";
+const thaiMileage39800 = "\u0e01\u0e23\u0e2d\u0e44\u0e21\u0e25\u0e4c 39,800 KM";
+assertItems("4380 - 47000 KM.", [thaiMileage47500], "plate/ref plus mileage becomes a mileage work item");
+assertItems("4380 - 47,000 KM", [thaiMileage47500], "comma mileage is normalized");
+assertItems("\u0e19\u0e02-6866 - 67500 KM", [thaiMileage67500], "Thai plate plus mileage becomes a mileage work item");
+assertItems("\u0e01\u0e23\u0e2d\u0e44\u0e21\u0e25\u0e4c 47000 KM", [thaiMileage47500], "mileage without car remains a work item");
+assert.strictEqual(extractLineInboxMileageCarReference("4380 - 47000 KM."), "4380", "mileage line keeps first ref as car candidate");
+assert.strictEqual(extractLineInboxMileageCarReference("\u0e19\u0e02-6866 - 67500 KM"), "\u0e19\u0e02-6866", "mileage line keeps Thai plate as car candidate");
+assert.deepStrictEqual(extractStockNumbers("4380 - 47000 KM."), ["4380"], "mileage number is not a stock/ref candidate");
+assert.deepStrictEqual(extractStockNumbers("4380 - 47,000 KM"), ["4380"], "comma mileage number is not a stock/ref candidate");
+assert.deepStrictEqual(extractStockNumbers("\u0e19\u0e02-6866 67500 KM"), ["6866"], "Thai plate mileage keeps only plate digits as candidate");
+assert.deepStrictEqual(extractStockNumbers("95295 TRAVO 67500 KM"), ["95295"], "stock/spec plus mileage ignores mileage number");
+assert.deepStrictEqual(extractStockNumbers("51072 RAPTOR 39,800 km"), ["51072"], "stock/spec plus comma mileage ignores mileage number");
+assert.deepStrictEqual(extractStockNumbers("51072 \u0e40\u0e2d\u0e32\u0e02\u0e2d\u0e07 31440"), ["51072", "31440"], "multiple real car refs are not treated as mileage");
 const separatorReset = splitLineTextForInbox(`${thaiFilmAround}\n==========\n${thaiDoorPercent}`);
 assert.deepStrictEqual(separatorReset.items, [thaiFilmAround], "separator between blocks does not create a detail item");
 assert.strictEqual(separatorReset.grouped_items[0]?.note ?? "", "", "separator resets detail grouping context");
@@ -451,6 +486,16 @@ assert.strictEqual(
   "noise_or_separator",
   "header-only rows are blocked from auto-save with a specific reason"
 );
+assert.strictEqual(
+  evaluateLineAutoSaveEligibility({
+    row: { ...autoSaveRow, raw_text: "(heart eyes Moon)(heart eyes Moon)" },
+    payload: autoSavePayload(),
+    enabled: true,
+    allowedGroupIds: "C-real-group",
+  }).blocked_reason,
+  "noise_or_separator",
+  "LINE emoji shortcode-only rows are blocked from auto-save"
+);
 
 assert.strictEqual(
   evaluateLineAutoSaveEligibility({
@@ -537,6 +582,28 @@ assert.strictEqual(
   }).blocked_reason,
   "missing_car",
   "missing car blocks auto-save"
+);
+assert.strictEqual(
+  evaluateLineAutoSaveEligibility({
+    row: { ...autoSaveRow, raw_text: "4380 - 47000 KM." },
+    payload: autoSavePayload({
+      detected_car: { ...autoSavePayload().detected_car, car_row_id: "", plate_text: "4380", confidence: 0 },
+      extractedCarCandidates: [{ text: "4380", confidence: "high" }],
+      aiTargetCarConfidence: "high",
+      items: [
+        {
+          ...autoSavePayload().items[0],
+          raw_text: thaiMileage47500,
+          suggested_item_name: thaiMileage47500,
+          confidence: 0.9,
+        },
+      ],
+    }),
+    enabled: true,
+    allowedGroupIds: "*",
+  }).blocked_reason,
+  "missing_car",
+  "mileage item without matched car remains blocked from auto-save"
 );
 assert.strictEqual(
   evaluateLineAutoSaveEligibility({
