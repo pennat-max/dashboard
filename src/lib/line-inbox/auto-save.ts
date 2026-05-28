@@ -243,6 +243,9 @@ export function evaluateLineAutoSaveEligibility(params: {
   if (!isLineGroupAllowed(row.group_id, policy)) return { eligible: false, blocked_reason: "group_not_allowed" };
   if (isLineImageOnlyText(row.raw_text)) return { eligible: false, blocked_reason: "image_only" };
   if (isLineInboxNoiseOrSeparatorOnlyText(row.raw_text)) return { eligible: false, blocked_reason: "noise_or_separator" };
+  if (payload.context_source === "fallback_previous_message" || payload.reply_context?.context_source === "fallback_previous_message") {
+    return { eligible: false, blocked_reason: "fallback_previous_message_context" };
+  }
   if (payload.unmatchedReason === "pending_car_record" || payload.matchStatus === "waiting_for_car_record") {
     return { eligible: false, blocked_reason: "pending_car_record" };
   }

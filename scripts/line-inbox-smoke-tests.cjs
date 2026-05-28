@@ -89,7 +89,9 @@ const { deriveLineInboxMatchStatus } = loadTsFile(
 );
 const {
   extractLineQuotedMessageId,
+  isFallbackPreviousMessageStatusLike,
   makeLineReplyCaptureAnalyzePayload,
+  resolveFallbackPreviousMessageContextFromRows,
   withLineReplyAnalyzeContext,
 } = loadTsFile(path.join(root, "src/lib/line-inbox/reply-context.ts"));
 const {
@@ -483,6 +485,141 @@ assert.strictEqual(replyContextPayload.context_source, "reply_context", "reply c
 assert.strictEqual(replyContextPayload.reply_context.source_car_row_id, "car-row-parent", "reply to matched car inherits car_row_id context");
 assert(replyContextPayload.matchReason.includes("reply"), "reply context explains match reason");
 
+const parentLineAnalyzePayload = {
+  detected_car: {
+    plate_text: "22076",
+    chassis: "MR0YA3AV403022076",
+    car_row_id: "car-row-22076",
+    confidence: 0.85,
+    spec_text: "22076 TRAVO 4WD 2.8 OVERLAND Plus AT Double_Cab GRAY Mar26",
+    sale: "NAT",
+  },
+  ignored_vehicle_spec_lines: [],
+  ignored_mention_lines: [],
+  ignored_noise_lines: [],
+  extractedCarCandidates: [{ text: "MR0YA3AV403022076", kind: "chassis" }],
+  matchReason: "Matched chassis MR0YA3AV403022076",
+  matchStatus: "matched",
+  unmatchedReason: "",
+  existing_items: [],
+  items: [],
+  needs_human_review: false,
+};
+assert.strictEqual(
+  isFallbackPreviousMessageStatusLike("รถเข้ามาเเล้วจ้า มาเมื่อวาน @Nat💕"),
+  true,
+  "short arrived-car reply text can use previous-message fallback context"
+);
+assert.strictEqual(
+  isFallbackPreviousMessageStatusLike("22076 TRAVO รถเข้ามาแล้ว"),
+  false,
+  "explicit car messages do not use previous-message fallback context"
+);
+const fallbackContext = resolveFallbackPreviousMessageContextFromRows({
+  row: {
+    raw_text: "รถเข้ามาเเล้วจ้า มาเมื่อวาน @Nat💕",
+    received_at: "2026-05-27T03:29:51.165Z",
+  },
+  candidates: [
+    {
+      id: "parent-inbox-22076",
+      line_message_id: "parent-line-22076",
+      raw_text: "OVERLAND PLUS D-CAB 2.8 AT 4x4 (2026) ASH\nMR0YA3AV403022076 / 1GD1958983 22076",
+      received_at: "2026-05-27T03:26:55.699Z",
+      analyze_status: "ok",
+      analyze_payload: parentLineAnalyzePayload,
+      car_row_id: "car-row-22076",
+    },
+  ],
+});
+assert.strictEqual(fallbackContext.context_source, "fallback_previous_message", "fallback context is marked distinctly from quoted replies");
+assert.strictEqual(fallbackContext.source_car_row_id, "car-row-22076", "fallback previous-message context inherits the parent car suggestion");
+assert.strictEqual(fallbackContext.confidence, "high", "matched parent row gives high fallback confidence");
+const fallbackPayload = withLineReplyAnalyzeContext(
+  {
+    detected_car: {
+      plate_text: "22076",
+      chassis: "MR0YA3AV403022076",
+      car_row_id: "car-row-22076",
+      confidence: 0.85,
+      spec_text: "22076 TRAVO 4WD 2.8 OVERLAND Plus AT Double_Cab GRAY Mar26",
+      sale: "NAT",
+    },
+    existing_items: [],
+    items: [
+      {
+        raw_text: "รถเข้ามาแล้ว",
+        suggested_item_name: "รถเข้ามาแล้ว",
+        suggested_category: "status",
+        suggested_status: "เช็ค",
+        duplicate_status: "new",
+        matched_order_item_id: "",
+        matched_item_name: "",
+        confidence: 0.85,
+        reason: "clear status",
+      },
+    ],
+    needs_human_review: false,
+  },
+  fallbackContext
+);
+assert.strictEqual(fallbackPayload.context_source, "fallback_previous_message", "fallback context is stored on analyze payload");
+assert.strictEqual(fallbackPayload.reply_context.source_car_row_id, "car-row-22076", "fallback payload exposes suggested parent car row");
+assert.strictEqual(fallbackPayload.needs_human_review, true, "fallback previous-message context always requires staff review");
+assert(fallbackPayload.matchReason.includes("ระบบเดาว่าอาจอ้างอิง"), "fallback context explains inferred previous-message matching");
+const ambiguousFallbackContext = resolveFallbackPreviousMessageContextFromRows({
+  row: {
+    raw_text: "รถเข้ามาแล้วจ้า",
+    received_at: "2026-05-27T03:29:51.165Z",
+  },
+  candidates: [
+    {
+      id: "parent-a",
+      raw_text: "22076 TRAVO",
+      received_at: "2026-05-27T03:28:30.000Z",
+      analyze_status: "ok",
+      analyze_payload: parentLineAnalyzePayload,
+      car_row_id: "car-row-22076",
+    },
+    {
+      id: "parent-b",
+      raw_text: "51072 RAPTOR",
+      received_at: "2026-05-27T03:28:20.000Z",
+      analyze_status: "ok",
+      analyze_payload: {
+        ...parentLineAnalyzePayload,
+        detected_car: {
+          ...parentLineAnalyzePayload.detected_car,
+          plate_text: "51072",
+          car_row_id: "car-row-51072",
+          spec_text: "51072 RAPTOR 4WD 2.0 RT AT Double_Cab GRAY 26",
+        },
+      },
+      car_row_id: "car-row-51072",
+    },
+  ],
+});
+assert.strictEqual(ambiguousFallbackContext.context_source, "fallback_previous_message", "ambiguous fallback still records the inferred-context reason");
+assert.strictEqual(ambiguousFallbackContext.ambiguous, true, "multiple parent cars in the window are marked ambiguous");
+assert.strictEqual(ambiguousFallbackContext.source_car_row_id, undefined, "ambiguous fallback does not pick a random car");
+assert.strictEqual(
+  resolveFallbackPreviousMessageContextFromRows({
+    row: { raw_text: "รถเข้ามาแล้วจ้า", received_at: "2026-05-27T03:29:51.165Z" },
+    candidates: [
+      {
+        id: "old-parent",
+        raw_text: "22076 TRAVO",
+        received_at: "2026-05-27T03:20:00.000Z",
+        analyze_status: "ok",
+        analyze_payload: parentLineAnalyzePayload,
+        car_row_id: "car-row-22076",
+      },
+    ],
+  }),
+  null,
+  "fallback previous-message context ignores parents outside the five-minute window"
+);
+
 assertItems(
   [
     "1นค-8637 COMMUTER 2WD 3.0 No MT VAN WHITE Feb18",
@@ -851,6 +988,25 @@ assert.strictEqual(
   evaluateLineAutoSaveEligibility({
     row: autoSaveRow,
     payload: autoSavePayload({
+      context_source: "fallback_previous_message",
+      reply_context: {
+        context_source: "fallback_previous_message",
+        source_inbox_message_id: "parent-inbox-22076",
+        source_car_row_id: "car-row-22076",
+        source_raw_text_preview: "MR0YA3AV403022076 / 1GD1958983 22076",
+        confidence: "high",
+      },
+    }),
+    enabled: true,
+    allowedGroupIds: "*",
+  }).blocked_reason,
+  "fallback_previous_message_context",
+  "inferred previous-message context is blocked from auto-save even when a car is suggested"
+);
+assert.strictEqual(
+  evaluateLineAutoSaveEligibility({
+    row: autoSaveRow,
+    payload: autoSavePayload({
       items: [
         {
           ...autoSavePayload().items[0],
@@ -1179,6 +1335,11 @@ assert(
   "AI LINE navigator exposes today/yesterday/manual/waiting-for-car filters"
 );
 assert(lineInboxToolbar.includes("รอรถเข้า"), "AI LINE navigator shows waiting-for-car filter label");
+assert(lineInboxToolbar.includes("fallback_previous_message"), "AI LINE navigator understands inferred previous-message context");
+assert(
+  lineInboxToolbar.includes("ระบบเดาว่าอาจอ้างอิงจากข้อความก่อนหน้า"),
+  "AI LINE navigator tells staff that fallback context is only a suggestion"
+);
 assert(
   lineInboxToolbar.includes("groupMatchesLineInboxFilter(group, queueDateFilter") &&
     !lineInboxToolbar.includes("groupHasLineWorkToday"),

@@ -8,8 +8,10 @@ import {
   type LineAutoSaveRunResult,
 } from "@/lib/line-inbox/auto-save";
 import {
+  LINE_REPLY_FALLBACK_PREVIOUS_WINDOW_MS,
   getQuotedMessageIdFromAnalyzePayload,
   previewReplyContextRawText,
+  resolveFallbackPreviousMessageContextFromRows,
   withLineReplyAnalyzeContext,
   type LineReplyAnalyzeContext,
 } from "@/lib/line-inbox/reply-context";
@@ -142,6 +144,40 @@ async function resolveLineReplyContext(
   };
 }
 
+async function resolveFallbackPreviousMessageContext(
+  supabase: ReturnType<typeof createServiceRoleClient>,
+  row: PendingInboxRow
+): Promise<LineReplyAnalyzeContext | null> {
+  const rowTime = Date.parse(cleanLine(row.received_at));
+  if (!Number.isFinite(rowTime)) return null;
+
+  const sourceType = cleanLine(row.source_type);
+  const groupId = cleanLine(row.group_id);
+  const userId = cleanLine(row.user_id);
+  if (!sourceType || (!groupId && !userId)) return null;
+
+  let query = supabase
+    .from(LINE_INBOX_MESSAGES_TABLE)
+    .select("id,line_message_id,raw_text,received_at,analyze_status,analyze_payload,car_row_id")
+    .eq("source_type", sourceType)
+    .eq("analyze_status", "ok")
+    .lt("received_at", new Date(rowTime).toISOString())
+    .gte("received_at", new Date(rowTime - LINE_REPLY_FALLBACK_PREVIOUS_WINDOW_MS).toISOString())
+    .order("received_at", { ascending: false })
+    .limit(10);
+
+  if (groupId) query = query.eq("group_id", groupId);
+  if (!groupId && userId) query = query.eq("user_id", userId);
+
+  const { data, error } = await query;
+  if (error) throw new Error(error.message);
+  return resolveFallbackPreviousMessageContextFromRows({
+    row,
+    candidates: (data ?? []) as Array<PendingInboxRow & { received_at?: string | null }>,
+    windowMs: LINE_REPLY_FALLBACK_PREVIOUS_WINDOW_MS,
+  });
+}
+
 /**
  * Pending analyzer for webhook captures.
  *
@@ -193,7 +229,9 @@ export async function runAnalyzePendingJob(
       const existingCarRowId = String(row.car_row_id ?? "").trim();
 
       try {
-        const replyContext = await resolveLineReplyContext(supabase, row);
+        const replyContext =
+          (await resolveLineReplyContext(supabase, row)) ||
+          (await resolveFallbackPreviousMessageContext(supabase, row));
         const replyCarRowId = cleanLine(replyContext?.source_car_row_id);
         const payload = await runLineInboxAnalyzeCore(supabase, {
           raw_text: rawText,
