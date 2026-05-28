@@ -80,7 +80,11 @@ const {
 } = loadTsFile(path.join(root, "src/lib/line-inbox/review-link.ts"));
 const {
   extractLineInboxMileageCarReference,
+  extractThaiPlateCandidates,
+  lineInboxHasSafeNumericRefToken,
   lineInboxPlateNumericSuffix,
+  resolvePlateSuffixCandidateRows,
+  resolveSafeShortRefCandidateRows,
   scoreLineInboxStockMatch,
   extractStockNumbers,
 } = loadTsFile(path.join(root, "src/lib/line-inbox/resolve-car.ts"));
@@ -356,23 +360,109 @@ assertItems(thaiAwning, [thaiAwning], "normal work line remains unchanged");
 assertItems(thaiAddMoreAwning, [thaiAwning], "header prefix with real work keeps the work part");
 const thaiMileage47500 = "\u0e01\u0e23\u0e2d\u0e44\u0e21\u0e25\u0e4c 47,000 KM";
 const thaiMileage67500 = "\u0e01\u0e23\u0e2d\u0e44\u0e21\u0e25\u0e4c 67,500 KM";
+const thaiMileage53000 = "\u0e01\u0e23\u0e2d\u0e44\u0e21\u0e25\u0e4c 53,000 KM";
 const thaiMileage39800 = "\u0e01\u0e23\u0e2d\u0e44\u0e21\u0e25\u0e4c 39,800 KM";
 assertItems("4380 - 47000 KM.", [thaiMileage47500], "plate/ref plus mileage becomes a mileage work item");
 assertItems("4380 - 47,000 KM", [thaiMileage47500], "comma mileage is normalized");
 assertItems("\u0e19\u0e02-6866 - 67500 KM", [thaiMileage67500], "Thai plate plus mileage becomes a mileage work item");
+assertItems("1603 - 53000 KM.", [thaiMileage53000], "short ref plus mileage becomes a mileage work item");
 assertItems("\u0e01\u0e23\u0e2d\u0e44\u0e21\u0e25\u0e4c 47000 KM", [thaiMileage47500], "mileage without car remains a work item");
 assert.strictEqual(extractLineInboxMileageCarReference("4380 - 47000 KM."), "4380", "mileage line keeps first ref as car candidate");
 assert.strictEqual(extractLineInboxMileageCarReference("\u0e19\u0e02-6866 - 67500 KM"), "\u0e19\u0e02-6866", "mileage line keeps Thai plate as car candidate");
+assert.strictEqual(extractLineInboxMileageCarReference("1603 - 53000 KM."), "1603", "short ref mileage line keeps first ref as car candidate");
 assert.deepStrictEqual(extractStockNumbers("4380 - 47000 KM."), ["4380"], "mileage number is not a stock/ref candidate");
 assert.deepStrictEqual(extractStockNumbers("4380 - 47,000 KM"), ["4380"], "comma mileage number is not a stock/ref candidate");
+assert.deepStrictEqual(extractStockNumbers("1603 - 53000 KM."), ["1603"], "short ref mileage excludes the mileage number from car candidates");
 assert.deepStrictEqual(extractStockNumbers("\u0e19\u0e02-6866 67500 KM"), ["6866"], "Thai plate mileage keeps only plate digits as candidate");
 assert.deepStrictEqual(extractStockNumbers("95295 TRAVO 67500 KM"), ["95295"], "stock/spec plus mileage ignores mileage number");
 assert.deepStrictEqual(extractStockNumbers("51072 RAPTOR 39,800 km"), ["51072"], "stock/spec plus comma mileage ignores mileage number");
 assert.deepStrictEqual(extractStockNumbers("51072 \u0e40\u0e2d\u0e32\u0e02\u0e2d\u0e07 31440"), ["51072", "31440"], "multiple real car refs are not treated as mileage");
 assert.strictEqual(lineInboxPlateNumericSuffix("\u0e19\u0e02-6866"), "6866", "Thai plate suffix is extracted");
+assert.deepStrictEqual(
+  extractThaiPlateCandidates("3\u0e02\u0e07-368 FORTUNER 2WD 2.4 Legender AT SUV WHITE 22 pr97"),
+  ["3\u0e02\u0e07-368"],
+  "leading-digit Thai plate is extracted as the full plate candidate"
+);
+assert.deepStrictEqual(
+  extractThaiPlateCandidates("\u0e01\u0e01 1234 \u0e40\u0e0a\u0e47\u0e04\u0e23\u0e16"),
+  ["\u0e01\u0e011234"],
+  "spaced Thai plate is normalized for matching without losing lookup support"
+);
+assert.deepStrictEqual(
+  extractStockNumbers("3\u0e02\u0e07-368 FORTUNER 2WD 2.4 Legender AT SUV WHITE 22 pr97"),
+  [],
+  "year shorthand and PR/ref text do not become stock candidates for exact Thai plate messages"
+);
+assert.strictEqual(lineInboxPlateNumericSuffix("\u0e1c\u0e02-1603"), "1603", "short Thai plate suffix is extracted");
+assert(
+  scoreLineInboxStockMatch(
+    {
+      plate_number: "3\u0e02\u0e07-368",
+      spec: "3\u0e02\u0e07-368 FORTUNER 2WD 2.4 Legender AT SUV WHITE 22",
+    },
+    "368"
+  ) > scoreLineInboxStockMatch({ plate_number: "\u0e01\u0e29-3368" }, "368"),
+  "exact 3-digit plate suffix outranks longer plate suffix matches"
+);
 assert(scoreLineInboxStockMatch({ plate_number: "\u0e19\u0e02-6866" }, "6866") > scoreLineInboxStockMatch({ spec: "6866" }, "6866"), "plate suffix outranks loose spec match");
+assert(scoreLineInboxStockMatch({ plate_number: "\u0e1c\u0e02-1603" }, "1603") > scoreLineInboxStockMatch({ spec: "1603" }, "1603"), "short plate suffix outranks loose spec match");
+assert.strictEqual(lineInboxHasSafeNumericRefToken("\u0e1c\u0e02-1603 REVO 2WD", "1603"), true, "safe spec token detects plate-like numeric suffix in spec");
+assert.strictEqual(lineInboxHasSafeNumericRefToken("MR0BA3CD700160304", "1603"), false, "safe spec token rejects arbitrary long-number substrings");
 assert.strictEqual(scoreLineInboxStockMatch({ row_id: "a18c7942-10fc-4d32-8059-5b97f86ec9e8" }, "6866"), 0, "UUID row_id substrings do not count as stock/ref matches");
+assert.strictEqual(scoreLineInboxStockMatch({ chassis_number: "MR0BA3CD700160304" }, "1603"), 0, "short stock/ref candidates do not match arbitrary chassis substrings");
+assert.strictEqual(scoreLineInboxStockMatch({ spec: "MR0BA3CD700160304" }, "1603"), 0, "short stock/ref candidates do not match arbitrary spec number substrings");
 assert.strictEqual(scoreLineInboxStockMatch({ plate_number: "\u0e01\u0e01-6866" }, "6866"), scoreLineInboxStockMatch({ plate_number: "\u0e19\u0e02-6866" }, "6866"), "duplicate suffix plates score equally and remain ambiguous upstream");
+assert.strictEqual(scoreLineInboxStockMatch({ plate_number: "\u0e1a\u0e18-1603" }, "1603"), scoreLineInboxStockMatch({ plate_number: "\u0e1c\u0e02-1603" }, "1603"), "duplicate short suffix plates score equally and remain ambiguous upstream");
+const unique1603Candidate = resolvePlateSuffixCandidateRows(
+  [{ row_id: "car-1603", plate_number: "\u0e1c\u0e02-1603", spec: "\u0e1c\u0e02-1603 REVO 2WD", sale_support: "PREW" }],
+  "1603"
+);
+assert.strictEqual(unique1603Candidate?.car_row_id, "car-1603", "one plate suffix candidate is selected automatically");
+assert.strictEqual(unique1603Candidate?.matchedCarCandidates?.length, 1, "one plate suffix candidate is exposed for UI/debug");
+const duplicate1603Candidate = resolvePlateSuffixCandidateRows(
+  [
+    { row_id: "car-1603-a", plate_number: "\u0e1c\u0e02-1603", spec: "\u0e1c\u0e02-1603 REVO 2WD" },
+    { row_id: "car-1603-b", plate_number: "\u0e1a\u0e18-1603", spec: "\u0e1a\u0e18-1603 REVO 2WD" },
+  ],
+  "1603"
+);
+assert.strictEqual(duplicate1603Candidate?.car_row_id, "", "duplicate suffix candidates are not auto-matched");
+assert.strictEqual(duplicate1603Candidate?.candidate_count, 2, "duplicate suffix returns candidate count");
+assert.strictEqual(duplicate1603Candidate?.matchedCarCandidates?.length, 2, "duplicate suffix returns candidate list for staff selection");
+assert.deepStrictEqual(
+  duplicate1603Candidate?.matchedCarCandidates?.map((candidate) => candidate.plate_text),
+  ["\u0e1c\u0e02-1603", "\u0e1a\u0e18-1603"],
+  "duplicate suffix candidate list includes the matching plate labels"
+);
+assert.deepStrictEqual(
+  duplicate1603Candidate?.matchedCarCandidates?.map((candidate) => candidate.spec_text),
+  ["\u0e1c\u0e02-1603 REVO 2WD", "\u0e1a\u0e18-1603 REVO 2WD"],
+  "duplicate suffix candidate list includes the matching car labels"
+);
+assert.strictEqual(
+  resolvePlateSuffixCandidateRows([{ row_id: "car-9999", plate_number: "\u0e19\u0e02-9999" }], "1603"),
+  null,
+  "no plate suffix candidate remains unresolved"
+);
+const specOnly1603Candidate = resolveSafeShortRefCandidateRows(
+  [{ row_id: "car-spec-1603", plate_number: "", spec: "\u0e1c\u0e02-1603 REVO 2WD 2.8 J MT Standard GRAY Mar16" }],
+  "1603"
+);
+assert.strictEqual(specOnly1603Candidate?.car_row_id, "car-spec-1603", "safe spec token candidate is selected when it is unique");
+const duplicateSafe1603Candidate = resolveSafeShortRefCandidateRows(
+  [
+    { row_id: "car-1603-a", plate_number: "\u0e1c\u0e02-1603", spec: "\u0e1c\u0e02-1603 REVO 2WD" },
+    { row_id: "car-1603-b", plate_number: "", spec: "\u0e1a\u0e18-1603 REVO 2WD" },
+  ],
+  "1603"
+);
+assert.strictEqual(duplicateSafe1603Candidate?.car_row_id, "", "multiple safe plate/spec candidates are not auto-matched");
+assert.strictEqual(duplicateSafe1603Candidate?.matchedCarCandidates?.length, 2, "multiple safe plate/spec candidates are exposed for staff selection");
+assert.strictEqual(
+  resolveSafeShortRefCandidateRows([{ row_id: "car-chassis-like", spec: "MR0BA3CD700160304" }], "1603"),
+  null,
+  "safe short ref matching ignores arbitrary long-number spec substrings"
+);
 const waitingCarRecordText = [
   "44582 Raptor Double Cab Raptor 2.0L 4WD AT BLACK 2025 \u0e1b\u0e49\u0e32\u0e22\u0e41\u0e14\u0e07",
   "\u0e23\u0e16\u0e21\u0e32\u0e2a\u0e31\u0e1b\u0e14\u0e32\u0e2b\u0e4c\u0e04\u0e48\u0e30",
@@ -1367,6 +1457,10 @@ assert(
   "pending queue default/all filter shows only ready-to-approve actionable groups"
 );
 assert(
+  pendingQueueRoute.includes("matchedCarCandidates"),
+  "pending queue returns matched car candidates for ambiguous short refs"
+);
+assert(
   pendingQueueRoute.includes("LINE_PENDING_QUEUE_SUMMARY_ATTACHMENT_LIMIT") &&
     pendingQueueRoute.includes("LINE_PENDING_QUEUE_SUMMARY_RECENT_ATTACHMENT_LIMIT"),
   "pending queue summary caps initial photo payloads"
@@ -1420,6 +1514,35 @@ assert(
 assert(
   lineInboxToolbar.includes("saveQueueCard(m, fallbackAssignee)"),
   "queue approve action passes the displayed fallback assignee into save"
+);
+assert(
+  lineInboxToolbar.includes("พบรถหลายคัน กรุณาเลือกคันรถ") &&
+    lineInboxToolbar.includes("เลือกคันนี้") &&
+    lineInboxToolbar.includes("setQueueSelectedCars") &&
+    lineInboxToolbar.includes("car_row_id: saveCarRowId || undefined"),
+  "ambiguous short refs can be selected in the UI before saving"
+);
+assert(
+  lineInboxToolbar.includes("lineInboxOrderMatchesQueueSearch") &&
+    lineInboxToolbar.includes("queueMessageSuggestedCarSearchQuery") &&
+    lineInboxToolbar.includes("setQueueCarSearchByInbox") &&
+    lineInboxToolbar.includes("ค้นหา/เลือกคันรถ"),
+  "unresolved LINE rows can search/select cars using the m/orders-style search behavior"
+);
+assert(
+  lineInboxToolbar.includes("queueMatchedCarCandidateFromOrder") &&
+    lineInboxToolbar.includes("m/orders search:") &&
+    lineInboxToolbar.includes("selectedCandidateCar"),
+  "manual car picker maps selected m/orders search results into pending-save car_row_id overrides"
+);
+assert(
+  lineInboxToolbar.includes("กรุณาเลือกคันรถก่อนบันทึก"),
+  "unresolved LINE rows show a clear save block until staff selects a car"
+);
+assert(
+  lineInboxToolbar.includes("พบรถที่เกี่ยวข้องกับ") &&
+    lineInboxToolbar.includes("carPickerQuery"),
+  "client-side car search fallback labels candidate results with the derived LINE ref"
 );
 assert(
   lineInboxToolbar.includes("queueActionDraftForLine(line, fallbackAssignee)"),
@@ -1504,6 +1627,8 @@ assert(
 );
 assert(pendingSaveRoute.includes("assignee_staff: String(actionRow.assignee_staff"), "pending-save receives selected assignee");
 assert(pendingSaveRoute.includes("item_status: String(actionRow.item_status"), "pending-save receives selected status");
+assert(pendingSaveRoute.includes("applySelectedCarToPayload"), "pending-save can use a staff-selected candidate car");
+assert(pendingSaveRoute.includes("const crFromBlock = cleanLine(block.car_row_id)"), "pending-save accepts selected candidate car_row_id");
 assert(pendingSaveRoute.includes("saved_items: saved.map"), "pending-save response returns saved item rows");
 assert(pendingSaveRoute.includes("createdItems = saved.filter"), "pending-save separates created items for LINE reply");
 assert(pendingSaveRoute.includes("updatedItems = saved.filter"), "pending-save separates updated/merged items for LINE reply");

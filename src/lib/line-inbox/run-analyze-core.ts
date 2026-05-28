@@ -356,6 +356,7 @@ export async function runLineInboxAnalyzeCore(
     ignored_mention_lines: guarded.ignored_mention_lines,
     ignored_noise_lines: guarded.ignored_noise_lines,
     extractedCarCandidates: detected.extractedCarCandidates ?? [],
+    matchedCarCandidates: detected.matchedCarCandidates ?? [],
     aiTargetCarReference: detected.aiTargetCarReference ?? aiDraft?.target_car_reference ?? "",
     aiTargetCarConfidence: detected.aiTargetCarConfidence ?? aiDraft?.target_car_confidence ?? "",
     matchReason: detected.matchReason ?? "",
