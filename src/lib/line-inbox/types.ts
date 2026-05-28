@@ -13,6 +13,16 @@ export type LineInboxCarCandidate = {
   line?: string;
 };
 
+export type LineInboxMatchedCarCandidate = {
+  car_row_id: string;
+  plate_text: string;
+  spec_text?: string;
+  chassis?: string;
+  sale?: string;
+  confidence?: number;
+  reason?: string;
+};
+
 export type LineInboxAnalyzeItem = {
   raw_text: string;
   suggested_item_name: string;
@@ -41,6 +51,7 @@ export type LineInboxAnalyzeResponse = {
   line_attachments?: LineInboxAttachmentMeta[];
   attachments_meta_count?: number;
   extractedCarCandidates?: LineInboxCarCandidate[];
+  matchedCarCandidates?: LineInboxMatchedCarCandidate[];
   aiTargetCarReference?: string;
   aiTargetCarConfidence?: string;
   matchReason?: string;

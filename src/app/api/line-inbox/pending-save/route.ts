@@ -26,6 +26,8 @@ import {
 export const dynamic = "force-dynamic";
 
 const ORDER_ITEMS_TABLE = "order_items";
+const CARS_TABLE = process.env.NEXT_PUBLIC_SUPABASE_CARS_TABLE ?? "cars";
+const CAR_SELECT = "row_id,plate_number,chassis_number,spec,sale_support";
 
 type AutoReplyResult = {
   enabled: boolean;
@@ -135,6 +137,45 @@ function reviewUrlForLineInbox(payload: LineInboxAnalyzeResponse, carRowId: stri
     carRowId,
     plate: cleanLine(payload.detected_car?.plate_text) || detectedCarTitle(payload),
   });
+}
+
+async function applySelectedCarToPayload(
+  supabase: SupabaseClient,
+  payload: LineInboxAnalyzeResponse,
+  carRowId: string
+): Promise<LineInboxAnalyzeResponse> {
+  const rowId = cleanLine(carRowId);
+  if (!rowId) return payload;
+
+  const { data, error } = await supabase
+    .from(CARS_TABLE)
+    .select(CAR_SELECT)
+    .eq("row_id", rowId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) throw new Error(`Selected car_row_id not found: ${rowId}`);
+
+  const car = data as {
+    row_id?: unknown;
+    plate_number?: unknown;
+    chassis_number?: unknown;
+    spec?: unknown;
+    sale_support?: unknown;
+  };
+  return {
+    ...payload,
+    detected_car: {
+      ...payload.detected_car,
+      car_row_id: cleanLine(car.row_id) || rowId,
+      plate_text: cleanLine(car.plate_number) || cleanLine(payload.detected_car?.plate_text),
+      chassis: cleanLine(car.chassis_number) || cleanLine(payload.detected_car?.chassis),
+      spec_text: cleanLine(car.spec) || cleanLine(payload.detected_car?.spec_text),
+      sale: cleanLine(car.sale_support) || cleanLine(payload.detected_car?.sale),
+      confidence: Math.max(Number(payload.detected_car?.confidence ?? 0) || 0, 0.95),
+    },
+    matchStatus: "matched",
+    unmatchedReason: "",
+  };
 }
 
 function resolveLinePushTarget(row: {
@@ -433,16 +474,21 @@ export async function POST(request: Request) {
       }
 
       const payloadRaw = (row as { analyze_payload?: unknown }).analyze_payload;
-      const payload = isAnalyzePayload(payloadRaw)
+      let payload = isAnalyzePayload(payloadRaw)
         ? payloadRaw
         : await buildFallbackAnalyzePayloadFromRawText(supabase, {
             raw_text: (row as { raw_text?: unknown }).raw_text,
             car_row_id: (row as { car_row_id?: unknown }).car_row_id,
           });
 
+      const crFromBlock = cleanLine(block.car_row_id);
+      if (crFromBlock) {
+        payload = await applySelectedCarToPayload(supabase, payload, crFromBlock);
+      }
+
       const crFromPayload = String(payload.detected_car?.car_row_id ?? "").trim();
       const crFromRow = String((row as { car_row_id?: unknown }).car_row_id ?? "").trim();
-      const car_row_id = crFromPayload || crFromRow;
+      const car_row_id = crFromPayload || crFromBlock || crFromRow;
       const items =
         (payload.items ?? []).length > 0
           ? payload.items ?? []

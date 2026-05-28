@@ -23,6 +23,7 @@ import type {
   DuplicateStatus,
   ExistingOrderItemRow,
   LineInboxCarCandidate,
+  LineInboxMatchedCarCandidate,
   LineInboxAnalyzeItem,
   LineInboxAnalyzeResponse,
   LineInboxAttachmentMeta,
@@ -85,6 +86,7 @@ type PendingQueueAttachment = {
   line_photo_count: number;
   linePhotoCount: number;
   extractedCarCandidates: LineInboxCarCandidate[];
+  matchedCarCandidates: LineInboxMatchedCarCandidate[];
   aiTargetCarReference: string;
   aiTargetCarConfidence: string;
   matchReason: string;
@@ -129,6 +131,7 @@ type PendingQueueMsg = {
   line_photo_count: number;
   linePhotoCount: number;
   extractedCarCandidates: LineInboxCarCandidate[];
+  matchedCarCandidates: LineInboxMatchedCarCandidate[];
   aiTargetCarReference: string;
   aiTargetCarConfidence: string;
   matchReason: string;
@@ -179,6 +182,7 @@ type PendingQueueGroup = {
   line_photo_count: number;
   linePhotoCount: number;
   extractedCarCandidates: LineInboxCarCandidate[];
+  matchedCarCandidates: LineInboxMatchedCarCandidate[];
   aiTargetCarReference: string;
   aiTargetCarConfidence: string;
   matchReason: string;
@@ -439,6 +443,7 @@ function extractStoredAttachments(
     linePhotoCount?: number;
     rawTextPreview?: string;
     extractedCarCandidates?: LineInboxCarCandidate[];
+    matchedCarCandidates?: LineInboxMatchedCarCandidate[];
     aiTargetCarReference?: string;
     aiTargetCarConfidence?: string;
     matchReason?: string;
@@ -461,6 +466,7 @@ function extractStoredAttachments(
   const relatedTextMessageId = cleanString(overrides.relatedTextMessageId);
   const linePhotoCount = Math.max(1, Number(overrides.linePhotoCount ?? 1));
   const extractedCarCandidates = overrides.extractedCarCandidates ?? payload.extractedCarCandidates ?? [];
+  const matchedCarCandidates = overrides.matchedCarCandidates ?? payload.matchedCarCandidates ?? [];
   const aiTargetCarReference = cleanString(overrides.aiTargetCarReference) || cleanString(payload.aiTargetCarReference);
   const aiTargetCarConfidence = cleanString(overrides.aiTargetCarConfidence) || cleanString(payload.aiTargetCarConfidence);
   const matchReason = cleanString(overrides.matchReason) || cleanString(payload.matchReason);
@@ -497,6 +503,7 @@ function extractStoredAttachments(
       line_photo_count: linePhotoCount,
       linePhotoCount,
       extractedCarCandidates,
+      matchedCarCandidates,
       aiTargetCarReference,
       aiTargetCarConfidence,
       matchReason,
@@ -600,6 +607,15 @@ function payloadOrRelatedCandidates(
   return (related?.payload?.extractedCarCandidates ?? []).slice(0, 8);
 }
 
+function payloadOrRelatedMatchedCarCandidates(
+  payload: LineInboxAnalyzeResponse,
+  related: RelatedTextContext | null
+): LineInboxMatchedCarCandidate[] {
+  const own = payload.matchedCarCandidates ?? [];
+  if (own.length > 0) return own.slice(0, 8);
+  return (related?.payload?.matchedCarCandidates ?? []).slice(0, 8);
+}
+
 function inheritedCarRowIdForQueue(
   payload: LineInboxAnalyzeResponse,
   row: PendingQueueDbRow,
@@ -699,6 +715,7 @@ function groupMessages(messages: PendingQueueMsg[]): PendingQueueGroup[] {
       if (!existing.related_text_message_id) existing.related_text_message_id = message.related_text_message_id;
       if (!existing.relatedTextMessageId) existing.relatedTextMessageId = message.relatedTextMessageId;
       if (existing.extractedCarCandidates.length === 0) existing.extractedCarCandidates = message.extractedCarCandidates;
+      if (existing.matchedCarCandidates.length === 0) existing.matchedCarCandidates = message.matchedCarCandidates;
       if (!existing.aiTargetCarReference) existing.aiTargetCarReference = message.aiTargetCarReference;
       if (!existing.aiTargetCarConfidence) existing.aiTargetCarConfidence = message.aiTargetCarConfidence;
       if (!existing.matchReason) existing.matchReason = message.matchReason;
@@ -746,6 +763,7 @@ function groupMessages(messages: PendingQueueMsg[]): PendingQueueGroup[] {
       line_photo_count: message.attachments.length,
       linePhotoCount: message.attachments.length,
       extractedCarCandidates: message.extractedCarCandidates,
+      matchedCarCandidates: message.matchedCarCandidates,
       aiTargetCarReference: message.aiTargetCarReference,
       aiTargetCarConfidence: message.aiTargetCarConfidence,
       matchReason: message.matchReason,
@@ -985,6 +1003,7 @@ export async function GET(request: Request) {
       const plateText = plateTextRaw || fallbackTitle;
       const sale = String(payload.detected_car?.sale ?? related?.payload?.detected_car?.sale ?? "").trim();
       const extractedCarCandidates = payloadOrRelatedCandidates(payload, related);
+      const matchedCarCandidates = payloadOrRelatedMatchedCarCandidates(payload, related);
       const aiTargetCarReference =
         cleanString(payload.aiTargetCarReference) || cleanString(related?.payload?.aiTargetCarReference);
       const aiTargetCarConfidence =
@@ -1053,6 +1072,7 @@ export async function GET(request: Request) {
         linePhotoCount: payload.line_attachments?.length ?? 0,
         rawTextPreview: fallbackDescription.slice(0, 120),
         extractedCarCandidates,
+        matchedCarCandidates,
         aiTargetCarReference,
         aiTargetCarConfidence,
         matchReason,
@@ -1147,6 +1167,7 @@ export async function GET(request: Request) {
         line_photo_count: messageAttachments.length,
         linePhotoCount: messageAttachments.length,
         extractedCarCandidates,
+        matchedCarCandidates,
         aiTargetCarReference,
         aiTargetCarConfidence,
         matchReason,
