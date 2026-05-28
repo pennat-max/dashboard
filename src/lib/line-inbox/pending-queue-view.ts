@@ -92,7 +92,7 @@ export function lineInboxQueueGroupHasWorkOnYmd(group: LineInboxQueueFilterGroup
   const messageOnDate = (group.messages ?? []).some((message) => {
     if (ymdBangkokFromLineInboxIso(message.received_at) !== ymd) return false;
     const jobs = Math.max(0, Number(message.action_line_count ?? 0)) + Math.max(0, Number(message.new_line_count ?? 0));
-    return jobs > 0 || lineInboxQueueMessageNeedsManualReview(message);
+    return jobs > 0 || lineInboxQueueMessageNeedsManualReview(message) || lineInboxQueueMessageIsWaitingForCarRecord(message);
   });
   const photoOnDate = (group.attachments ?? []).some((attachment) => ymdBangkokFromLineInboxIso(attachment.received_at) === ymd);
   return messageOnDate || photoOnDate;

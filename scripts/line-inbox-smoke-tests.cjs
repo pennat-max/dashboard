@@ -164,13 +164,18 @@ assert.strictEqual(
   "waiting-for-car filter returns pending car record groups"
 );
 assert.strictEqual(
+  lineInboxQueueGroupMatchesFilter(queueFilterGroups[3], "today", queueFilterToday),
+  true,
+  "today filter includes waiting-for-car groups received today"
+);
+assert.strictEqual(
   lineInboxQueueGroupMatchesFilter(queueFilterGroups[3], "manual", queueFilterToday),
   false,
   "waiting-for-car groups are excluded from manual review filter"
 );
 assert.deepStrictEqual(
   lineInboxQueueFilterCounts(queueFilterGroups, queueFilterToday),
-  { all: 4, today: 1, yesterday: 1, manual: 1, waiting_for_car: 1 },
+  { all: 4, today: 2, yesterday: 1, manual: 1, waiting_for_car: 1 },
   "pending queue filter counts are computed from all pending groups"
 );
 const receiptReply = buildLineWebhookReceiptAcknowledgementText();
@@ -1090,8 +1095,14 @@ assert(
 );
 assert(
   pendingQueueRoute.includes("parseLineInboxQueueFilter") &&
-    pendingQueueRoute.includes("lineInboxQueueGroupMatchesFilter"),
-  "pending queue applies server-side all/today/yesterday/manual filters"
+    pendingQueueRoute.includes("lineInboxQueueGroupMatchesFilter") &&
+    pendingQueueRoute.includes("pendingQueueMessageCountsAsManualReview"),
+  "pending queue applies server-side all/today/yesterday/manual/waiting-for-car filters"
+);
+assert(
+  pendingQueueRoute.includes("pendingQueueMessageIsWaitingForCarRecord") &&
+    pendingQueueRoute.includes("!pendingQueueMessageIsWaitingForCarRecord"),
+  "pending queue keeps waiting-for-car groups out of manual review totals"
 );
 assert(
   pendingQueueRoute.includes("LINE_PENDING_QUEUE_SUMMARY_ATTACHMENT_LIMIT") &&

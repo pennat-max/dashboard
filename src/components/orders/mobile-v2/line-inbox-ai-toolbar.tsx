@@ -1664,7 +1664,7 @@ function useLineInboxBridgeState({
         : isUnresolved
           ? primaryLabel || String(group.aiTargetCarReference ?? "").trim() || fallbackDescription || ""
           : "";
-      if (jobCount === 0 && photoCount === 0) continue;
+      if (jobCount === 0 && photoCount === 0 && !isWaitingForCarRecord) continue;
       rows.push({
         groupKey: group.group_key,
         orderId: matched?.id ?? null,
