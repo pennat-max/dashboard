@@ -2639,9 +2639,15 @@ function useLineInboxBridgeState({
             {row.fallbackSubtitle ? (
               <p className="mt-1 line-clamp-2 text-[10px] font-medium text-slate-500">{row.fallbackSubtitle}</p>
             ) : null}
-            {row.contextSource === "reply_context" ? (
+            {row.contextSource === "reply_context" || row.contextSource === "fallback_previous_message" ? (
               <p className="mt-1 rounded-lg bg-sky-50 px-2 py-1 text-[10px] font-semibold text-sky-800 ring-1 ring-sky-100">
-                {uiLang === "en" ? "Referenced from previous LINE message" : "อ้างอิงจากข้อความก่อนหน้า"}
+                {row.contextSource === "fallback_previous_message"
+                  ? uiLang === "en"
+                    ? "Possible reference to a previous LINE message - please review before saving"
+                    : "ระบบเดาว่าอาจอ้างอิงจากข้อความก่อนหน้า · กรุณาตรวจสอบก่อนบันทึก"
+                  : uiLang === "en"
+                    ? "Referenced from previous LINE message"
+                    : "อ้างอิงจากข้อความก่อนหน้า"}
                 {row.replyContextPreview ? ` · ${row.replyContextPreview}` : ""}
               </p>
             ) : null}
@@ -2950,9 +2956,16 @@ function useLineInboxBridgeState({
                     {[m.source_label, m.group_id_display ? `group: ${m.group_id_display}` : ""].filter(Boolean).join(" · ")}
                   </p>
                 ) : null}
-                {String(m.contextSource ?? m.context_source ?? "").trim() === "reply_context" ? (
+                {String(m.contextSource ?? m.context_source ?? "").trim() === "reply_context" ||
+                String(m.contextSource ?? m.context_source ?? "").trim() === "fallback_previous_message" ? (
                   <p className="mt-2 rounded-lg bg-white/70 px-2 py-1 text-[10px] font-semibold text-sky-800 ring-1 ring-white/80">
-                    {uiLang === "en" ? "Referenced from previous LINE message" : "อ้างอิงจากข้อความก่อนหน้า"}
+                    {String(m.contextSource ?? m.context_source ?? "").trim() === "fallback_previous_message"
+                      ? uiLang === "en"
+                        ? "Possible reference to a previous LINE message - please review before saving"
+                        : "ระบบเดาว่าอาจอ้างอิงจากข้อความก่อนหน้า · กรุณาตรวจสอบก่อนบันทึก"
+                      : uiLang === "en"
+                        ? "Referenced from previous LINE message"
+                        : "อ้างอิงจากข้อความก่อนหน้า"}
                     {String(m.replyContext?.source_raw_text_preview ?? m.reply_context?.source_raw_text_preview ?? "").trim()
                       ? ` · ${String(m.replyContext?.source_raw_text_preview ?? m.reply_context?.source_raw_text_preview ?? "").trim()}`
                       : ""}

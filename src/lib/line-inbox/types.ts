@@ -48,8 +48,8 @@ export type LineInboxAnalyzeResponse = {
   unmatchedReason?: "" | "pending_car_record" | "multiple_candidates" | "no_car_candidate";
   context_source?: "reply_context" | string;
   reply_context?: {
-    context_source: "reply_context";
-    quoted_message_id: string;
+    context_source: "reply_context" | "fallback_previous_message" | string;
+    quoted_message_id?: string;
     source_line_message_id?: string;
     source_inbox_message_id?: string;
     source_car_row_id?: string;
@@ -57,6 +57,8 @@ export type LineInboxAnalyzeResponse = {
     source_detected_car?: Partial<LineInboxAnalyzeResponse["detected_car"]>;
     confidence?: "high" | "medium" | "low";
     reason?: string;
+    fallback_window_ms?: number;
+    ambiguous?: boolean;
   };
   existing_items?: ExistingOrderItemRow[];
   items: LineInboxAnalyzeItem[];
