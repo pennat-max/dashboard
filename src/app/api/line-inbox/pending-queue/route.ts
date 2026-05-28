@@ -13,6 +13,7 @@ import {
 } from "@/lib/line-inbox/car-match-status";
 import {
   lineInboxQueueFilterCounts,
+  lineInboxQueueMessageNeedsManualReview,
   lineInboxQueueGroupMatchesFilter,
   parseLineInboxQueueFilter,
   todayYmdBangkokForLineInboxQueue,
@@ -668,12 +669,8 @@ function unmatchedReasonForStatus(
   return "";
 }
 
-function pendingQueueMessageIsWaitingForCarRecord(message: PendingQueueMsg): boolean {
-  return message.matchStatus === "waiting_for_car_record" || message.unmatchedReason === "pending_car_record";
-}
-
 function pendingQueueMessageCountsAsManualReview(message: PendingQueueMsg): boolean {
-  return Boolean(message.needs_human_review) && message.action_line_count === 0 && !pendingQueueMessageIsWaitingForCarRecord(message);
+  return lineInboxQueueMessageNeedsManualReview(message);
 }
 
 function groupMessages(messages: PendingQueueMsg[]): PendingQueueGroup[] {

@@ -24,6 +24,7 @@ import {
 import {
   LINE_INBOX_QUEUE_REFRESH_MS,
   lineInboxQueueGroupMatchesFilter,
+  lineInboxQueueMessageNeedsManualReview,
   todayYmdBangkokForLineInboxQueue,
   type LineInboxQueueFilter,
   type LineInboxQueueFilterCounts,
@@ -476,19 +477,13 @@ function queueMessageActionCount(message: PendingQueueMessage): number {
 }
 
 function queueMessageNeedsManualReview(message: PendingQueueMessage): boolean {
-  if (queueMessageIsWaitingForCarRecord(message)) return false;
+  if (lineInboxQueueMessageNeedsManualReview(message)) return true;
   if (queueMessageHasWorkItems(message)) return false;
-  const flagged =
-    Boolean(message.needs_human_review) ||
-    String(message.extractionStatus ?? "").trim() === "needs_manual_review" ||
-    String(message.extractionStatus ?? "").trim() === "matched_no_work" ||
-    String(message.extractionStatus ?? "").trim() === "no_items";
   const hasImagePlaceholderOnly =
     (message.action_lines ?? []).some((line) =>
       isLineInboxImagePlaceholderText(line.raw_text) || isLineInboxImagePlaceholderText(line.suggested_item_name)
     ) && queueMessageWorkActionLines(message).length === 0;
   if (hasImagePlaceholderOnly) return true;
-  if (flagged) return true;
   return Boolean(queueMessageRawText(message));
 }
 
@@ -725,7 +720,9 @@ function queueMessageManualReviewReason(message: PendingQueueMessage, uiLang: Ui
       ? "AI could not split work items yet - manual review needed."
       : "AI ยังแยกงานไม่ได้ — รอตรวจด้วยมือ";
   }
-  return uiLang === "en" ? "AI could not split work items yet." : "AI ยังแยกงานไม่ได้";
+  return uiLang === "en"
+    ? "This message has no clear plate, stock/ref, or vehicle context. Search/select a car, or skip it."
+    : "ข้อความนี้ยังไม่มีทะเบียน เลขรถ หรือข้อมูลรถที่ชัดเจน กรุณาค้นหา/เลือกคันรถเอง หรือข้าม";
 }
 
 function queueDetectedCarLabel(message: PendingQueueMessage): string {
@@ -1272,7 +1269,7 @@ function useLineInboxBridgeState({
       const attachments = (data.recent_attachments ?? []).filter((attachment) => attachment.url);
       const todayYmd = todayYmdBangkokForLineInboxQueue();
       const fallbackCounts: LineInboxQueueFilterCounts = {
-        all: groups.length,
+        all: groups.filter((group) => groupMatchesLineInboxFilter(group, "all", todayYmd)).length,
         today: groups.filter((group) => groupMatchesLineInboxFilter(group, "today", todayYmd)).length,
         yesterday: groups.filter((group) => groupMatchesLineInboxFilter(group, "yesterday", todayYmd)).length,
         manual: groups.filter((group) => groupMatchesLineInboxFilter(group, "manual", todayYmd)).length,
@@ -1721,49 +1718,40 @@ function useLineInboxBridgeState({
     return rows.sort((a, b) => b.latestMessageAt - a.latestMessageAt);
   }, [orders, queueDateFilter, queueGroups, uiLang]);
 
-  /** Badge = number of cars/groups with pending LINE/AI work (not line count). */
-  const filteredLineInboxCarCount = queueGroups.filter((group) => {
-    const manualReviewCount = Math.max(0, group.total_manual_reviews ?? 0);
-    const actionCount = Math.max(0, group.total_action_lines ?? 0);
-    const newCount = Math.max(0, group.total_new_lines ?? 0);
-    const photoCount = queueGroupPhotoCount(group);
-    return Math.max(actionCount, newCount) + manualReviewCount > 0 || photoCount > 0;
-  }).length;
-  const lineInboxCarCount = queueFilterCounts.all || filteredLineInboxCarCount;
+  /** Badge = number of ready-to-approve LINE/AI groups, not manual review rows. */
+  const lineInboxCarCount = queueFilterCounts.all;
 
   const queueDateFilterOptions = useMemo(() => {
     const todayYmd = todayYmdBangkokForLineInboxQueue();
     const options: Array<{ value: LineInboxQueueDateFilter; label: string; count: number }> = [
       {
         value: "all",
-        label: uiLang === "en" ? "All pending" : "รอดำเนินการทั้งหมด",
-        count: queueFilterCounts.all || lineInboxCarCount,
+        label: uiLang === "en" ? "Ready to approve" : "พร้อมตรวจงาน",
+        count: queueFilterCounts.all,
       },
       {
         value: "today",
         label: uiLang === "en" ? "Today" : "วันนี้",
-        count: queueFilterCounts.today || queueGroups.filter((group) => groupMatchesLineInboxFilter(group, "today", todayYmd)).length,
+        count: queueFilterCounts.today,
       },
       {
         value: "yesterday",
         label: uiLang === "en" ? "Yesterday" : "เมื่อวาน",
-        count: queueFilterCounts.yesterday || queueGroups.filter((group) => groupMatchesLineInboxFilter(group, "yesterday", todayYmd)).length,
+        count: queueFilterCounts.yesterday,
       },
       {
         value: "manual",
         label: uiLang === "en" ? "Manual review" : "ต้องตรวจเอง",
-        count: queueFilterCounts.manual || queueGroups.filter((group) => groupMatchesLineInboxFilter(group, "manual", todayYmd)).length,
+        count: queueFilterCounts.manual,
       },
       {
         value: "waiting_for_car",
         label: uiLang === "en" ? "Waiting for car" : "รอรถเข้า",
-        count:
-          queueFilterCounts.waiting_for_car ||
-          queueGroups.filter((group) => groupMatchesLineInboxFilter(group, "waiting_for_car", todayYmd)).length,
+        count: queueFilterCounts.waiting_for_car,
       },
     ];
     return options;
-  }, [lineInboxCarCount, queueFilterCounts, queueGroups, uiLang]);
+  }, [queueFilterCounts, uiLang]);
 
   const toggleQueueLine = useCallback((inboxId: string, itemIndex: number) => {
     setQueueDeselected((prev) => {
@@ -2694,8 +2682,8 @@ function useLineInboxBridgeState({
                 <p className="mt-1 whitespace-pre-wrap text-[11px]">
                   {row.isUnresolved
                     ? uiLang === "en"
-                      ? "Search or skip from the card."
-                      : "กรุณาเลือก/ค้นหารถเอง หรือข้าม"
+                      ? "This message has no clear plate, stock/ref, or vehicle context. Search/select a car, or skip it."
+                      : "ข้อความนี้ยังไม่มีทะเบียน เลขรถ หรือข้อมูลรถที่ชัดเจน กรุณาค้นหา/เลือกคันรถเอง หรือข้าม"
                     : uiLang === "en"
                       ? "No work items found yet."
                       : "ยังไม่พบรายการงาน"}
@@ -2760,8 +2748,8 @@ function useLineInboxBridgeState({
                   </h2>
                   <p className="mt-1 text-[11px] font-medium text-slate-500">
                     {uiLang === "en"
-                      ? `${carPickerRows.length} shown · ${lineInboxCarCount} pending group(s)`
-                      : `แสดง ${carPickerRows.length} รายการ · รอดำเนินการ ${lineInboxCarCount} กลุ่ม`}
+                      ? `${carPickerRows.length} shown · ${lineInboxCarCount} ready group(s)`
+                      : `แสดง ${carPickerRows.length} รายการ · พร้อมตรวจงาน ${lineInboxCarCount} กลุ่ม`}
                   </p>
                 </div>
                 <button

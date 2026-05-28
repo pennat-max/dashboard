@@ -108,6 +108,7 @@ const {
   parseLineInboxQueueFilter,
   lineInboxQueueFilterCounts,
   lineInboxQueueGroupMatchesFilter,
+  lineInboxQueueMessageNeedsManualReview,
 } = loadTsFile(path.join(root, "src/lib/line-inbox/pending-queue-view.ts"));
 
 const specificGroupPolicy = parseLineAllowedGroups("C-test-group,C-real-group");
@@ -128,12 +129,32 @@ const queueFilterToday = "2026-05-27";
 const queueFilterGroups = [
   {
     total_manual_reviews: 0,
-    messages: [{ received_at: "2026-05-27T08:00:00+07:00", action_line_count: 1, new_line_count: 0 }],
+    car_row_id: "car-row-today",
+    matchStatus: "matched",
+    messages: [
+      {
+        received_at: "2026-05-27T08:00:00+07:00",
+        car_row_id: "car-row-today",
+        matchStatus: "matched",
+        action_line_count: 1,
+        new_line_count: 0,
+      },
+    ],
     attachments: [],
   },
   {
     total_manual_reviews: 0,
-    messages: [{ received_at: "2026-05-26T08:00:00+07:00", action_line_count: 0, new_line_count: 1 }],
+    car_row_id: "car-row-yesterday",
+    matchStatus: "matched",
+    messages: [
+      {
+        received_at: "2026-05-26T08:00:00+07:00",
+        car_row_id: "car-row-yesterday",
+        matchStatus: "matched",
+        action_line_count: 0,
+        new_line_count: 1,
+      },
+    ],
     attachments: [],
   },
   {
@@ -156,9 +177,45 @@ const queueFilterGroups = [
     ],
     attachments: [],
   },
+  {
+    total_manual_reviews: 0,
+    matchStatus: "no_vehicle_context",
+    unmatchedReason: "no_car_candidate",
+    messages: [
+      {
+        received_at: "2026-05-27T10:00:00+07:00",
+        needs_human_review: true,
+        extractionStatus: "needs_manual_review",
+        matchStatus: "no_vehicle_context",
+        unmatchedReason: "no_car_candidate",
+        action_line_count: 0,
+        new_line_count: 0,
+      },
+    ],
+    attachments: [],
+  },
+  {
+    total_manual_reviews: 0,
+    matchStatus: "ambiguous_vehicle",
+    unmatchedReason: "multiple_candidates",
+    messages: [
+      {
+        received_at: "2026-05-27T11:00:00+07:00",
+        needs_human_review: true,
+        extractionStatus: "ok",
+        matchStatus: "ambiguous_vehicle",
+        unmatchedReason: "multiple_candidates",
+        action_line_count: 1,
+        new_line_count: 1,
+      },
+    ],
+    attachments: [],
+  },
 ];
 assert.strictEqual(lineInboxQueueGroupMatchesFilter(queueFilterGroups[0], "today", queueFilterToday), true, "today filter returns today's groups");
 assert.strictEqual(lineInboxQueueGroupMatchesFilter(queueFilterGroups[1], "yesterday", queueFilterToday), true, "yesterday filter returns yesterday's groups");
+assert.strictEqual(lineInboxQueueGroupMatchesFilter(queueFilterGroups[0], "all", queueFilterToday), true, "default all filter shows ready matched work");
+assert.strictEqual(lineInboxQueueGroupMatchesFilter(queueFilterGroups[1], "all", queueFilterToday), true, "default all filter includes ready matched work from older dates");
 assert.strictEqual(lineInboxQueueGroupMatchesFilter(queueFilterGroups[2], "manual", queueFilterToday), true, "manual filter returns manual review groups");
 assert.strictEqual(
   lineInboxQueueGroupMatchesFilter(queueFilterGroups[3], "waiting_for_car", queueFilterToday),
@@ -175,10 +232,50 @@ assert.strictEqual(
   false,
   "waiting-for-car groups are excluded from manual review filter"
 );
+assert.strictEqual(
+  lineInboxQueueGroupMatchesFilter(queueFilterGroups[3], "all", queueFilterToday),
+  false,
+  "waiting-for-car groups are excluded from the default ready list"
+);
+assert.strictEqual(
+  lineInboxQueueGroupMatchesFilter(queueFilterGroups[4], "manual", queueFilterToday),
+  true,
+  "no-car rows appear in manual review filter"
+);
+assert.strictEqual(
+  lineInboxQueueGroupMatchesFilter(queueFilterGroups[5], "manual", queueFilterToday),
+  true,
+  "ambiguous car rows appear in manual review filter even when work text exists"
+);
+assert.strictEqual(
+  lineInboxQueueGroupMatchesFilter(queueFilterGroups[4], "all", queueFilterToday),
+  false,
+  "no-car rows are excluded from the default ready list"
+);
+assert.strictEqual(
+  lineInboxQueueGroupMatchesFilter(queueFilterGroups[5], "all", queueFilterToday),
+  false,
+  "ambiguous car rows are excluded from the default ready list even when work text exists"
+);
+assert.strictEqual(
+  lineInboxQueueMessageNeedsManualReview(queueFilterGroups[4].messages[0]),
+  true,
+  "no-car messages count as manual review"
+);
+assert.strictEqual(
+  lineInboxQueueMessageNeedsManualReview(queueFilterGroups[5].messages[0]),
+  true,
+  "ambiguous/multiple-candidate messages count as manual review"
+);
+assert.strictEqual(
+  lineInboxQueueMessageNeedsManualReview(queueFilterGroups[3].messages[0]),
+  false,
+  "waiting-for-car messages stay out of manual review counts"
+);
 assert.deepStrictEqual(
   lineInboxQueueFilterCounts(queueFilterGroups, queueFilterToday),
-  { all: 4, today: 2, yesterday: 1, manual: 1, waiting_for_car: 1 },
-  "pending queue filter counts are computed from all pending groups"
+  { all: 2, today: 4, yesterday: 1, manual: 3, waiting_for_car: 1 },
+  "pending queue filter counts separate ready, manual, and waiting-car groups"
 );
 const receiptReply = buildLineWebhookReceiptAcknowledgementText();
 assert(receiptReply.includes("รับข้อความแล้วค่ะ"), "webhook receipt acknowledgement says the message was received");
@@ -1207,6 +1304,10 @@ const pendingQueueRoute = fs.readFileSync(
   path.join(root, "src/app/api/line-inbox/pending-queue/route.ts"),
   "utf8"
 );
+const pendingQueueViewSource = fs.readFileSync(
+  path.join(root, "src/lib/line-inbox/pending-queue-view.ts"),
+  "utf8"
+);
 for (const token of [
   "findFollowingImageContexts",
   "canBuildFallbackPayloadForRow",
@@ -1256,9 +1357,14 @@ assert(
   "pending queue applies server-side all/today/yesterday/manual/waiting-for-car filters"
 );
 assert(
-  pendingQueueRoute.includes("pendingQueueMessageIsWaitingForCarRecord") &&
-    pendingQueueRoute.includes("!pendingQueueMessageIsWaitingForCarRecord"),
-  "pending queue keeps waiting-for-car groups out of manual review totals"
+  pendingQueueRoute.includes("lineInboxQueueMessageNeedsManualReview") &&
+    pendingQueueViewSource.includes("lineInboxQueueMessageIsWaitingForCarRecord(message)") &&
+    pendingQueueViewSource.includes("lineInboxQueueMessageIsUnknownCarManualReview"),
+  "pending queue keeps waiting-for-car separate and counts unknown-car rows as manual review"
+);
+assert(
+  pendingQueueViewSource.includes('if (filter === "all") return lineInboxQueueGroupIsReadyActionable(group)'),
+  "pending queue default/all filter shows only ready-to-approve actionable groups"
 );
 assert(
   pendingQueueRoute.includes("LINE_PENDING_QUEUE_SUMMARY_ATTACHMENT_LIMIT") &&

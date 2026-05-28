@@ -4,6 +4,7 @@ export type LineInboxQueueFilter = "all" | "today" | "yesterday" | "manual" | "w
 
 export type LineInboxQueueFilterMessage = {
   received_at?: string;
+  car_row_id?: string;
   action_line_count?: number;
   new_line_count?: number;
   needs_human_review?: boolean;
@@ -18,6 +19,7 @@ export type LineInboxQueueFilterAttachment = {
 };
 
 export type LineInboxQueueFilterGroup = {
+  car_row_id?: string;
   total_manual_reviews?: number;
   matchStatus?: string;
   unmatchedReason?: string;
@@ -60,6 +62,20 @@ export function lineInboxQueueMessageIsWaitingForCarRecord(message: LineInboxQue
   );
 }
 
+export function lineInboxQueueMessageIsUnknownCarManualReview(message: LineInboxQueueFilterMessage): boolean {
+  if (lineInboxQueueMessageIsWaitingForCarRecord(message)) return false;
+  if (String(message.car_row_id ?? "").trim()) return false;
+  const matchStatus = String(message.matchStatus ?? "").trim();
+  const unmatchedReason = String(message.unmatchedReason ?? message.unmatched_reason ?? "").trim();
+  return (
+    matchStatus === "unresolved" ||
+    matchStatus === "no_vehicle_context" ||
+    matchStatus === "ambiguous_vehicle" ||
+    unmatchedReason === "multiple_candidates" ||
+    unmatchedReason === "no_car_candidate"
+  );
+}
+
 export function lineInboxQueueGroupIsWaitingForCarRecord(group: LineInboxQueueFilterGroup): boolean {
   return (
     String(group.matchStatus ?? "").trim() === "waiting_for_car_record" ||
@@ -68,24 +84,62 @@ export function lineInboxQueueGroupIsWaitingForCarRecord(group: LineInboxQueueFi
   );
 }
 
+export function lineInboxQueueGroupIsUnknownCarManualReview(group: LineInboxQueueFilterGroup): boolean {
+  if (lineInboxQueueGroupIsWaitingForCarRecord(group)) return false;
+  if (String(group.car_row_id ?? "").trim()) return false;
+  const matchStatus = String(group.matchStatus ?? "").trim();
+  const unmatchedReason = String(group.unmatchedReason ?? group.unmatched_reason ?? "").trim();
+  return (
+    matchStatus === "unresolved" ||
+    matchStatus === "no_vehicle_context" ||
+    matchStatus === "ambiguous_vehicle" ||
+    unmatchedReason === "multiple_candidates" ||
+    unmatchedReason === "no_car_candidate" ||
+    (group.messages ?? []).some(lineInboxQueueMessageIsUnknownCarManualReview)
+  );
+}
+
 export function lineInboxQueueMessageNeedsManualReview(message: LineInboxQueueFilterMessage): boolean {
   if (lineInboxQueueMessageIsWaitingForCarRecord(message)) return false;
+  if (lineInboxQueueMessageIsUnknownCarManualReview(message)) return true;
   const actionCount = Math.max(0, Number(message.action_line_count ?? 0));
   const newCount = Math.max(0, Number(message.new_line_count ?? 0));
   if (actionCount > 0 || newCount > 0) return false;
   return (
     Boolean(message.needs_human_review) ||
     String(message.extractionStatus ?? "").trim() === "needs_manual_review" ||
+    String(message.extractionStatus ?? "").trim() === "matched_no_work" ||
     String(message.extractionStatus ?? "").trim() === "no_items"
   );
 }
 
 export function lineInboxQueueGroupHasManualReview(group: LineInboxQueueFilterGroup): boolean {
   if (lineInboxQueueGroupIsWaitingForCarRecord(group)) return false;
+  if (lineInboxQueueGroupIsUnknownCarManualReview(group)) return true;
   return (
     Math.max(0, Number(group.total_manual_reviews ?? 0)) > 0 ||
     (group.messages ?? []).some(lineInboxQueueMessageNeedsManualReview)
   );
+}
+
+export function lineInboxQueueMessageIsReadyActionable(message: LineInboxQueueFilterMessage): boolean {
+  if (lineInboxQueueMessageIsWaitingForCarRecord(message)) return false;
+  if (lineInboxQueueMessageIsUnknownCarManualReview(message)) return false;
+  const matchStatus = String(message.matchStatus ?? "").trim();
+  const hasMatchedCar = Boolean(String(message.car_row_id ?? "").trim()) || matchStatus === "matched";
+  if (!hasMatchedCar) return false;
+  const actionCount = Math.max(0, Number(message.action_line_count ?? 0));
+  const newCount = Math.max(0, Number(message.new_line_count ?? 0));
+  return actionCount > 0 || newCount > 0;
+}
+
+export function lineInboxQueueGroupIsReadyActionable(group: LineInboxQueueFilterGroup): boolean {
+  if (lineInboxQueueGroupIsWaitingForCarRecord(group)) return false;
+  if (lineInboxQueueGroupIsUnknownCarManualReview(group)) return false;
+  const matchStatus = String(group.matchStatus ?? "").trim();
+  const hasMatchedCar = Boolean(String(group.car_row_id ?? "").trim()) || matchStatus === "matched";
+  if (!hasMatchedCar) return false;
+  return (group.messages ?? []).some(lineInboxQueueMessageIsReadyActionable);
 }
 
 export function lineInboxQueueGroupHasWorkOnYmd(group: LineInboxQueueFilterGroup, ymd: string): boolean {
@@ -103,7 +157,7 @@ export function lineInboxQueueGroupMatchesFilter(
   filter: LineInboxQueueFilter,
   todayYmd: string
 ): boolean {
-  if (filter === "all") return true;
+  if (filter === "all") return lineInboxQueueGroupIsReadyActionable(group);
   if (filter === "waiting_for_car") return lineInboxQueueGroupIsWaitingForCarRecord(group);
   if (filter === "manual") return lineInboxQueueGroupHasManualReview(group);
   if (filter === "today") return lineInboxQueueGroupHasWorkOnYmd(group, todayYmd);
@@ -118,7 +172,7 @@ export function lineInboxQueueFilterCounts(
   todayYmd: string
 ): LineInboxQueueFilterCounts {
   return {
-    all: groups.length,
+    all: groups.filter((group) => lineInboxQueueGroupMatchesFilter(group, "all", todayYmd)).length,
     today: groups.filter((group) => lineInboxQueueGroupMatchesFilter(group, "today", todayYmd)).length,
     yesterday: groups.filter((group) => lineInboxQueueGroupMatchesFilter(group, "yesterday", todayYmd)).length,
     manual: groups.filter((group) => lineInboxQueueGroupMatchesFilter(group, "manual", todayYmd)).length,
