@@ -24,6 +24,7 @@ import {
   ORDER_TASK_UPDATES_TABLE_NAME,
   type OrderItemFilterIndexLite,
 } from "@/lib/data/orders";
+import { matchesVehicleSearch } from "@/lib/order-tracking/vehicle-search";
 import {
   ORDER_TRACKING_SALE_CODES,
   normalizeSaleAssigneesMap,
@@ -925,30 +926,6 @@ function resolveShareAppBase(publicOriginProp: string | undefined | null): strin
   const vc = String(process.env.VERCEL_URL ?? "").trim();
   if (vc) return (vc.startsWith("http") ? vc : `https://${vc}`).replace(/\/$/, "");
   return "";
-}
-
-/** คำค้นเดียวจับทั้งเลขทะเบียน (และป้ายเต็ม) เลขตัวถัง และรุ่นรถ */
-function matchesVehicleSearch(order: Order, raw: string): boolean {
-  const q = raw.trim();
-  if (!q) return true;
-  const n = norm(q);
-  const haystack = [order.plate, order.fullPlate, order.chassis, order.car].join(" ");
-  const normalizedHaystack = norm(haystack);
-  const tokens =
-    q
-      .match(/[\u0E00-\u0E7Fa-zA-Z0-9.]+/g)
-      ?.map((token) => token.trim())
-      .filter((token) => token && !/^(?:ทะเบียน|เลขทะเบียน|stock|สต็อก|สต๊อก|ref|reference)$/i.test(token)) ?? [];
-  const strongTokens = tokens.filter((token) => /\d{4,6}/.test(token) || token.length >= 3);
-  return (
-    order.plate.includes(q) ||
-    order.fullPlate.includes(q) ||
-    norm(order.chassis).includes(n) ||
-    order.car.toLowerCase().includes(q.toLowerCase()) ||
-    normalizedHaystack.includes(n) ||
-    strongTokens.some((token) => /\d{4,6}/.test(token) && normalizedHaystack.includes(norm(token))) ||
-    (strongTokens.length >= 2 && strongTokens.every((token) => normalizedHaystack.includes(norm(token))))
-  );
 }
 
 function useDebouncedValue<T>(value: T, delayMs: number): T {

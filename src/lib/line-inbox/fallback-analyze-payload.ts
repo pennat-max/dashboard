@@ -51,6 +51,7 @@ export async function buildFallbackAnalyzePayloadFromRawText(
     line_attachments: [],
     attachments_meta_count: 0,
     extractedCarCandidates: resolved.extractedCarCandidates ?? [],
+    matchedCarCandidates: resolved.matchedCarCandidates ?? [],
     aiTargetCarReference: resolved.aiTargetCarReference ?? "",
     aiTargetCarConfidence: resolved.aiTargetCarConfidence ?? "",
     matchReason: resolved.matchReason ?? "",

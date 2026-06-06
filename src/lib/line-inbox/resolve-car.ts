@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { splitLineTextForInbox } from "@/lib/line-inbox/split-line-text";
-import type { LineInboxCarCandidate } from "@/lib/line-inbox/types";
+import type { LineInboxCarCandidate, LineInboxMatchedCarCandidate } from "@/lib/line-inbox/types";
 
 const CARS_TABLE = process.env.NEXT_PUBLIC_SUPABASE_CARS_TABLE ?? "cars";
 const CAR_MATCH_SELECT = [
@@ -26,6 +26,7 @@ export type ResolvedCar = {
   sale?: string;
   candidate_count?: number;
   extractedCarCandidates?: LineInboxCarCandidate[];
+  matchedCarCandidates?: LineInboxMatchedCarCandidate[];
   aiTargetCarReference?: string;
   aiTargetCarConfidence?: string;
   matchReason?: string;
@@ -97,6 +98,13 @@ export function extractLineInboxMileageCarReference(line: string): string {
   return safeString(numeric?.[1]);
 }
 
+export function deriveLineInboxCarSearchQuery(line: string): string {
+  const mileageRef = extractLineInboxMileageCarReference(line);
+  if (mileageRef) return mileageRef;
+  const stocks = extractStockNumbers(String(line ?? ""));
+  return stocks[0] ?? "";
+}
+
 function carHaystack(row: CarMatchRow): string {
   return [
     row.id,
@@ -114,6 +122,48 @@ function carHaystack(row: CarMatchRow): string {
     .map(safeString)
     .filter(Boolean)
     .join(" ");
+}
+
+function carCandidateLabel(row: CarMatchRow): string {
+  return [
+    safeString(row.plate_number),
+    safeString(row.spec) ||
+      [safeString(row.brand), safeString(row.model), safeString(row.model_year), safeString(row.color)]
+        .filter(Boolean)
+        .join(" "),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+}
+
+function matchedCarCandidateFromRow(row: CarMatchRow): LineInboxMatchedCarCandidate | null {
+  const carRowId = safeString(row.row_id);
+  if (!carRowId) return null;
+  const carIdRaw = Number(row.id);
+  return {
+    car_row_id: carRowId,
+    car_id: Number.isFinite(carIdRaw) ? carIdRaw : null,
+    plate_text: safeString(row.plate_number),
+    spec_text: safeString(row.spec),
+    chassis: safeString(row.chassis_number),
+    sale: safeString(row.sale_support),
+    label: carCandidateLabel(row) || carRowId,
+  };
+}
+
+function uniqueMatchedCarCandidates(rows: CarMatchRow[]): LineInboxMatchedCarCandidate[] {
+  const out: LineInboxMatchedCarCandidate[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const candidate = matchedCarCandidateFromRow(row);
+    if (!candidate) continue;
+    const key = candidate.car_row_id || candidate.label;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(candidate);
+  }
+  return out;
 }
 
 export function extractStockNumbers(text: string): string[] {
@@ -428,12 +478,16 @@ function chooseScoredCandidate(rows: CarMatchRow[], contextLine: string): Resolv
       chassis: "",
       confidence: 0.45,
       candidate_count: scored.length,
+      matchedCarCandidates: uniqueMatchedCarCandidates(scored.map((entry) => entry.row)).slice(0, 8),
     };
   }
 
   const row = top.row;
   const confidence = Math.min(0.88, 0.5 + top.score / 12);
-  return resolvedFromRow(row, confidence, scored.length);
+  return {
+    ...resolvedFromRow(row, confidence, scored.length),
+    matchedCarCandidates: uniqueMatchedCarCandidates(scored.map((entry) => entry.row)).slice(0, 8),
+  };
 }
 
 function resolvedFromRow(row: CarMatchRow, confidence: number, candidateCount?: number): ResolvedCar {
@@ -460,6 +514,7 @@ function withResolveMeta(
   return {
     ...result,
     extractedCarCandidates: meta.extractedCarCandidates,
+    matchedCarCandidates: result.matchedCarCandidates ?? [],
     aiTargetCarReference: meta.aiTargetCarReference,
     aiTargetCarConfidence: meta.aiTargetCarConfidence,
     matchReason: meta.matchReason,
