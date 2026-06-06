@@ -98,6 +98,7 @@ export const lineInboxPendingSaveBodySchema = z.object({
       z
         .object({
           inbox_message_id: z.string().uuid(),
+          car_row_id: z.union([z.string().trim().max(512), z.null(), z.undefined()]).optional(),
           item_indices: z.array(z.number().int().nonnegative()).min(1).max(200).optional(),
           skip_all: z.boolean().optional(),
           actions: z

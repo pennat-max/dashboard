@@ -79,11 +79,14 @@ const {
   buildLineOrderReviewUrl,
 } = loadTsFile(path.join(root, "src/lib/line-inbox/review-link.ts"));
 const {
+  deriveLineInboxCarSearchQuery,
   extractLineInboxMileageCarReference,
   lineInboxPlateNumericSuffix,
   scoreLineInboxStockMatch,
   extractStockNumbers,
 } = loadTsFile(path.join(root, "src/lib/line-inbox/resolve-car.ts"));
+const { matchesVehicleSearch } = loadTsFile(path.join(root, "src/lib/order-tracking/vehicle-search.ts"));
+const { lineInboxPendingSaveBodySchema } = loadTsFile(path.join(root, "src/lib/line-inbox/api-schemas.ts"));
 const { deriveLineInboxMatchStatus } = loadTsFile(
   path.join(root, "src/lib/line-inbox/car-match-status.ts")
 );
@@ -357,12 +360,17 @@ assertItems(thaiAddMoreAwning, [thaiAwning], "header prefix with real work keeps
 const thaiMileage47500 = "\u0e01\u0e23\u0e2d\u0e44\u0e21\u0e25\u0e4c 47,000 KM";
 const thaiMileage67500 = "\u0e01\u0e23\u0e2d\u0e44\u0e21\u0e25\u0e4c 67,500 KM";
 const thaiMileage39800 = "\u0e01\u0e23\u0e2d\u0e44\u0e21\u0e25\u0e4c 39,800 KM";
+const thaiMileage53000 = "\u0e01\u0e23\u0e2d\u0e44\u0e21\u0e25\u0e4c 53,000 KM";
 assertItems("4380 - 47000 KM.", [thaiMileage47500], "plate/ref plus mileage becomes a mileage work item");
+assertItems("1603 - 53000 KM.", [thaiMileage53000], "1603 mileage line becomes a mileage work item");
 assertItems("4380 - 47,000 KM", [thaiMileage47500], "comma mileage is normalized");
 assertItems("\u0e19\u0e02-6866 - 67500 KM", [thaiMileage67500], "Thai plate plus mileage becomes a mileage work item");
 assertItems("\u0e01\u0e23\u0e2d\u0e44\u0e21\u0e25\u0e4c 47000 KM", [thaiMileage47500], "mileage without car remains a work item");
 assert.strictEqual(extractLineInboxMileageCarReference("4380 - 47000 KM."), "4380", "mileage line keeps first ref as car candidate");
+assert.strictEqual(extractLineInboxMileageCarReference("1603 - 53000 KM."), "1603", "1603 mileage line keeps first ref as car candidate");
+assert.strictEqual(deriveLineInboxCarSearchQuery("1603 - 53000 KM."), "1603", "1603 mileage search query is derived from the car ref");
 assert.strictEqual(extractLineInboxMileageCarReference("\u0e19\u0e02-6866 - 67500 KM"), "\u0e19\u0e02-6866", "mileage line keeps Thai plate as car candidate");
+assert.deepStrictEqual(extractStockNumbers("1603 - 53000 KM."), ["1603"], "53000 mileage number is not treated as a car candidate");
 assert.deepStrictEqual(extractStockNumbers("4380 - 47000 KM."), ["4380"], "mileage number is not a stock/ref candidate");
 assert.deepStrictEqual(extractStockNumbers("4380 - 47,000 KM"), ["4380"], "comma mileage number is not a stock/ref candidate");
 assert.deepStrictEqual(extractStockNumbers("\u0e19\u0e02-6866 67500 KM"), ["6866"], "Thai plate mileage keeps only plate digits as candidate");
@@ -373,6 +381,51 @@ assert.strictEqual(lineInboxPlateNumericSuffix("\u0e19\u0e02-6866"), "6866", "Th
 assert(scoreLineInboxStockMatch({ plate_number: "\u0e19\u0e02-6866" }, "6866") > scoreLineInboxStockMatch({ spec: "6866" }, "6866"), "plate suffix outranks loose spec match");
 assert.strictEqual(scoreLineInboxStockMatch({ row_id: "a18c7942-10fc-4d32-8059-5b97f86ec9e8" }, "6866"), 0, "UUID row_id substrings do not count as stock/ref matches");
 assert.strictEqual(scoreLineInboxStockMatch({ plate_number: "\u0e01\u0e01-6866" }, "6866"), scoreLineInboxStockMatch({ plate_number: "\u0e19\u0e02-6866" }, "6866"), "duplicate suffix plates score equally and remain ambiguous upstream");
+
+const carSearchFixtures = [
+  {
+    plate: "1603",
+    fullPlate: "\u0e1a\u0e18-1603",
+    chassis: "",
+    car: "REVO 2WD 2.4 J MT Standard WHITE Sep18",
+    carRowId: "row-bt-1603",
+  },
+  {
+    plate: "1603",
+    fullPlate: "\u0e1c\u0e02-1603",
+    chassis: "",
+    car: "REVO 2WD 2.8 J MT Standard GRAY Mar16",
+    carRowId: "row-pk-1603",
+  },
+  {
+    plate: "53000",
+    fullPlate: "\u0e01\u0e01-5300",
+    chassis: "",
+    car: "Unrelated mileage fixture",
+    carRowId: "row-other",
+  },
+];
+const carSearch1603Results = carSearchFixtures.filter((car) => matchesVehicleSearch(car, deriveLineInboxCarSearchQuery("1603 - 53000 KM.")));
+assert.deepStrictEqual(
+  carSearch1603Results.map((car) => car.fullPlate),
+  ["\u0e1a\u0e18-1603", "\u0e1c\u0e02-1603"],
+  "shared /m/orders search returns both 1603 candidate cars"
+);
+let selectedCarRowId = "";
+selectedCarRowId = carSearch1603Results.find((car) => car.fullPlate === "\u0e1c\u0e02-1603")?.carRowId ?? "";
+assert.strictEqual(selectedCarRowId, "row-pk-1603", "selecting \u0e1c\u0e02-1603 sets selected_car_row_id");
+assert.strictEqual(matchesVehicleSearch(carSearchFixtures[0], "6866"), false, "unrelated exact plate search does not match 1603");
+assert.strictEqual(matchesVehicleSearch({ plate: "6866", fullPlate: "\u0e19\u0e02-6866", chassis: "", car: "REVO" }, "6866"), true, "6866 exact plate still matches");
+assert.strictEqual(matchesVehicleSearch({ plate: "3368", fullPlate: "3\u0e02\u0e07-368", chassis: "", car: "REVO" }, "3\u0e02\u0e07-368"), true, "full Thai plate 3\u0e02\u0e07-368 still matches");
+
+const manualPendingSaveWithCar = lineInboxPendingSaveBodySchema.safeParse({
+  saves: [{ inbox_message_id: "11111111-1111-4111-8111-111111111111", car_row_id: selectedCarRowId, item_indices: [0] }],
+});
+assert.strictEqual(manualPendingSaveWithCar.success, true, "pending-save accepts manual selected car_row_id override");
+const manualPendingSaveWithoutCar = lineInboxPendingSaveBodySchema.safeParse({
+  saves: [{ inbox_message_id: "11111111-1111-4111-8111-111111111111", item_indices: [0] }],
+});
+assert.strictEqual(manualPendingSaveWithoutCar.success, true, "schema allows no selected car so route can return the clear blocked save message");
 const waitingCarRecordText = [
   "44582 Raptor Double Cab Raptor 2.0L 4WD AT BLACK 2025 \u0e1b\u0e49\u0e32\u0e22\u0e41\u0e14\u0e07",
   "\u0e23\u0e16\u0e21\u0e32\u0e2a\u0e31\u0e1b\u0e14\u0e32\u0e2b\u0e4c\u0e04\u0e48\u0e30",
@@ -1060,6 +1113,43 @@ assert.strictEqual(
   }).blocked_reason,
   "missing_car",
   "mileage item without matched car remains blocked from auto-save"
+);
+assert.strictEqual(
+  evaluateLineAutoSaveEligibility({
+    row: { ...autoSaveRow, raw_text: "1603 - 53000 KM." },
+    payload: autoSavePayload({
+      detected_car: { ...autoSavePayload().detected_car, car_row_id: "", plate_text: "1603", confidence: 0.45 },
+      extractedCarCandidates: [{ text: "1603", confidence: "high" }],
+      matchedCarCandidates: [
+        {
+          car_row_id: "row-bt-1603",
+          plate_text: "\u0e1a\u0e18-1603",
+          spec_text: "REVO 2WD 2.4 J MT Standard WHITE Sep18",
+          label: "\u0e1a\u0e18-1603 REVO 2WD 2.4 J MT Standard WHITE Sep18",
+        },
+        {
+          car_row_id: "row-pk-1603",
+          plate_text: "\u0e1c\u0e02-1603",
+          spec_text: "REVO 2WD 2.8 J MT Standard GRAY Mar16",
+          label: "\u0e1c\u0e02-1603 REVO 2WD 2.8 J MT Standard GRAY Mar16",
+        },
+      ],
+      matchStatus: "ambiguous_vehicle",
+      unmatchedReason: "multiple_candidates",
+      items: [
+        {
+          ...autoSavePayload().items[0],
+          raw_text: thaiMileage53000,
+          suggested_item_name: thaiMileage53000,
+          confidence: 0.9,
+        },
+      ],
+    }),
+    enabled: true,
+    allowedGroupIds: "*",
+  }).blocked_reason,
+  "missing_car",
+  "multiple 1603 candidate rows remain blocked from auto-save"
 );
 assert.strictEqual(
   evaluateLineAutoSaveEligibility({
