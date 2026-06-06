@@ -5,7 +5,9 @@ import { LINE_INBOX_MESSAGES_TABLE } from "@/lib/line-inbox/line-inbox-messages"
 import { buildFallbackAnalyzeItemsFromRawText } from "@/lib/line-inbox/fallback-analyze-items";
 import { buildFallbackAnalyzePayloadFromRawText } from "@/lib/line-inbox/fallback-analyze-payload";
 import { isLineInboxNoiseOrSeparatorOnlyText } from "@/lib/line-inbox/split-line-text";
-import { buildLineOrderReviewUrl } from "@/lib/line-inbox/review-link";
+import { extractLineInboxMileageCarReference } from "@/lib/line-inbox/resolve-car";
+import { vehiclesMatchingQuery } from "@/lib/orders/vehicle-search";
+import { buildLineCarDisplayLabel, buildLineOrderReviewUrl } from "@/lib/line-inbox/review-link";
 import {
   deriveLineInboxMatchStatus,
   type LineInboxMatchStatus,
@@ -88,6 +90,8 @@ type PendingQueueAttachment = {
   aiTargetCarReference: string;
   aiTargetCarConfidence: string;
   matchReason: string;
+  matchedCarSearchQuery?: string;
+  matchedCarCandidates?: PendingQueueMatchedCarCandidate[];
   inheritedCarRowId: string;
   context_source: string;
   contextSource: string;
@@ -96,6 +100,17 @@ type PendingQueueAttachment = {
   sale: string;
   needs_human_review: boolean;
   status: "not_linked";
+};
+
+type PendingQueueMatchedCarCandidate = {
+  car_row_id: string;
+  car_id?: number | string | null;
+  plate_text: string;
+  label: string;
+  chassis?: string;
+  sale?: string;
+  confidence?: number;
+  match_reason?: string;
 };
 
 type PendingQueueDetectedCar = {
@@ -132,6 +147,8 @@ type PendingQueueMsg = {
   aiTargetCarReference: string;
   aiTargetCarConfidence: string;
   matchReason: string;
+  matchedCarSearchQuery?: string;
+  matchedCarCandidates?: PendingQueueMatchedCarCandidate[];
   inheritedCarRowId: string;
   context_source: string;
   contextSource: string;
@@ -182,6 +199,8 @@ type PendingQueueGroup = {
   aiTargetCarReference: string;
   aiTargetCarConfidence: string;
   matchReason: string;
+  matchedCarSearchQuery?: string;
+  matchedCarCandidates?: PendingQueueMatchedCarCandidate[];
   inheritedCarRowId: string;
   context_source: string;
   contextSource: string;
@@ -241,6 +260,70 @@ function analyzePayloadOrNull(body: unknown): LineInboxAnalyzeResponse | null {
 
 function cleanString(value: unknown): string {
   return String(value ?? "").trim();
+}
+
+function lineInboxCarCandidateLabel(row: Record<string, unknown>): string {
+  const plate = cleanString(row.plate_number);
+  const title = [row.brand, row.model, row.model_year, row.spec, row.color, row.c_year]
+    .map(cleanString)
+    .filter(Boolean)
+    .join(" ");
+  return buildLineCarDisplayLabel({ plate, title, fallback: cleanString(row.chassis_number) }) || title || plate;
+}
+
+function deriveMatchedCarSearchQuery(rawText: unknown, payload: LineInboxAnalyzeResponse): string {
+  const raw = String(rawText ?? "");
+  for (const line of raw.split(/\r?\n/)) {
+    const ref = extractLineInboxMileageCarReference(line);
+    if (ref) return ref;
+  }
+  const aiRef = cleanString(payload.aiTargetCarReference);
+  if (aiRef) return aiRef;
+  const candidate = (payload.extractedCarCandidates ?? [])
+    .map((item) => cleanString(item.text))
+    .find(Boolean);
+  return candidate || "";
+}
+
+async function fetchLineInboxQueueCandidateCars(
+  supabase: ReturnType<typeof createServiceRoleClient>
+): Promise<Record<string, unknown>[]> {
+  const { data, error } = await supabase
+    .from(process.env.NEXT_PUBLIC_SUPABASE_CARS_TABLE ?? "cars")
+    .select("id,row_id,plate_number,chassis_number,spec,brand,model,model_year,c_year,color,sale_support")
+    .limit(1000);
+  if (error) return [];
+  return (data ?? []) as Record<string, unknown>[];
+}
+
+function findMatchedCarCandidatesForQueue(
+  carRows: Record<string, unknown>[],
+  query: string
+): PendingQueueMatchedCarCandidate[] {
+  const q = cleanString(query);
+  if (!q) return [];
+  const matches = vehiclesMatchingQuery(carRows, q, (car) => ({
+    plate: car.plate_number,
+    fullPlate: car.plate_number,
+    chassis: car.chassis_number,
+    car: [car.brand, car.model, car.model_year, car.spec, car.color, car.c_year].map(cleanString).filter(Boolean).join(" "),
+    sale: car.sale_support,
+    carRowId: car.row_id,
+    carId: car.id,
+  }));
+  return matches
+    .map((car) => ({
+      car_row_id: cleanString(car.row_id),
+      car_id: car.id as string | number | null,
+      plate_text: cleanString(car.plate_number),
+      label: lineInboxCarCandidateLabel(car),
+      chassis: cleanString(car.chassis_number),
+      sale: cleanString(car.sale_support),
+      confidence: 0.7,
+      match_reason: "m/orders search",
+    }))
+    .filter((candidate) => candidate.car_row_id && candidate.label)
+    .slice(0, 10);
 }
 
 function lineMessageTimeMs(row: Pick<PendingQueueDbRow, "received_at">): number {
@@ -927,6 +1010,11 @@ export async function GET(request: Request) {
     const recentAttachments: PendingQueueAttachment[] = [];
 
     const rows = (data ?? []) as PendingQueueDbRow[];
+    let queueCandidateCarsPromise: Promise<Record<string, unknown>[]> | null = null;
+    const getQueueCandidateCars = () => {
+      queueCandidateCarsPromise ??= fetchLineInboxQueueCandidateCars(supabase);
+      return queueCandidateCarsPromise;
+    };
     const fallbackRows = rows.filter((row) => {
       const id = cleanString(row.id);
       if (!id || cleanString(row.workflow_status) !== "pending") return false;
@@ -993,6 +1081,7 @@ export async function GET(request: Request) {
       const inheritedCarRowId = inheritedCarRowIdForQueue(payload, row, related);
       const contextSource = cleanString(payload.context_source) || cleanString(related?.payload?.context_source);
       const replyContext = payload.reply_context ?? related?.payload?.reply_context ?? null;
+      const matchedCarSearchQuery = deriveMatchedCarSearchQuery(row.raw_text, payload);
       const needsHumanReview = Boolean(payload.needs_human_review || rowNeedsHumanReview);
       const queueItems =
         (payload.items ?? []).length > 0
@@ -1041,6 +1130,10 @@ export async function GET(request: Request) {
 
       if (actionEntries.length === 0 && !manualReviewOnly) continue;
 
+      const matchedCarCandidates = !car_row_id && matchedCarSearchQuery
+        ? findMatchedCarCandidatesForQueue(await getQueueCandidateCars(), matchedCarSearchQuery)
+        : [];
+
       const attachmentOverrides = {
         carRowId: car_row_id,
         plateText,
@@ -1056,6 +1149,8 @@ export async function GET(request: Request) {
         aiTargetCarReference,
         aiTargetCarConfidence,
         matchReason,
+        matchedCarSearchQuery,
+        matchedCarCandidates,
         inheritedCarRowId,
         contextSource,
         replyContext,
@@ -1126,7 +1221,6 @@ export async function GET(request: Request) {
             : matchStatus === "ambiguous_vehicle"
               ? "ข้อความนี้คล้ายข้อมูลรถหลายคัน กรุณาค้นหา/เลือกเองก่อนบันทึก"
               : "";
-
       messages.push({
         inbox_id: id,
         received_at: String(row.received_at ?? ""),
@@ -1150,6 +1244,8 @@ export async function GET(request: Request) {
         aiTargetCarReference,
         aiTargetCarConfidence,
         matchReason,
+        matchedCarSearchQuery,
+        matchedCarCandidates,
         inheritedCarRowId,
         context_source: contextSource,
         contextSource,

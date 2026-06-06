@@ -110,6 +110,8 @@ const {
   lineInboxQueueGroupMatchesFilter,
   lineInboxQueueMessageNeedsManualReview,
 } = loadTsFile(path.join(root, "src/lib/line-inbox/pending-queue-view.ts"));
+const { vehiclesMatchingQuery } = loadTsFile(path.join(root, "src/lib/orders/vehicle-search.ts"));
+const { lineInboxPendingSaveBodySchema } = loadTsFile(path.join(root, "src/lib/line-inbox/api-schemas.ts"));
 
 const specificGroupPolicy = parseLineAllowedGroups("C-test-group,C-real-group");
 assert.strictEqual(specificGroupPolicy.allowAllGroups, false, "specific group allow-list does not allow all groups");
@@ -358,6 +360,9 @@ const thaiMileage47500 = "\u0e01\u0e23\u0e2d\u0e44\u0e21\u0e25\u0e4c 47,000 KM";
 const thaiMileage67500 = "\u0e01\u0e23\u0e2d\u0e44\u0e21\u0e25\u0e4c 67,500 KM";
 const thaiMileage39800 = "\u0e01\u0e23\u0e2d\u0e44\u0e21\u0e25\u0e4c 39,800 KM";
 assertItems("4380 - 47000 KM.", [thaiMileage47500], "plate/ref plus mileage becomes a mileage work item");
+const thaiMileage53000 = "\u0e01\u0e23\u0e2d\u0e44\u0e21\u0e25\u0e4c 53,000 KM";
+assertItems("1603 - 53000 KM.", [thaiMileage53000], "1603 plus mileage becomes a mileage work item");
+assert.strictEqual(extractLineInboxMileageCarReference("1603 - 53000 KM."), "1603", "1603 mileage row derives car search query");
 assertItems("4380 - 47,000 KM", [thaiMileage47500], "comma mileage is normalized");
 assertItems("\u0e19\u0e02-6866 - 67500 KM", [thaiMileage67500], "Thai plate plus mileage becomes a mileage work item");
 assertItems("\u0e01\u0e23\u0e2d\u0e44\u0e21\u0e25\u0e4c 47000 KM", [thaiMileage47500], "mileage without car remains a work item");
@@ -369,6 +374,68 @@ assert.deepStrictEqual(extractStockNumbers("\u0e19\u0e02-6866 67500 KM"), ["6866
 assert.deepStrictEqual(extractStockNumbers("95295 TRAVO 67500 KM"), ["95295"], "stock/spec plus mileage ignores mileage number");
 assert.deepStrictEqual(extractStockNumbers("51072 RAPTOR 39,800 km"), ["51072"], "stock/spec plus comma mileage ignores mileage number");
 assert.deepStrictEqual(extractStockNumbers("51072 \u0e40\u0e2d\u0e32\u0e02\u0e2d\u0e07 31440"), ["51072", "31440"], "multiple real car refs are not treated as mileage");
+const sampleLineInboxCars = [
+  { id: 1, row_id: "row-bt-1603", plate_number: "บธ-1603", spec: "REVO 2WD 2.4 J MT Standard WHITE Sep18" },
+  { id: 2, row_id: "row-pk-1603", plate_number: "ผข-1603", spec: "REVO 2WD 2.8 J MT Standard GRAY Mar16" },
+  { id: 3, row_id: "row-nk-6866", plate_number: "นข-6866", spec: "TRAVO 2.4 AT WHITE" },
+  { id: 4, row_id: "row-3kg-368", plate_number: "3ขง-368", spec: "RANGER 2.0 AT" },
+];
+const carSearchFields = (car) => ({
+  plate: car.plate_number,
+  fullPlate: car.plate_number,
+  chassis: car.chassis_number,
+  car: [car.brand, car.model, car.model_year, car.spec, car.color, car.c_year].filter(Boolean).join(" "),
+  sale: car.sale_support,
+  carRowId: car.row_id,
+  carId: car.id,
+});
+assert.deepStrictEqual(
+  vehiclesMatchingQuery(sampleLineInboxCars, "1603", carSearchFields).map((car) => car.row_id),
+  ["row-bt-1603", "row-pk-1603"],
+  "1603 shared /m/orders search returns both candidate cars"
+);
+const selectedPhk1603 = sampleLineInboxCars.find((car) => car.plate_number === "ผข-1603");
+assert.strictEqual(
+  selectedPhk1603.row_id,
+  "row-pk-1603",
+  "selecting ผข-1603 maps to selected_car_row_id"
+);
+assert.deepStrictEqual(
+  vehiclesMatchingQuery(sampleLineInboxCars, "53000", carSearchFields).map((car) => car.row_id),
+  [],
+  "mileage number 53000 is not treated as a car candidate"
+);
+assert.deepStrictEqual(
+  vehiclesMatchingQuery(sampleLineInboxCars, "6866", carSearchFields).map((car) => car.row_id),
+  ["row-nk-6866"],
+  "unique 6866 plate match still works"
+);
+assert.deepStrictEqual(
+  vehiclesMatchingQuery(sampleLineInboxCars, "3ขง-368", carSearchFields).map((car) => car.row_id),
+  ["row-3kg-368"],
+  "exact 3ขง-368 plate match still works"
+);
+const pendingSaveManualSelection = lineInboxPendingSaveBodySchema.parse({
+  saves: [
+    {
+      inbox_message_id: "11111111-1111-4111-8111-111111111111",
+      selected_car_row_id: "row-pk-1603",
+      actions: [{ item_index: 0, action: "create", item_name: thaiMileage53000 }],
+    },
+  ],
+});
+assert.strictEqual(
+  pendingSaveManualSelection.saves[0].selected_car_row_id,
+  "row-pk-1603",
+  "pending-save accepts selected car_row_id after manual approve/save"
+);
+assert.strictEqual(
+  lineInboxPendingSaveBodySchema.safeParse({
+    saves: [{ inbox_message_id: "11111111-1111-4111-8111-111111111111", selected_car_row_id: "row-pk-1603" }],
+  }).success,
+  false,
+  "selected_car_row_id alone does not save without approve actions/items"
+);
 assert.strictEqual(lineInboxPlateNumericSuffix("\u0e19\u0e02-6866"), "6866", "Thai plate suffix is extracted");
 assert(scoreLineInboxStockMatch({ plate_number: "\u0e19\u0e02-6866" }, "6866") > scoreLineInboxStockMatch({ spec: "6866" }, "6866"), "plate suffix outranks loose spec match");
 assert.strictEqual(scoreLineInboxStockMatch({ row_id: "a18c7942-10fc-4d32-8059-5b97f86ec9e8" }, "6866"), 0, "UUID row_id substrings do not count as stock/ref matches");
