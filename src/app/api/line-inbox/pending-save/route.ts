@@ -442,7 +442,8 @@ export async function POST(request: Request) {
 
       const crFromPayload = String(payload.detected_car?.car_row_id ?? "").trim();
       const crFromRow = String((row as { car_row_id?: unknown }).car_row_id ?? "").trim();
-      const car_row_id = crFromPayload || crFromRow;
+      const crFromManualSelection = String(block.selected_car_row_id ?? "").trim();
+      const car_row_id = crFromPayload || crFromRow || crFromManualSelection;
       const items =
         (payload.items ?? []).length > 0
           ? payload.items ?? []

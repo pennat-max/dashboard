@@ -30,6 +30,7 @@ import {
   resolveSaleStaffForOrder,
 } from "@/lib/orders/sale-assignees-shared";
 import { isStaffRosterNameExcluded, normalizeStaffRosterNames } from "@/lib/orders/staff-roster-shared";
+import { matchesVehicleSearchFields } from "@/lib/orders/vehicle-search";
 import { buildOrderTrackingShareOpenUrl } from "@/lib/line/order-tracking-share-url";
 import {
   LineInboxBridgeProvider,
@@ -929,25 +930,17 @@ function resolveShareAppBase(publicOriginProp: string | undefined | null): strin
 
 /** คำค้นเดียวจับทั้งเลขทะเบียน (และป้ายเต็ม) เลขตัวถัง และรุ่นรถ */
 function matchesVehicleSearch(order: Order, raw: string): boolean {
-  const q = raw.trim();
-  if (!q) return true;
-  const n = norm(q);
-  const haystack = [order.plate, order.fullPlate, order.chassis, order.car].join(" ");
-  const normalizedHaystack = norm(haystack);
-  const tokens =
-    q
-      .match(/[\u0E00-\u0E7Fa-zA-Z0-9.]+/g)
-      ?.map((token) => token.trim())
-      .filter((token) => token && !/^(?:ทะเบียน|เลขทะเบียน|stock|สต็อก|สต๊อก|ref|reference)$/i.test(token)) ?? [];
-  const strongTokens = tokens.filter((token) => /\d{4,6}/.test(token) || token.length >= 3);
-  return (
-    order.plate.includes(q) ||
-    order.fullPlate.includes(q) ||
-    norm(order.chassis).includes(n) ||
-    order.car.toLowerCase().includes(q.toLowerCase()) ||
-    normalizedHaystack.includes(n) ||
-    strongTokens.some((token) => /\d{4,6}/.test(token) && normalizedHaystack.includes(norm(token))) ||
-    (strongTokens.length >= 2 && strongTokens.every((token) => normalizedHaystack.includes(norm(token))))
+  return matchesVehicleSearchFields(
+    {
+      plate: order.plate,
+      fullPlate: order.fullPlate,
+      chassis: order.chassis,
+      car: order.car,
+      sale: order.sale,
+      carRowId: order.carRowId,
+      carId: order.carId,
+    },
+    raw
   );
 }
 
