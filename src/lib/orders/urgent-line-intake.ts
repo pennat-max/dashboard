@@ -1,4 +1,5 @@
 import type { Car } from "@/types/car";
+import { vehiclesMatchingQuery } from "@/lib/orders/vehicle-search";
 
 function norm(s: string): string {
   return String(s || "").replace(/\s+/g, "").toLowerCase();
@@ -126,23 +127,16 @@ export function suggestSearchQueryFromVehicleLine(vehicleLine: string): string {
 }
 
 export function carsMatchingQuery(cars: Car[], query: string): Car[] {
-  const q = query.trim();
-  if (!q) return cars.slice(0, 40);
-  const n = norm(q);
-  const ql = q.toLowerCase();
-  const out = cars.filter((car) => {
-    const plate = String(car.plate_number ?? "");
-    const chassis = String(car.chassis_number ?? "").trim();
-    const spec = String(car.spec ?? car.model ?? car.brand ?? "");
-    return (
-      plate.includes(q) ||
-      norm(plate).includes(n) ||
-      chassis.toLowerCase().includes(ql) ||
-      norm(chassis).includes(n) ||
-      spec.toLowerCase().includes(ql)
-    );
-  });
-  return out.slice(0, 50);
+  const out = vehiclesMatchingQuery(cars, query, (car) => ({
+    plate: car.plate_number,
+    fullPlate: car.plate_number,
+    chassis: car.chassis_number,
+    car: [car.brand, car.model, car.model_year, car.spec, car.color, car.c_year].filter(Boolean).join(" "),
+    sale: car.sale_support,
+    carRowId: car.row_id,
+    carId: car.id,
+  }));
+  return out.slice(0, query.trim() ? 50 : 40);
 }
 
 export function carLabelForIntake(car: Car): string {
