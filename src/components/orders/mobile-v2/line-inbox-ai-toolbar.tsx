@@ -23,9 +23,12 @@ import {
 } from "@/lib/line-inbox/review-link";
 import {
   LINE_INBOX_QUEUE_REFRESH_MS,
+  addBangkokCalendarDaysForLineInboxQueue,
   lineInboxQueueGroupMatchesFilter,
   lineInboxQueueMessageNeedsManualReview,
+  lineInboxQueueMessageIsReadyActionable,
   todayYmdBangkokForLineInboxQueue,
+  ymdBangkokFromLineInboxIso,
   type LineInboxQueueFilter,
   type LineInboxQueueFilterCounts,
 } from "@/lib/line-inbox/pending-queue-view";
@@ -695,6 +698,23 @@ function queueMessageIsMatchedNoWork(message: PendingQueueMessage): boolean {
   return (
     String(message.extractionStatus ?? "").trim() === "matched_no_work" ||
     (queueMessageHasMatchedCar(message) && !queueMessageHasWorkItems(message))
+  );
+}
+
+function queueMessageMatchesLineInboxFilter(
+  message: PendingQueueMessage,
+  filter: LineInboxQueueDateFilter,
+  todayYmd: string
+): boolean {
+  if (filter === "all") return lineInboxQueueMessageIsReadyActionable(message);
+  if (filter === "manual") return queueMessageNeedsManualReview(message);
+  if (filter === "waiting_for_car") return queueMessageIsWaitingForCarRecord(message);
+  const targetYmd = filter === "yesterday" ? addBangkokCalendarDaysForLineInboxQueue(todayYmd, -1) : todayYmd;
+  if (ymdBangkokFromLineInboxIso(message.received_at) !== targetYmd) return false;
+  return (
+    lineInboxQueueMessageIsReadyActionable(message) ||
+    queueMessageNeedsManualReview(message) ||
+    queueMessageIsWaitingForCarRecord(message)
   );
 }
 
@@ -2436,7 +2456,7 @@ function useLineInboxBridgeState({
   );
 
   const saveQueueGroup = useCallback(
-    async (group: PendingQueueGroup) => {
+    async (group: PendingQueueGroup, messagesToSave: PendingQueueMessage[] = group.messages) => {
       const saveBlocks: Array<{
         inbox_message_id: string;
         selected_car_row_id?: string;
@@ -2456,7 +2476,7 @@ function useLineInboxBridgeState({
       let totalSelected = 0;
       let riskyCount = 0;
 
-      for (const message of group.messages) {
+      for (const message of messagesToSave) {
         const fallbackAssignee = resolveSaleStaffForOrder(String(message.sale ?? group.sale ?? ""), saleAssigneesBySale);
         const actions = selectedQueueActionsForInbox(message, fallbackAssignee);
         const indices = actions.length > 0 ? [] : selectedIndicesForInbox(message);
@@ -3137,12 +3157,16 @@ function useLineInboxBridgeState({
   const renderQueueGroupContent = (group: PendingQueueGroup) => {
     const acceptedReplyText = buildQueueAcceptedReplyText(group, uiLang);
     const acceptedReplyCopied = copiedQueueReplyKey === group.group_key;
-    const groupSelectedCount = group.messages.reduce((sum, message) => {
+    const todayYmd = todayYmdBangkokForLineInboxQueue();
+    const visibleMessages = group.messages.filter((message) =>
+      queueMessageMatchesLineInboxFilter(message, queueDateFilter, todayYmd)
+    );
+    const groupSelectedCount = visibleMessages.reduce((sum, message) => {
       const fallbackAssignee = resolveSaleStaffForOrder(String(message.sale ?? group.sale ?? ""), saleAssigneesBySale);
       const actions = selectedQueueActionsForInbox(message, fallbackAssignee);
       return sum + (actions.length || selectedIndicesForInbox(message).length);
     }, 0);
-    const groupMessageSaveCount = group.messages.filter((message) => {
+    const groupMessageSaveCount = visibleMessages.filter((message) => {
       const fallbackAssignee = resolveSaleStaffForOrder(String(message.sale ?? group.sale ?? ""), saleAssigneesBySale);
       return selectedQueueActionsForInbox(message, fallbackAssignee).length > 0 || selectedIndicesForInbox(message).length > 0;
     }).length;
@@ -3165,7 +3189,7 @@ function useLineInboxBridgeState({
               type="button"
               size="sm"
               disabled={savingInboxId === group.group_key}
-              onClick={() => void saveQueueGroup(group)}
+              onClick={() => void saveQueueGroup(group, visibleMessages)}
               className="min-h-10 touch-manipulation bg-slate-950 px-4 hover:bg-slate-900"
             >
               {savingInboxId === group.group_key
@@ -3224,7 +3248,7 @@ function useLineInboxBridgeState({
           </div>
         </div>
       ) : null}
-      {group.messages.map((m, messageIndex) => {
+      {visibleMessages.map((m, messageIndex) => {
         const displayLines = queueMessageDisplayActionLines(m);
         const showManual = queueMessageNeedsManualReview(m);
         const selectedManualCar = selectedQueueCars[m.inbox_id];
