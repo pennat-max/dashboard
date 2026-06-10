@@ -215,6 +215,23 @@ const queueFilterGroups = [
     ],
     attachments: [],
   },
+  {
+    total_manual_reviews: 1,
+    car_row_id: "car-row-matched-no-work",
+    matchStatus: "matched",
+    messages: [
+      {
+        received_at: "2026-05-24T08:00:00+07:00",
+        car_row_id: "car-row-matched-no-work",
+        needs_human_review: true,
+        extractionStatus: "matched_no_work",
+        matchStatus: "matched",
+        action_line_count: 0,
+        new_line_count: 0,
+      },
+    ],
+    attachments: [],
+  },
 ];
 assert.strictEqual(lineInboxQueueGroupMatchesFilter(queueFilterGroups[0], "today", queueFilterToday), true, "today filter returns today's groups");
 assert.strictEqual(lineInboxQueueGroupMatchesFilter(queueFilterGroups[1], "yesterday", queueFilterToday), true, "yesterday filter returns yesterday's groups");
@@ -276,9 +293,19 @@ assert.strictEqual(
   false,
   "waiting-for-car messages stay out of manual review counts"
 );
+assert.strictEqual(
+  lineInboxQueueGroupMatchesFilter(queueFilterGroups[6], "manual", queueFilterToday),
+  true,
+  "matched car with no work appears in manual review filter"
+);
+assert.strictEqual(
+  lineInboxQueueGroupMatchesFilter(queueFilterGroups[6], "all", queueFilterToday),
+  false,
+  "matched car with no work is excluded from the default ready list"
+);
 assert.deepStrictEqual(
   lineInboxQueueFilterCounts(queueFilterGroups, queueFilterToday),
-  { all: 2, today: 4, yesterday: 1, manual: 3, waiting_for_car: 1 },
+  { all: 2, today: 4, yesterday: 1, manual: 4, waiting_for_car: 1 },
   "pending queue filter counts separate ready, manual, and waiting-car groups"
 );
 const receiptReply = buildLineWebhookReceiptAcknowledgementText();
