@@ -82,6 +82,17 @@ type PendingQueueDetectedCar = {
   confidence?: number;
 };
 
+type ManualCarCandidate = {
+  car_row_id: string;
+  car_id?: number | null;
+  label: string;
+  plate: string;
+  spec: string;
+  chassis: string;
+  chassis_short?: string;
+  sale?: string;
+};
+
 type PendingQueueMessage = {
   inbox_id: string;
   received_at: string;
@@ -117,6 +128,10 @@ type PendingQueueMessage = {
   matchStatus?: "matched" | "waiting_for_car_record" | "ambiguous_vehicle" | "no_vehicle_context" | "unresolved";
   unmatchedReason?: "" | "pending_car_record" | "multiple_candidates" | "no_car_candidate";
   unmatched_reason?: "" | "pending_car_record" | "multiple_candidates" | "no_car_candidate";
+  manual_car_search_query?: string;
+  manualCarSearchQuery?: string;
+  manual_car_candidates?: ManualCarCandidate[];
+  manualCarCandidates?: ManualCarCandidate[];
   reviewUrl?: string;
   review_url?: string;
   car_row_id: string;
@@ -205,6 +220,10 @@ type PendingQueueGroup = {
   matchStatus?: "matched" | "waiting_for_car_record" | "ambiguous_vehicle" | "no_vehicle_context" | "unresolved";
   unmatchedReason?: "" | "pending_car_record" | "multiple_candidates" | "no_car_candidate";
   unmatched_reason?: "" | "pending_car_record" | "multiple_candidates" | "no_car_candidate";
+  manual_car_search_query?: string;
+  manualCarSearchQuery?: string;
+  manual_car_candidates?: ManualCarCandidate[];
+  manualCarCandidates?: ManualCarCandidate[];
   reviewUrl?: string;
   review_url?: string;
   sale: string;
@@ -230,6 +249,75 @@ type QueueActionDraft = {
   dueDate: string;
   orderItemId: string;
 };
+
+type PendingSaveResult = {
+  inbox_message_id: string;
+  saved_items?: Array<{
+    item_index: number;
+    order_item_id: string;
+    label?: string;
+    status?: string;
+    assignee_staff?: string;
+  }>;
+  reply_text?: string;
+  copy_ready_reply_text?: string;
+  copyReadyReplyText?: string;
+  auto_reply?: {
+    enabled?: boolean;
+    attempted?: boolean;
+    sent?: boolean;
+    skipped_reason?: string;
+    error_reason?: string;
+    errorReason?: string;
+    error_status?: number;
+    errorStatus?: number;
+    error?: string;
+  };
+  autoReply?: {
+    enabled?: boolean;
+    attempted?: boolean;
+    sent?: boolean;
+    skipped_reason?: string;
+    error_reason?: string;
+    errorReason?: string;
+    error_status?: number;
+    errorStatus?: number;
+    error?: string;
+  };
+};
+
+function mergePendingQueueMessages(
+  previous: PendingQueueMessage[],
+  incoming: PendingQueueMessage[]
+): PendingQueueMessage[] {
+  const byId = new Map(previous.map((message) => [message.inbox_id, message]));
+  for (const message of incoming) byId.set(message.inbox_id, message);
+  return Array.from(byId.values());
+}
+
+function mergePendingQueueGroups(
+  previous: PendingQueueGroup[],
+  incoming: PendingQueueGroup[]
+): PendingQueueGroup[] {
+  const byKey = new Map(previous.map((group) => [group.group_key, group]));
+  for (const group of incoming) byKey.set(group.group_key, group);
+  return Array.from(byKey.values());
+}
+
+function mergePendingQueueAttachments(
+  previous: PendingQueueAttachment[],
+  incoming: PendingQueueAttachment[]
+): PendingQueueAttachment[] {
+  const seen = new Set<string>();
+  const merged: PendingQueueAttachment[] = [];
+  for (const attachment of [...incoming, ...previous]) {
+    const key = String(attachment.line_message_id || attachment.url || attachment.inbox_id).trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    merged.push(attachment);
+  }
+  return merged;
+}
 
 type RowDraft = LineInboxAnalyzeItem & {
   action: "skip" | "create" | "merge";
@@ -445,6 +533,57 @@ function hasLineInboxPhotoReference(value: string | null | undefined): boolean {
 
 function queueSuggestionRowKey(inboxId: string, itemIndex: number): string {
   return `queue:${inboxId}:${itemIndex}`;
+}
+
+function queueManualCarCandidates(message: PendingQueueMessage, group?: PendingQueueGroup): ManualCarCandidate[] {
+  const seen = new Set<string>();
+  return [
+    ...(message.manualCarCandidates ?? message.manual_car_candidates ?? []),
+    ...(group?.manualCarCandidates ?? group?.manual_car_candidates ?? []),
+  ].filter((candidate) => {
+    const rowId = String(candidate?.car_row_id ?? "").trim();
+    if (!rowId || seen.has(rowId)) return false;
+    seen.add(rowId);
+    return true;
+  });
+}
+
+function queueManualCarSearchQuery(message: PendingQueueMessage, group?: PendingQueueGroup): string {
+  return String(
+    message.manualCarSearchQuery ??
+      message.manual_car_search_query ??
+      group?.manualCarSearchQuery ??
+      group?.manual_car_search_query ??
+      message.aiTargetCarReference ??
+      ""
+  ).trim();
+}
+
+function queueManualCarLabel(candidate: ManualCarCandidate): string {
+  return String(candidate.label || [candidate.plate, candidate.spec].filter(Boolean).join(" ") || candidate.car_row_id).trim();
+}
+
+function queueManualCarMeta(candidate: ManualCarCandidate): string {
+  return [
+    candidate.chassis_short ? `เลขถัง ${candidate.chassis_short}` : "",
+    candidate.sale ? `Sale ${candidate.sale}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function queueCarPickerTitle(plate: string, spec: string): string {
+  const cleanPlate = String(plate ?? "").trim();
+  let cleanSpec = String(spec ?? "").trim();
+  if (!cleanSpec) return cleanPlate;
+  const compactPlate = cleanPlate.replace(/\s+/g, "").toLowerCase();
+  if (!compactPlate) return cleanSpec;
+  while (cleanSpec.replace(/\s+/g, "").toLowerCase().startsWith(compactPlate)) {
+    const next = cleanSpec.slice(cleanPlate.length).trim();
+    if (!next || next === cleanSpec) break;
+    cleanSpec = next;
+  }
+  return [cleanPlate, cleanSpec].filter(Boolean).join(" ");
 }
 
 function queueActionDraftForLine(
@@ -1229,6 +1368,7 @@ function useLineInboxBridgeState({
   const [queueTab, setQueueTab] = useState<"actions" | "messages" | "photos">("actions");
   const [queueDateFilter, setQueueDateFilter] = useState<LineInboxQueueDateFilter>("all");
   const [queueDrafts, setQueueDrafts] = useState<Record<string, QueueActionDraft>>({});
+  const [selectedQueueCars, setSelectedQueueCars] = useState<Record<string, ManualCarCandidate>>({});
   /** Unchecked = not saved when user clicks save (default: all lines selected) */
   const [queueDeselected, setQueueDeselected] = useState<Record<string, Set<number>>>({});
   const [queueLoading, setQueueLoading] = useState(false);
@@ -1242,7 +1382,7 @@ function useLineInboxBridgeState({
     if (!background) setQueueLoading(true);
     setQueueError(null);
     const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 15_000);
+    const timeout = window.setTimeout(() => controller.abort(), 30_000);
     try {
       const params = new URLSearchParams({
         mode: "summary",
@@ -1286,9 +1426,15 @@ function useLineInboxBridgeState({
       setQueueTotalNew(typeof data.total_new_lines === "number" ? data.total_new_lines : 0);
       setQueueTotalAction(typeof data.total_action_lines === "number" ? data.total_action_lines : 0);
       setQueueTotalManualReview(typeof data.total_manual_reviews === "number" ? data.total_manual_reviews : 0);
-      setQueueMessages(list);
-      setQueueGroups(groups);
-      setQueueAttachments(attachments);
+      if (background) {
+        setQueueMessages((previous) => mergePendingQueueMessages(previous, list));
+        setQueueGroups((previous) => mergePendingQueueGroups(previous, groups));
+        setQueueAttachments((previous) => mergePendingQueueAttachments(previous, attachments));
+      } else {
+        setQueueMessages(list);
+        setQueueGroups(groups);
+        setQueueAttachments(attachments);
+      }
       queueHasLoadedRef.current = true;
 
       const sig = list
@@ -1329,15 +1475,6 @@ function useLineInboxBridgeState({
           ? e.message
           : String(e);
       setQueueError(msg);
-      if (!background) {
-        setQueueMessages([]);
-        setQueueGroups([]);
-        setQueueAttachments([]);
-        setQueueTotalNew(0);
-        setQueueTotalAction(0);
-        setQueueTotalManualReview(0);
-        queueHasLoadedRef.current = false;
-      }
     } finally {
       window.clearTimeout(timeout);
       if (!background) setQueueLoading(false);
@@ -1351,8 +1488,8 @@ function useLineInboxBridgeState({
   }, [fetchQueue]);
 
   useEffect(() => {
-    if (open) void fetchQueue({ background: queueHasLoadedRef.current });
-  }, [open, fetchQueue]);
+    if (open) void fetchQueue({ background: queueHasLoadedRef.current || queueGroups.length > 0 });
+  }, [open, fetchQueue, queueGroups.length]);
 
   useEffect(() => {
     if (!open) return;
@@ -1710,7 +1847,7 @@ function useLineInboxBridgeState({
             ""
         ).trim(),
         sourceLabel: String(group.source_label ?? manualReviewMessage?.source_label ?? "").trim(),
-        groupIdDisplay: String(group.group_id_display ?? manualReviewMessage?.group_id_display ?? "").trim(),
+        groupIdDisplay: "",
         fallbackSubtitle: String(group.fallback_subtitle ?? group.fallbackSubtitle ?? "").trim(),
         latestMessageAt: groupLatestReceivedMs(group),
       });
@@ -2110,6 +2247,13 @@ function useLineInboxBridgeState({
       const indices = actions.length > 0 ? [] : selectedIndicesForInbox(m);
       const selectedCount = actions.length || indices.length;
       if (selectedCount === 0) return;
+      const selectedCar = selectedQueueCars[m.inbox_id];
+      const selectedCarRowId = String(selectedCar?.car_row_id ?? "").trim();
+      const effectiveMessageCarRowId = String(m.car_row_id ?? "").trim() || selectedCarRowId;
+      if (!effectiveMessageCarRowId) {
+        setError(uiLang === "en" ? "Please select a car before saving." : "กรุณาเลือกคันรถก่อนบันทึก");
+        return;
+      }
       const riskyCount = (m.action_lines ?? []).filter((line) => {
         const rowKey = queueSuggestionRowKey(m.inbox_id, line.item_index);
         const draft = queueDrafts[rowKey] ?? queueActionDraftForLine(line, fallbackAssignee);
@@ -2132,8 +2276,8 @@ function useLineInboxBridgeState({
           body: JSON.stringify({
             saves: [
               actions.length > 0
-                ? { inbox_message_id: m.inbox_id, actions }
-                : { inbox_message_id: m.inbox_id, item_indices: indices },
+                ? { inbox_message_id: m.inbox_id, selected_car_row_id: selectedCarRowId || undefined, actions }
+                : { inbox_message_id: m.inbox_id, selected_car_row_id: selectedCarRowId || undefined, item_indices: indices },
             ],
           }),
         });
@@ -2200,7 +2344,7 @@ function useLineInboxBridgeState({
               rowKey,
               savedItemId,
               staged.map((photo) => photo.file),
-              { silent: true, carRowId: m.car_row_id }
+              { silent: true, carRowId: effectiveMessageCarRowId, carId: selectedCar?.car_id ?? undefined }
             );
             attachedPhotoCount += staged.length;
           }
@@ -2208,7 +2352,8 @@ function useLineInboxBridgeState({
           if (stagedLineUrls.length > 0) {
             await attachSuggestionPhotoUrls(rowKey, savedItemId, stagedLineUrls, {
               silent: true,
-              carRowId: m.car_row_id,
+              carRowId: effectiveMessageCarRowId,
+              carId: selectedCar?.car_id ?? undefined,
             });
             attachedPhotoCount += stagedLineUrls.length;
           }
@@ -2262,7 +2407,7 @@ function useLineInboxBridgeState({
             buildLineReplyText({
               plate: queueMessageDisplayTitle(m, uiLang),
               lines: savedLines,
-              reviewUrl: buildOrderReviewUrl({ carRowId: m.car_row_id, plate: m.plate_display }),
+              reviewUrl: buildOrderReviewUrl({ carRowId: effectiveMessageCarRowId, plate: selectedCar?.plate || m.plate_display }),
               uiLang,
             })
         );
@@ -2280,8 +2425,166 @@ function useLineInboxBridgeState({
       fetchQueue,
       onSaved,
       queueDrafts,
+      selectedQueueCars,
       selectedQueueActionsForInbox,
       selectedIndicesForInbox,
+      stagedLineAttachments,
+      stagedSuggestionPhotos,
+      uiLang,
+      uploadSuggestionPhotos,
+    ]
+  );
+
+  const saveQueueGroup = useCallback(
+    async (group: PendingQueueGroup) => {
+      const saveBlocks: Array<{
+        inbox_message_id: string;
+        selected_car_row_id?: string;
+        actions?: ReturnType<typeof selectedQueueActionsForInbox>;
+        item_indices?: number[];
+      }> = [];
+      const messageMeta = new Map<
+        string,
+        {
+          message: PendingQueueMessage;
+          selectedCar?: ManualCarCandidate;
+          effectiveCarRowId: string;
+          selectedCount: number;
+          fallbackAssignee: string;
+        }
+      >();
+      let totalSelected = 0;
+      let riskyCount = 0;
+
+      for (const message of group.messages) {
+        const fallbackAssignee = resolveSaleStaffForOrder(String(message.sale ?? group.sale ?? ""), saleAssigneesBySale);
+        const actions = selectedQueueActionsForInbox(message, fallbackAssignee);
+        const indices = actions.length > 0 ? [] : selectedIndicesForInbox(message);
+        const selectedCount = actions.length || indices.length;
+        if (selectedCount === 0) continue;
+
+        const selectedCar = selectedQueueCars[message.inbox_id];
+        const selectedCarRowId = String(selectedCar?.car_row_id ?? "").trim();
+        const effectiveCarRowId = String(message.car_row_id ?? group.car_row_id ?? "").trim() || selectedCarRowId;
+        if (!effectiveCarRowId) {
+          setError(uiLang === "en" ? "Please select a car before saving." : "กรุณาเลือกคันรถก่อนบันทึก");
+          return;
+        }
+
+        riskyCount += (message.action_lines ?? []).filter((line) => {
+          const rowKey = queueSuggestionRowKey(message.inbox_id, line.item_index);
+          const draft = queueDrafts[rowKey] ?? queueActionDraftForLine(line, fallbackAssignee);
+          return draft.included && draft.action !== "skip" && line.duplicate_status !== "new";
+        }).length;
+
+        totalSelected += selectedCount;
+        messageMeta.set(message.inbox_id, {
+          message,
+          selectedCar,
+          effectiveCarRowId,
+          selectedCount,
+          fallbackAssignee,
+        });
+        saveBlocks.push(
+          actions.length > 0
+            ? { inbox_message_id: message.inbox_id, selected_car_row_id: selectedCarRowId || undefined, actions }
+            : { inbox_message_id: message.inbox_id, selected_car_row_id: selectedCarRowId || undefined, item_indices: indices }
+        );
+      }
+
+      if (totalSelected === 0 || saveBlocks.length === 0) return;
+      if (riskyCount > 0) {
+        const ok = window.confirm(`${riskyCount} selected queue item(s) may be duplicate or unclear. Continue?`);
+        if (!ok) return;
+      }
+
+      setSavingInboxId(group.group_key);
+      setError(null);
+      setSaveHint(null);
+      setReplyText("");
+      setReplyCopied(false);
+      try {
+        const res = await fetch("/api/line-inbox/pending-save", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({ saves: saveBlocks }),
+        });
+        const data = (await res.json()) as { ok?: boolean; error?: string; results?: PendingSaveResult[] };
+        if (!res.ok) throw new Error(data.error || res.statusText);
+
+        let attachedPhotoCount = 0;
+        const touchedRowKeys: string[] = [];
+        const replyTexts: string[] = [];
+
+        for (const result of data.results ?? []) {
+          const meta = messageMeta.get(result.inbox_message_id);
+          if (!meta) continue;
+          const savedItems = result.saved_items ?? [];
+          for (const saved of savedItems) {
+            const rowKey = queueSuggestionRowKey(result.inbox_message_id, saved.item_index);
+            const savedItemId = String(saved.order_item_id ?? "").trim();
+            if (!savedItemId) continue;
+            touchedRowKeys.push(rowKey);
+
+            const staged = stagedSuggestionPhotos[rowKey] ?? [];
+            const stagedLineUrls = (stagedLineAttachments[rowKey] ?? [])
+              .map((attachment) => attachment.url)
+              .filter(Boolean);
+
+            if (staged.length > 0) {
+              await uploadSuggestionPhotos(
+                rowKey,
+                savedItemId,
+                staged.map((photo) => photo.file),
+                {
+                  silent: true,
+                  carRowId: meta.effectiveCarRowId,
+                  carId: meta.selectedCar?.car_id ?? undefined,
+                }
+              );
+              attachedPhotoCount += staged.length;
+            }
+
+            if (stagedLineUrls.length > 0) {
+              await attachSuggestionPhotoUrls(rowKey, savedItemId, stagedLineUrls, {
+                silent: true,
+                carRowId: meta.effectiveCarRowId,
+                carId: meta.selectedCar?.car_id ?? undefined,
+              });
+              attachedPhotoCount += stagedLineUrls.length;
+            }
+          }
+
+          const reply = String(result.copy_ready_reply_text ?? result.copyReadyReplyText ?? result.reply_text ?? "").trim();
+          if (reply) replyTexts.push(reply);
+        }
+
+        clearStagedForRowKeys(touchedRowKeys);
+        setSaveHint(
+          uiLang === "en"
+            ? `Saved ${totalSelected} item(s) from ${saveBlocks.length} LINE message(s)${attachedPhotoCount ? ` + attached ${attachedPhotoCount} photo(s)` : ""}.`
+            : `บันทึก ${totalSelected} งาน จากข้อความ LINE ${saveBlocks.length} ข้อความ${attachedPhotoCount ? ` + แนบรูป ${attachedPhotoCount} รูป` : ""}`
+        );
+        setReplyText(replyTexts.join("\n\n---\n\n"));
+        await fetchQueue();
+        onSaved?.();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setSavingInboxId(null);
+      }
+    },
+    [
+      attachSuggestionPhotoUrls,
+      clearStagedForRowKeys,
+      fetchQueue,
+      onSaved,
+      queueDrafts,
+      saleAssigneesBySale,
+      selectedIndicesForInbox,
+      selectedQueueActionsForInbox,
+      selectedQueueCars,
       stagedLineAttachments,
       stagedSuggestionPhotos,
       uiLang,
@@ -2576,16 +2879,15 @@ function useLineInboxBridgeState({
             )}
           >
             <div className="flex items-start justify-between gap-2">
-              <p className="min-w-0 flex-1 truncate text-base font-bold text-slate-950">{row.plate}</p>
+              <p className="min-w-0 flex-1 line-clamp-2 text-base font-bold leading-snug text-slate-950">
+                {queueCarPickerTitle(row.plate, row.spec)}
+              </p>
               {row.latestMessageAt > 0 ? (
                 <span className="shrink-0 text-[10px] font-semibold tabular-nums text-slate-500">
                   {formatLatestLineMessageTime(row.latestMessageAt, uiLang)}
                 </span>
               ) : null}
             </div>
-            {row.spec ? (
-              <p className="mt-0.5 line-clamp-2 text-[12px] font-medium text-slate-600">{row.spec}</p>
-            ) : null}
             <div className="mt-1.5 flex flex-wrap gap-1.5 text-[10px] font-semibold text-slate-500">
               {row.sale ? <span className="rounded-full bg-white px-2 py-0.5 ring-1 ring-slate-200">{row.sale}</span> : null}
               {row.jobCount > 0 ? (
@@ -2619,14 +2921,6 @@ function useLineInboxBridgeState({
                 </span>
               ) : null}
             </div>
-            {row.sourceLabel || row.groupIdDisplay ? (
-              <p className="mt-1 text-[10px] font-semibold text-slate-500">
-                {[row.sourceLabel, row.groupIdDisplay ? `group: ${row.groupIdDisplay}` : ""].filter(Boolean).join(" · ")}
-              </p>
-            ) : null}
-            {row.fallbackSubtitle ? (
-              <p className="mt-1 line-clamp-2 text-[10px] font-medium text-slate-500">{row.fallbackSubtitle}</p>
-            ) : null}
             {row.contextSource === "reply_context" || row.contextSource === "fallback_previous_message" ? (
               <p className="mt-1 rounded-lg bg-sky-50 px-2 py-1 text-[10px] font-semibold text-sky-800 ring-1 ring-sky-100">
                 {row.contextSource === "fallback_previous_message"
@@ -2785,7 +3079,7 @@ function useLineInboxBridgeState({
               className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pt-2 [-webkit-overflow-scrolling:touch]"
               style={{ WebkitOverflowScrolling: "touch", touchAction: "pan-y" }}
             >
-              {queueError ? (
+              {queueError && carPickerRows.length === 0 ? (
                 <div className="my-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-center text-xs font-semibold text-amber-900">
                   <p>{queueError}</p>
                   <button
@@ -2804,6 +3098,18 @@ function useLineInboxBridgeState({
                 </p>
               ) : (
                 <>
+                  {queueError ? (
+                    <div className="mb-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-center text-[11px] font-semibold text-amber-900">
+                      <p>{uiLang === "en" ? "Could not refresh just now. Showing the latest loaded LINE list." : "รีเฟรชไม่สำเร็จ กำลังแสดงรายการ LINE ล่าสุดที่โหลดไว้"}</p>
+                      <button
+                        type="button"
+                        onClick={() => void fetchQueue()}
+                        className="mt-1.5 min-h-8 rounded-full bg-white px-3 text-[11px] font-bold text-amber-900 ring-1 ring-amber-200 touch-manipulation"
+                      >
+                        {uiLang === "en" ? "Try again" : "ลองใหม่"}
+                      </button>
+                    </div>
+                  ) : null}
                   {queueLoading ? (
                     <p className="pb-2 text-center text-[11px] font-semibold text-slate-500">
                       {uiLang === "en" ? "Refreshing..." : "กำลังรีเฟรช..."}
@@ -2831,8 +3137,48 @@ function useLineInboxBridgeState({
   const renderQueueGroupContent = (group: PendingQueueGroup) => {
     const acceptedReplyText = buildQueueAcceptedReplyText(group, uiLang);
     const acceptedReplyCopied = copiedQueueReplyKey === group.group_key;
+    const groupSelectedCount = group.messages.reduce((sum, message) => {
+      const fallbackAssignee = resolveSaleStaffForOrder(String(message.sale ?? group.sale ?? ""), saleAssigneesBySale);
+      const actions = selectedQueueActionsForInbox(message, fallbackAssignee);
+      return sum + (actions.length || selectedIndicesForInbox(message).length);
+    }, 0);
+    const groupMessageSaveCount = group.messages.filter((message) => {
+      const fallbackAssignee = resolveSaleStaffForOrder(String(message.sale ?? group.sale ?? ""), saleAssigneesBySale);
+      return selectedQueueActionsForInbox(message, fallbackAssignee).length > 0 || selectedIndicesForInbox(message).length > 0;
+    }).length;
     return (
     <div className="space-y-3">
+      {groupSelectedCount > 0 && groupMessageSaveCount > 1 ? (
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-2.5 py-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="text-[12px] font-bold text-emerald-950">
+                {uiLang === "en"
+                  ? `${groupSelectedCount} selected job(s) from ${groupMessageSaveCount} LINE messages`
+                  : `เลือกบันทึก ${groupSelectedCount} งาน จากข้อความ LINE ${groupMessageSaveCount} ข้อความ`}
+              </p>
+              <p className="mt-0.5 text-[10px] font-semibold text-emerald-800">
+                {uiLang === "en" ? "Approve them together in one click." : "กดอนุมัติรวมได้ในครั้งเดียว"}
+              </p>
+            </div>
+            <Button
+              type="button"
+              size="sm"
+              disabled={savingInboxId === group.group_key}
+              onClick={() => void saveQueueGroup(group)}
+              className="min-h-10 touch-manipulation bg-slate-950 px-4 hover:bg-slate-900"
+            >
+              {savingInboxId === group.group_key
+                ? uiLang === "en"
+                  ? "Saving..."
+                  : "กำลังบันทึก..."
+                : uiLang === "en"
+                  ? `Approve all (${groupSelectedCount})`
+                  : `อนุมัติทั้งหมด (${groupSelectedCount})`}
+            </Button>
+          </div>
+        </div>
+      ) : null}
       <div className="rounded-xl border border-sky-200 bg-sky-50 px-2.5 py-2 text-[11px] text-sky-950">
         <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
           <p className="font-bold">
@@ -2878,10 +3224,13 @@ function useLineInboxBridgeState({
           </div>
         </div>
       ) : null}
-      {group.messages.map((m) => {
+      {group.messages.map((m, messageIndex) => {
         const displayLines = queueMessageDisplayActionLines(m);
         const showManual = queueMessageNeedsManualReview(m);
-        const messageCarRowId = String(m.car_row_id ?? group.car_row_id ?? "").trim();
+        const selectedManualCar = selectedQueueCars[m.inbox_id];
+        const manualCarCandidates = queueManualCarCandidates(m, group);
+        const manualCarSearchQuery = queueManualCarSearchQuery(m, group);
+        const messageCarRowId = String(m.car_row_id ?? group.car_row_id ?? selectedManualCar?.car_row_id ?? "").trim();
         const lineAttachments = (() => {
           const direct = queueMessageLineAttachments(m, group);
           if (direct.length > 0) return direct;
@@ -2907,6 +3256,18 @@ function useLineInboxBridgeState({
               : "border-rose-200 bg-rose-50 text-rose-950";
         return (
           <div key={m.inbox_id} className="rounded-xl bg-white px-2.5 py-2.5 ring-1 ring-slate-200/80">
+            <div className="mb-2 flex flex-wrap items-center gap-2 text-[11px] font-bold text-slate-600">
+              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-800 ring-1 ring-slate-200">
+                {uiLang === "en" ? `LINE message ${messageIndex + 1}` : `ข้อความ LINE ${messageIndex + 1}`}
+              </span>
+              {displayLines.length > 0 ? (
+                <span>
+                  {uiLang === "en"
+                    ? `${newWorkCount || displayLines.length} new job(s)`
+                    : `งานใหม่ ${newWorkCount || displayLines.length}`}
+                </span>
+              ) : null}
+            </div>
             {showManual ? (
               <div
                 className={cn(
@@ -2939,9 +3300,9 @@ function useLineInboxBridgeState({
                 ) : primaryCarLabel ? (
                   <p className="mt-2 text-sm font-bold text-slate-900">{primaryCarLabel}</p>
                 ) : null}
-                {m.source_label || m.group_id_display ? (
+                {m.source_label ? (
                   <p className="mt-2 text-[10px] font-semibold text-slate-500">
-                    {[m.source_label, m.group_id_display ? `group: ${m.group_id_display}` : ""].filter(Boolean).join(" · ")}
+                    {m.source_label}
                   </p>
                 ) : null}
                 {String(m.contextSource ?? m.context_source ?? "").trim() === "reply_context" ||
@@ -2959,9 +3320,6 @@ function useLineInboxBridgeState({
                       : ""}
                   </p>
                 ) : null}
-                {m.car_row_id ? (
-                  <p className="mt-1 break-all text-[10px] font-medium text-slate-500">car_row_id: {m.car_row_id}</p>
-                ) : null}
                 {m.aiTargetCarReference && !primaryCarLabel ? (
                   <p className="mt-1 text-[11px] font-semibold text-slate-700">
                     {uiLang === "en" ? "AI target: " : "AI ชี้รถ: "}
@@ -2974,6 +3332,63 @@ function useLineInboxBridgeState({
                     {uiLang === "en" ? "Candidates: " : "ตัวเลือกที่พบ: "}
                     {queueCandidateLabels(m.extractedCarCandidates).join(" · ")}
                   </p>
+                ) : null}
+                {selectedManualCar ? (
+                  <p className="mt-2 rounded-lg bg-emerald-100 px-2.5 py-1.5 text-[12px] font-bold text-emerald-950 ring-1 ring-emerald-200">
+                    {uiLang === "en" ? "Selected: " : "เลือกแล้ว: "}
+                    {queueManualCarLabel(selectedManualCar)} ✅
+                  </p>
+                ) : null}
+                {!String(m.car_row_id ?? "").trim() && manualCarSearchQuery && manualCarCandidates.length > 0 ? (
+                  <div className="mt-2 rounded-xl bg-white/75 p-2 ring-1 ring-white/80">
+                    <p className="text-[12px] font-bold text-slate-900">
+                      {uiLang === "en"
+                        ? `Found cars related to "${manualCarSearchQuery}". Please choose one.`
+                        : `พบรถที่เกี่ยวข้องกับ “${manualCarSearchQuery}” กรุณาเลือกคันรถ`}
+                    </p>
+                    {displayLines.length > 0 ? (
+                      <div className="mt-2">
+                        <p className="text-[11px] font-bold text-slate-600">{uiLang === "en" ? "Detected work:" : "งานที่เจอ:"}</p>
+                        <ul className="mt-1 space-y-0.5 text-[12px] font-semibold text-slate-800">
+                          {displayLines.slice(0, 4).map((line) => (
+                            <li key={`manual-work-${line.item_index}`}>{line.suggested_item_name || line.raw_text}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+                    <p className="mt-2 text-[11px] font-bold text-slate-600">{uiLang === "en" ? "Cars found:" : "รถที่พบ:"}</p>
+                    <div className="mt-1.5 space-y-1.5">
+                      {manualCarCandidates.map((candidate) => {
+                        const isSelected = selectedManualCar?.car_row_id === candidate.car_row_id;
+                        return (
+                          <button
+                            key={candidate.car_row_id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedQueueCars((prev) => ({ ...prev, [m.inbox_id]: candidate }));
+                              setError(null);
+                            }}
+                            className={cn(
+                              "w-full rounded-lg px-2.5 py-2 text-left text-[12px] ring-1 touch-manipulation",
+                              isSelected
+                                ? "bg-emerald-100 text-emerald-950 ring-emerald-300"
+                                : "bg-slate-50 text-slate-800 ring-slate-200 active:bg-slate-100"
+                            )}
+                          >
+                            <span className="font-bold text-slate-950">
+                              {uiLang === "en" ? "Choose this car" : "เลือกคันนี้"}
+                            </span>{" "}
+                            <span>{queueManualCarLabel(candidate)}</span>
+                            {queueManualCarMeta(candidate) ? (
+                              <span className="mt-0.5 block text-[10px] font-semibold text-slate-500">
+                                {queueManualCarMeta(candidate)}
+                              </span>
+                            ) : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
                 ) : null}
                 {m.matchReason ? (
                   <p className="mt-1 line-clamp-2 text-[10px] text-slate-500">
@@ -3233,11 +3648,16 @@ function useLineInboxBridgeState({
               <Button
                 type="button"
                 size="sm"
-                disabled={savingInboxId === m.inbox_id || selectedActions.length === 0 || !messageCarRowId}
+                disabled={
+                  savingInboxId === m.inbox_id ||
+                  savingInboxId === group.group_key ||
+                  selectedActions.length === 0 ||
+                  !messageCarRowId
+                }
                 onClick={() => void saveQueueCard(m, fallbackAssignee)}
                 className="min-h-11 touch-manipulation bg-slate-950 hover:bg-slate-900"
               >
-                {savingInboxId === m.inbox_id
+                {savingInboxId === m.inbox_id || savingInboxId === group.group_key
                   ? uiLang === "en"
                     ? "Saving…"
                     : "กำลังบันทึก…"
@@ -3249,7 +3669,7 @@ function useLineInboxBridgeState({
                 type="button"
                 size="sm"
                 variant="outline"
-                disabled={savingInboxId === m.inbox_id}
+                disabled={savingInboxId === m.inbox_id || savingInboxId === group.group_key}
                 onClick={() => void skipQueueCard(m)}
                 className="min-h-11 touch-manipulation"
               >

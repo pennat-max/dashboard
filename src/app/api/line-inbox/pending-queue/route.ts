@@ -7,6 +7,11 @@ import { buildFallbackAnalyzePayloadFromRawText } from "@/lib/line-inbox/fallbac
 import { isLineInboxNoiseOrSeparatorOnlyText } from "@/lib/line-inbox/split-line-text";
 import { buildLineOrderReviewUrl } from "@/lib/line-inbox/review-link";
 import {
+  deriveVehicleSearchQueryFromLineText,
+  vehicleMatchesOrderSearch,
+  type VehicleSearchRecord,
+} from "@/lib/orders/vehicle-search";
+import {
   deriveLineInboxMatchStatus,
   type LineInboxMatchStatus,
   type LineInboxUnmatchedReason,
@@ -34,6 +39,45 @@ const LINE_PENDING_QUEUE_ROW_LIMIT = 500;
 const LINE_PENDING_QUEUE_SUMMARY_ATTACHMENT_LIMIT = 3;
 const LINE_PENDING_QUEUE_SUMMARY_RECENT_ATTACHMENT_LIMIT = 12;
 const LINE_PENDING_QUEUE_FALLBACK_CONCURRENCY = 8;
+const CARS_TABLE = process.env.NEXT_PUBLIC_SUPABASE_CARS_TABLE ?? "cars";
+const MANUAL_CAR_CANDIDATE_SELECT = [
+  "id",
+  "row_id",
+  "plate_number",
+  "chassis_number",
+  "spec",
+  "brand",
+  "model",
+  "model_year",
+  "c_year",
+  "color",
+  "sale_support",
+].join(",");
+
+type ManualCarCandidateRow = VehicleSearchRecord & {
+  id?: unknown;
+  row_id?: unknown;
+  plate_number?: unknown;
+  chassis_number?: unknown;
+  spec?: unknown;
+  brand?: unknown;
+  model?: unknown;
+  model_year?: unknown;
+  c_year?: unknown;
+  color?: unknown;
+  sale_support?: unknown;
+};
+
+type ManualCarCandidate = {
+  car_row_id: string;
+  car_id: number | null;
+  label: string;
+  plate: string;
+  spec: string;
+  chassis: string;
+  chassis_short: string;
+  sale: string;
+};
 
 type PendingQueueNewLine = {
   item_index: number;
@@ -144,6 +188,10 @@ type PendingQueueMsg = {
   matchStatus: PendingQueueMatchStatus;
   unmatchedReason: LineInboxUnmatchedReason;
   unmatched_reason: LineInboxUnmatchedReason;
+  manual_car_search_query: string;
+  manualCarSearchQuery: string;
+  manual_car_candidates: ManualCarCandidate[];
+  manualCarCandidates: ManualCarCandidate[];
   reviewUrl: string;
   review_url: string;
   car_row_id: string;
@@ -194,6 +242,10 @@ type PendingQueueGroup = {
   matchStatus: PendingQueueMatchStatus;
   unmatchedReason: LineInboxUnmatchedReason;
   unmatched_reason: LineInboxUnmatchedReason;
+  manual_car_search_query: string;
+  manualCarSearchQuery: string;
+  manual_car_candidates: ManualCarCandidate[];
+  manualCarCandidates: ManualCarCandidate[];
   reviewUrl: string;
   review_url: string;
   sale: string;
@@ -241,6 +293,103 @@ function analyzePayloadOrNull(body: unknown): LineInboxAnalyzeResponse | null {
 
 function cleanString(value: unknown): string {
   return String(value ?? "").trim();
+}
+
+function compactChassis(value: unknown): string {
+  const clean = cleanString(value);
+  if (!clean) return "";
+  return clean.length > 8 ? clean.slice(-8) : clean;
+}
+
+function manualCandidateLabel(row: ManualCarCandidateRow): string {
+  return [
+    cleanString(row.plate_number),
+    cleanString(row.brand),
+    cleanString(row.model),
+    cleanString(row.spec),
+    cleanString(row.color),
+    cleanString(row.model_year || row.c_year),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+}
+
+function manualCandidateFromRow(row: ManualCarCandidateRow): ManualCarCandidate | null {
+  const carRowId = cleanString(row.row_id);
+  if (!carRowId) return null;
+  const id = Number(row.id);
+  const chassis = cleanString(row.chassis_number);
+  const spec = [
+    cleanString(row.brand),
+    cleanString(row.model),
+    cleanString(row.spec),
+    cleanString(row.color),
+    cleanString(row.model_year || row.c_year),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  return {
+    car_row_id: carRowId,
+    car_id: Number.isFinite(id) ? id : null,
+    label: manualCandidateLabel(row) || cleanString(row.plate_number) || carRowId,
+    plate: cleanString(row.plate_number),
+    spec,
+    chassis,
+    chassis_short: compactChassis(chassis),
+    sale: cleanString(row.sale_support),
+  };
+}
+
+function manualCarSearchQueryForQueue(input: {
+  rawText: unknown;
+  aiTargetCarReference: unknown;
+  extractedCarCandidates: LineInboxCarCandidate[];
+}): string {
+  return deriveVehicleSearchQueryFromLineText({
+    rawText: input.rawText,
+    aiTargetCarReference: input.aiTargetCarReference,
+    candidateTexts: input.extractedCarCandidates.flatMap((candidate) => [candidate.text, candidate.line]),
+  });
+}
+
+async function fetchManualCarCandidates(
+  supabase: ReturnType<typeof createServiceRoleClient>,
+  query: string
+): Promise<ManualCarCandidate[]> {
+  const q = cleanString(query);
+  if (!q) return [];
+  const safe = q.replace(/[%*,()]/g, "").trim();
+  if (!safe) return [];
+  const { data, error } = await supabase
+    .from(CARS_TABLE)
+    .select(MANUAL_CAR_CANDIDATE_SELECT)
+    .or(
+      [
+        `plate_number.ilike.%${safe}%`,
+        `chassis_number.ilike.%${safe}%`,
+        `spec.ilike.%${safe}%`,
+        `brand.ilike.%${safe}%`,
+        `model.ilike.%${safe}%`,
+        `model_year.ilike.%${safe}%`,
+        `c_year.ilike.%${safe}%`,
+        `color.ilike.%${safe}%`,
+      ].join(",")
+    )
+    .limit(30);
+
+  if (error) return [];
+  const seen = new Set<string>();
+  return ((data ?? []) as ManualCarCandidateRow[])
+    .filter((row) => vehicleMatchesOrderSearch(row, q))
+    .map(manualCandidateFromRow)
+    .filter((candidate): candidate is ManualCarCandidate => {
+      if (!candidate?.car_row_id || seen.has(candidate.car_row_id)) return false;
+      seen.add(candidate.car_row_id);
+      return true;
+    })
+    .slice(0, 8);
 }
 
 function lineMessageTimeMs(row: Pick<PendingQueueDbRow, "received_at">): number {
@@ -414,13 +563,7 @@ function fallbackSubtitleForQueue(input: {
 }): string {
   const source = sourceLabel(input.row.source_type);
   const received = cleanString(input.row.received_at);
-  const group = groupIdDisplay(input.row);
-  const parts = [
-    input.carRowId ? `car_row_id: ${input.carRowId}` : "",
-    source,
-    group ? `group: ${group}` : "",
-    received,
-  ].filter(Boolean);
+  const parts = [source, received].filter(Boolean);
   return parts.join(" · ");
 }
 
@@ -724,6 +867,10 @@ function groupMessages(messages: PendingQueueMsg[]): PendingQueueGroup[] {
         existing.unmatchedReason || message.unmatchedReason
       );
       existing.unmatched_reason = existing.unmatchedReason;
+      if (!existing.manual_car_search_query) existing.manual_car_search_query = message.manual_car_search_query;
+      if (!existing.manualCarSearchQuery) existing.manualCarSearchQuery = message.manualCarSearchQuery;
+      if (existing.manual_car_candidates.length === 0) existing.manual_car_candidates = message.manual_car_candidates;
+      if (existing.manualCarCandidates.length === 0) existing.manualCarCandidates = message.manualCarCandidates;
       if (!existing.reviewUrl) existing.reviewUrl = message.reviewUrl;
       if (!existing.review_url) existing.review_url = message.review_url;
       continue;
@@ -761,6 +908,10 @@ function groupMessages(messages: PendingQueueMsg[]): PendingQueueGroup[] {
       matchStatus: message.matchStatus,
       unmatchedReason: message.unmatchedReason,
       unmatched_reason: message.unmatched_reason,
+      manual_car_search_query: message.manual_car_search_query,
+      manualCarSearchQuery: message.manualCarSearchQuery,
+      manual_car_candidates: message.manual_car_candidates,
+      manualCarCandidates: message.manualCarCandidates,
       reviewUrl: message.reviewUrl,
       review_url: message.review_url,
       sale: message.sale,
@@ -1114,6 +1265,17 @@ export async function GET(request: Request) {
         matchStatus === "matched"
           ? ""
           : (cleanString(payload.unmatchedReason) as LineInboxUnmatchedReason) || matchMeta.unmatchedReason;
+      const manualCarSearchQuery =
+        !car_row_id && (matchStatus === "ambiguous_vehicle" || matchStatus === "unresolved" || matchStatus === "no_vehicle_context")
+          ? manualCarSearchQueryForQueue({
+              rawText: row.raw_text,
+              aiTargetCarReference,
+              extractedCarCandidates,
+            })
+          : "";
+      const manualCarCandidates = manualCarSearchQuery
+        ? await fetchManualCarCandidates(supabase, manualCarSearchQuery)
+        : [];
       const queueNeedsHumanReview = needsHumanReview || matchedNoWorkOnly;
       const reviewUrl = car_row_id
         ? buildLineOrderReviewUrl({ carRowId: car_row_id, plate: plateText || carTitle || fallbackTitle })
@@ -1162,6 +1324,10 @@ export async function GET(request: Request) {
         matchStatus,
         unmatchedReason,
         unmatched_reason: unmatchedReason,
+        manual_car_search_query: manualCarSearchQuery,
+        manualCarSearchQuery,
+        manual_car_candidates: manualCarCandidates,
+        manualCarCandidates,
         reviewUrl,
         review_url: reviewUrl,
         car_row_id: car_row_id || "",

@@ -84,6 +84,10 @@ const {
   scoreLineInboxStockMatch,
   extractStockNumbers,
 } = loadTsFile(path.join(root, "src/lib/line-inbox/resolve-car.ts"));
+const {
+  deriveVehicleSearchQueryFromLineText,
+  vehicleMatchesOrderSearch,
+} = loadTsFile(path.join(root, "src/lib/orders/vehicle-search.ts"));
 const { deriveLineInboxMatchStatus } = loadTsFile(
   path.join(root, "src/lib/line-inbox/car-match-status.ts")
 );
@@ -360,9 +364,30 @@ const thaiMileage39800 = "\u0e01\u0e23\u0e2d\u0e44\u0e21\u0e25\u0e4c 39,800 KM";
 assertItems("4380 - 47000 KM.", [thaiMileage47500], "plate/ref plus mileage becomes a mileage work item");
 assertItems("4380 - 47,000 KM", [thaiMileage47500], "comma mileage is normalized");
 assertItems("\u0e19\u0e02-6866 - 67500 KM", [thaiMileage67500], "Thai plate plus mileage becomes a mileage work item");
+assertItems("1603 - 53000 KM.", ["กรอไมล์ 53,000 KM"], "1603 mileage line becomes a normalized mileage work item");
 assertItems("\u0e01\u0e23\u0e2d\u0e44\u0e21\u0e25\u0e4c 47000 KM", [thaiMileage47500], "mileage without car remains a work item");
 assert.strictEqual(extractLineInboxMileageCarReference("4380 - 47000 KM."), "4380", "mileage line keeps first ref as car candidate");
+assert.strictEqual(extractLineInboxMileageCarReference("1603 - 53000 KM."), "1603", "1603 mileage line keeps first ref as car candidate");
 assert.strictEqual(extractLineInboxMileageCarReference("\u0e19\u0e02-6866 - 67500 KM"), "\u0e19\u0e02-6866", "mileage line keeps Thai plate as car candidate");
+assert.strictEqual(
+  deriveVehicleSearchQueryFromLineText({ rawText: "1603 - 53000 KM.", candidateTexts: ["1603"] }),
+  "1603",
+  "manual car picker derives 1603 as the search query"
+);
+assert.strictEqual(
+  deriveVehicleSearchQueryFromLineText({ rawText: "9275 (high)", aiTargetCarReference: "9275 (high)" }),
+  "9275",
+  "manual car picker derives 9275 from confidence-labelled reference"
+);
+const manual1603Candidates = [
+  { row_id: "car-bt-1603", plate_number: "บธ-1603", spec: "REVO 2WD 2.4 J MT Standard", color: "WHITE", model_year: "Sep18" },
+  { row_id: "car-pk-1603", plate_number: "ผข-1603", spec: "REVO 2WD 2.8 J MT Standard", color: "GRAY", model_year: "Mar16" },
+].filter((car) => vehicleMatchesOrderSearch(car, "1603"));
+assert.deepStrictEqual(
+  manual1603Candidates.map((car) => car.plate_number),
+  ["บธ-1603", "ผข-1603"],
+  "LINE AI manual picker search returns both 1603 car candidates"
+);
 assert.deepStrictEqual(extractStockNumbers("4380 - 47000 KM."), ["4380"], "mileage number is not a stock/ref candidate");
 assert.deepStrictEqual(extractStockNumbers("4380 - 47,000 KM"), ["4380"], "comma mileage number is not a stock/ref candidate");
 assert.deepStrictEqual(extractStockNumbers("\u0e19\u0e02-6866 67500 KM"), ["6866"], "Thai plate mileage keeps only plate digits as candidate");
@@ -1502,7 +1527,28 @@ assert(
   mobileOrderTrackingHome.includes("setVehicleSearch((prev) => (prev === querySearch ? prev : querySearch))"),
   "orders page applies query search param on client navigation"
 );
+assert(
+  mobileOrderTrackingHome.includes("vehicleMatchesOrderSearch"),
+  "/m/orders uses the shared vehicle search helper"
+);
+assert(
+  pendingQueueRoute.includes("vehicleMatchesOrderSearch") &&
+    pendingQueueRoute.includes("manual_car_candidates") &&
+    pendingQueueRoute.includes("manual_car_search_query"),
+  "pending queue returns manual car candidates using the shared vehicle search helper"
+);
+assert(
+  lineInboxToolbar.includes("selectedQueueCars") &&
+    lineInboxToolbar.includes("เลือกคันนี้") &&
+    lineInboxToolbar.includes("selected_car_row_id"),
+  "LINE AI UI stores a selected car locally and sends selected_car_row_id on manual save"
+);
+assert(
+  lineInboxToolbar.includes("กรุณาเลือกคันรถก่อนบันทึก"),
+  "LINE AI UI blocks unresolved save until staff selects a car"
+);
 assert(pendingSaveRoute.includes("assignee_staff: String(actionRow.assignee_staff"), "pending-save receives selected assignee");
+assert(pendingSaveRoute.includes("crFromManualSelection"), "pending-save accepts selected_car_row_id from manual UI");
 assert(pendingSaveRoute.includes("item_status: String(actionRow.item_status"), "pending-save receives selected status");
 assert(pendingSaveRoute.includes("saved_items: saved.map"), "pending-save response returns saved item rows");
 assert(pendingSaveRoute.includes("createdItems = saved.filter"), "pending-save separates created items for LINE reply");
