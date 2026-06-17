@@ -43,6 +43,12 @@ const LINE_PHOTO_WORK_INTENT_RE =
 const STANDALONE_CONTROL_LINE_RE = /^(?:เพิ่ม|เพิ่มงาน|งานใหม่)$/i;
 const ADD_SECTION_HEADER_RE = /^(?:เพิ่ม|เพิ่มงาน|งานใหม่|เพิ่มเติม)$/i;
 const SECTION_BULLET_RE = /^\s*(?:[-•]|\*\s+)\s*\S/;
+const REFERENCE_LINK_ONLY_RE =
+  /^(?:<?https?:\/\/(?:docs\.google\.com|drive\.google\.com|sheets\.google\.com)\/\S+>?|<?https?:\/\/\S+>?)$/i;
+const GENERAL_ANNOUNCEMENT_RE =
+  /(?:ประกาศ|แจ้งให้ทราบ|อัพเดท|อัปเดต|update|อัพเดทสินค้า|อัปเดตสินค้า|รายการสินค้า|ราคาสินค้า|ตารางงาน|สินค้าต้องสั่ง|ต้องสั่งล่วงหน้า)/i;
+const GENERAL_PRODUCT_UPDATE_RE =
+  /(?:สินค้า|กล้องกระจกมองหลัง|จอแอนดรอยด์|ดิจิตอล|digital|android|ล่วงหน้า\s*\d+\s*[-–—]\s*\d+\s*วัน)/i;
 const CAR_REFERENCE_META_RE =
   /(ใส่\s*ปี.*(?:chassis|chasis|เลขถัง|ตัวถัง)|(?:chassis|chasis|เลขถัง|ตัวถัง).*(?:ปี|link|ลิงก์|ถูก|ทุกครั้ง|หลายที่)|(?:ปี|link|ลิงก์).*(?:chassis|chasis|เลขถัง|ตัวถัง))/i;
 const REAL_WORK_EXCLUDING_GENERIC_ENTRY_RE =
@@ -150,6 +156,29 @@ function isSectionBulletLine(raw: string): boolean {
   return SECTION_BULLET_RE.test(String(raw ?? ""));
 }
 
+function hasExplicitCarReference(raw: string): boolean {
+  THAI_PLATE_RE.lastIndex = 0;
+  const hasThaiPlate = THAI_PLATE_RE.test(raw);
+  THAI_PLATE_RE.lastIndex = 0;
+  return hasThaiPlate || CHASSIS_RE.test(raw) || THAI_STOCK_IDENTITY_RE.test(raw);
+}
+
+function isReferenceLinkOnlyLine(raw: string): boolean {
+  return REFERENCE_LINK_ONLY_RE.test(String(raw ?? "").trim());
+}
+
+function looksLikeNonActionableAnnouncementLine(raw: string): boolean {
+  const clean = sanitizeLine(raw);
+  if (!clean || hasExplicitCarReference(clean)) return false;
+  if (isReferenceLinkOnlyLine(clean)) return true;
+  if (GENERAL_ANNOUNCEMENT_RE.test(clean)) {
+    const isUpdateLine = /(?:อัพเดท|อัปเดต|update)/i.test(clean);
+    if (isUpdateLine && hasStrongWorkIntent(clean) && !GENERAL_PRODUCT_UPDATE_RE.test(clean)) return false;
+    return true;
+  }
+  return GENERAL_PRODUCT_UPDATE_RE.test(clean) && !hasStrongWorkIntent(clean);
+}
+
 export function classifyLineNoise(rawLine: string): LineNoiseClassification {
   const raw = String(rawLine ?? "").trim();
   if (!raw) return "noise";
@@ -159,6 +188,7 @@ export function classifyLineNoise(rawLine: string): LineNoiseClassification {
   if (!clean) return "noise";
 
   if (isLineEmojiShortcodeOnlyLine(raw)) return "decoration";
+  if (isReferenceLinkOnlyLine(clean) || looksLikeNonActionableAnnouncementLine(raw)) return "noise";
 
   const strippedHeader = stripHeaderPrefixFromWorkLine(clean);
   if (lineKey(strippedHeader) !== lineKey(clean) && hasWorkIntent(strippedHeader)) return "content";
@@ -255,6 +285,7 @@ function looksLikeMentionOnly(raw: string): boolean {
 }
 
 function looksLikeLinePersonContext(raw: string): boolean {
+  if (isReferenceLinkOnlyLine(raw)) return false;
   if (hasStrongWorkIntent(raw)) return false;
   if (looksLikeStockSpecContext(raw)) return false;
 
@@ -276,6 +307,7 @@ function looksLikeLinePersonContext(raw: string): boolean {
 }
 
 function looksLikeNoiseOnly(raw: string): boolean {
+  if (isReferenceLinkOnlyLine(raw)) return true;
   if (looksLikeLinePersonContext(raw)) return true;
   if (hasWorkIntent(raw)) return false;
   const noMentions = removeMentions(raw);
