@@ -132,6 +132,26 @@ function extractThaiStockIdentity(line: string): string | null {
   return m?.[1] ?? null;
 }
 
+function extractThaiPlateSearchVariants(text: string): Array<{ compact: string; raw: string }> {
+  const out: Array<{ compact: string; raw: string }> = [];
+  for (const match of String(text ?? "").matchAll(THAI_PLATE_RE)) {
+    const raw = safeString(match[0]).replace(/\s+/g, " ");
+    const compact = raw.replace(/\s+/g, "");
+    if (!compact || out.some((item) => item.compact === compact && item.raw === raw)) continue;
+    out.push({ compact, raw });
+  }
+  THAI_PLATE_RE.lastIndex = 0;
+  return out.slice(0, 5);
+}
+
+export function extractThaiPlateCandidates(text: string): string[] {
+  const out: string[] = [];
+  for (const item of extractThaiPlateSearchVariants(text)) {
+    if (item.compact && !out.includes(item.compact)) out.push(item.compact);
+  }
+  return out;
+}
+
 function uniqueContextLines(lines: string[]): string[] {
   const out: string[] = [];
   for (const line of lines.map((value) => value.replace(/\s+/g, " ").trim()).filter(Boolean)) {
@@ -171,9 +191,7 @@ function addCarCandidate(
 }
 
 function hasThaiPlateCandidate(line: string): boolean {
-  const found = Boolean(line.match(THAI_PLATE_RE)?.[0]);
-  THAI_PLATE_RE.lastIndex = 0;
-  return found;
+  return extractThaiPlateCandidates(line).length > 0;
 }
 
 function vehicleSignalScoreForCandidate(line: string): number {
@@ -384,8 +402,7 @@ function scoreCandidate(row: CarMatchRow, contextLine: string): number {
     score += isVehicleToken ? 1.4 : 1;
   }
 
-  const contextPlate = contextLine.match(THAI_PLATE_RE)?.[0]?.replace(/\s+/g, "") ?? "";
-  THAI_PLATE_RE.lastIndex = 0;
+  const contextPlate = extractThaiPlateCandidates(contextLine)[0] ?? "";
   if (contextPlate && haystack.includes(normalizeSearch(contextPlate))) score += 4;
 
   for (const chassis of extractChassisCandidates(contextLine)) {
@@ -547,20 +564,40 @@ export async function resolveCarFromContext(
     }
   }
 
-  const plateMatch = raw.match(/[ก-ฮ]{1,3}[-\s]?\d{1,4}/);
-  if (plateMatch) {
-    const compact = plateMatch[0].replace(/\s+/g, "");
+  for (const plateCandidate of extractThaiPlateSearchVariants(raw)) {
+    const variants = Array.from(new Set([plateCandidate.compact, plateCandidate.raw].filter(Boolean)));
+    let exactData: CarMatchRow[] = [];
+    for (const variant of variants) {
+      const { data } = await supabase
+        .from(CARS_TABLE)
+        .select(CAR_MATCH_SELECT)
+        .eq("plate_number", variant)
+        .limit(2);
+      if ((data ?? []).length > 0) {
+        exactData = (data ?? []) as CarMatchRow[];
+        break;
+      }
+    }
+    const exactRows = exactData ?? [];
+    const exactRow = exactRows[0] as CarMatchRow | undefined;
+    if (exactRows.length === 1 && exactRow?.row_id) {
+      return withResolveMeta(resolvedFromRow(exactRow, 0.93), {
+        ...meta,
+        matchReason: `Matched exact Thai plate ${plateCandidate.compact}`,
+      });
+    }
+
     const { data } = await supabase
       .from(CARS_TABLE)
       .select(CAR_MATCH_SELECT)
-      .or(`plate_number.ilike.%${compact}%,plate_number.ilike.%${plateMatch[0]}%`)
+      .or(variants.map((variant) => `plate_number.ilike.%${variant}%`).join(","))
       .limit(5);
     const rows = data ?? [];
     const row = rows[0] as CarMatchRow | undefined;
     if (rows.length === 1 && row?.row_id) {
       return withResolveMeta(resolvedFromRow(row, 0.55), {
         ...meta,
-        matchReason: `Matched Thai plate ${compact}`,
+        matchReason: `Matched Thai plate ${plateCandidate.compact}`,
       });
     }
   }
