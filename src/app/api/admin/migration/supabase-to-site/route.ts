@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getD1, getR2 } from "../../../../../../db";
+import { createSiteDataClient } from "@/lib/site/db-client";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +24,7 @@ type MigrationBody =
   | { action: "profiles" }
   | { action: "storage"; prefix?: string; offset?: number; limit?: number }
   | { action: "storage-referenced"; offset?: number; limit?: number }
+  | { action: "runtime-selftest" }
   | { action: "verify" };
 
 function sourceConfig() {
@@ -286,6 +288,20 @@ async function verify() {
   return { tableCounts, r2Count, referencedCount: referenced.length, missingReferenced };
 }
 
+async function runtimeSelftest() {
+  const client = createSiteDataClient();
+  const key = `runtime-selftest:${crypto.randomUUID()}`;
+  const inserted = await client.from("migration_state").insert({ key, value: { stage: "insert" } }).select("key,value").single();
+  if (inserted.error || inserted.data?.value?.stage !== "insert") throw new Error(inserted.error?.message ?? "Insert self-test failed");
+  const updated = await client.from("migration_state").update({ value: { stage: "update" } }).eq("key", key).select("key,value").single();
+  if (updated.error || updated.data?.value?.stage !== "update") throw new Error(updated.error?.message ?? "Update self-test failed");
+  const deleted = await client.from("migration_state").delete().eq("key", key).select("key").single();
+  if (deleted.error || deleted.data?.key !== key) throw new Error(deleted.error?.message ?? "Delete self-test failed");
+  const absent = await client.from("migration_state").select("key").eq("key", key).maybeSingle();
+  if (absent.error || absent.data !== null) throw new Error(absent.error?.message ?? "Cleanup self-test failed");
+  return { insert: true, update: true, delete: true, cleanup: true };
+}
+
 export async function POST(request: Request) {
   if (!authorize(request)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   let body: MigrationBody;
@@ -303,6 +319,8 @@ export async function POST(request: Request) {
           ? await migrateStorage(body)
           : body.action === "storage-referenced"
             ? await migrateReferencedStorage(body)
+          : body.action === "runtime-selftest"
+            ? await runtimeSelftest()
           : body.action === "verify"
             ? await verify()
             : null;
