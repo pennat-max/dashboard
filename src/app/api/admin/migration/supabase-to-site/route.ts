@@ -235,27 +235,30 @@ async function migrateReferencedStorage(body: Extract<MigrationBody, { action: "
   const { url, key } = sourceConfig();
   const bucket = getR2();
   let copied = 0;
-  let skipped = 0;
   const missing: string[] = [];
-  for (const path of selected) {
-    const existing = await bucket.head(path);
-    if (existing) { skipped += 1; continue; }
-    const response = await fetch(
-      `${url}/storage/v1/object/authenticated/order-tracking-photos/${encodeObjectPath(path)}`,
-      { headers: sourceHeaders(key), cache: "no-store" },
-    );
-    if (response.status === 404) { missing.push(path); continue; }
-    if (!response.ok || !response.body) throw new Error(`Storage object ${path} returned ${response.status}`);
-    await bucket.put(path, response.body, {
-      httpMetadata: {
-        contentType: response.headers.get("content-type") ?? "application/octet-stream",
-        cacheControl: response.headers.get("cache-control") ?? "public, max-age=3600",
-      },
-      customMetadata: { migrated_from: "supabase", migrated_at: new Date().toISOString() },
-    });
-    copied += 1;
+  let cursor = 0;
+  async function copyWorker() {
+    for (;;) {
+      const path = selected[cursor++];
+      if (!path) return;
+      const response = await fetch(
+        `${url}/storage/v1/object/authenticated/order-tracking-photos/${encodeObjectPath(path)}`,
+        { headers: sourceHeaders(key), cache: "no-store" },
+      );
+      if (response.status === 404) { missing.push(path); continue; }
+      if (!response.ok || !response.body) throw new Error(`Storage object ${path} returned ${response.status}`);
+      await bucket.put(path, response.body, {
+        httpMetadata: {
+          contentType: response.headers.get("content-type") ?? "application/octet-stream",
+          cacheControl: response.headers.get("cache-control") ?? "public, max-age=3600",
+        },
+        customMetadata: { migrated_from: "supabase", migrated_at: new Date().toISOString() },
+      });
+      copied += 1;
+    }
   }
-  return { offset, limit, referenced: paths.length, selected: selected.length, copied, skipped, missing, done: offset + selected.length >= paths.length };
+  await Promise.all([copyWorker(), copyWorker(), copyWorker(), copyWorker(), copyWorker()]);
+  return { offset, limit, referenced: paths.length, selected: selected.length, copied, missing, done: offset + selected.length >= paths.length };
 }
 
 async function verify() {
