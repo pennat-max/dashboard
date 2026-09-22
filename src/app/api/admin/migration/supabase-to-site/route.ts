@@ -236,6 +236,7 @@ async function migrateReferencedStorage(body: Extract<MigrationBody, { action: "
   const bucket = getR2();
   let copied = 0;
   const missing: string[] = [];
+  const errors: Array<{ path: string; status: number }> = [];
   let cursor = 0;
   async function copyWorker() {
     for (;;) {
@@ -246,7 +247,10 @@ async function migrateReferencedStorage(body: Extract<MigrationBody, { action: "
         { headers: sourceHeaders(key), cache: "no-store" },
       );
       if (response.status === 404) { missing.push(path); continue; }
-      if (!response.ok || !response.body) throw new Error(`Storage object ${path} returned ${response.status}`);
+      if (!response.ok || !response.body) {
+        errors.push({ path, status: response.status });
+        continue;
+      }
       await bucket.put(path, response.body, {
         httpMetadata: {
           contentType: response.headers.get("content-type") ?? "application/octet-stream",
@@ -258,7 +262,7 @@ async function migrateReferencedStorage(body: Extract<MigrationBody, { action: "
     }
   }
   await Promise.all([copyWorker(), copyWorker(), copyWorker(), copyWorker(), copyWorker()]);
-  return { offset, limit, referenced: paths.length, selected: selected.length, copied, missing, done: offset + selected.length >= paths.length };
+  return { offset, limit, referenced: paths.length, selected: selected.length, copied, missing, errors, done: offset + selected.length >= paths.length };
 }
 
 async function verify() {
