@@ -176,6 +176,8 @@ If an n8n-specific API is added later, it must:
 
 Import `docs/line-n8n-chang-joe-dry-run.workflow.json` into n8n.
 
+Use `docs/line-n8n-chang-joe-runbook.md` as the step-by-step checklist for Chang Joe's first import and manual dry-run test.
+
 The workflow:
 
 - is inactive,
@@ -209,4 +211,3 @@ Before enabling real LINE behavior, owners must approve:
 - Attachment support is metadata/display-level, not full LINE binary ingestion.
 - Calling `pending-save` from n8n would create real `order_items`; keep `AUTO_SAVE=false`.
 - Calling LINE reply/push would affect real users; keep `LINE_REPLY=false`.
-
