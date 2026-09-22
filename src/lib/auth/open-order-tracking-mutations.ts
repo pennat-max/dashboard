@@ -1,11 +1,10 @@
 /**
- * Order Tracking API — โดยค่าเริ่มต้นอนุญาตบันทึกโดยไม่ต้องมี Supabase session (ใช้งานได้ทันที)
- * ปิดการทำงานแบบเปิด — ตั้ง `OPEN_ORDER_TRACKING_MUTATIONS=false` แล้วใช้ login + role ตามปกติ
+ * Order Tracking API — ปิดการเขียนแบบไม่ล็อกอินเป็นค่าเริ่มต้น
+ * เปิดเฉพาะกรณีที่ตั้ง `OPEN_ORDER_TRACKING_MUTATIONS=true` โดยเจตนาเท่านั้น
  */
 export function isOpenOrderTrackingMutations(): boolean {
   const v = process.env.OPEN_ORDER_TRACKING_MUTATIONS?.trim();
-  if (v === undefined || v === "") return true;
+  if (v === undefined || v === "") return false;
   const lower = v.toLowerCase();
-  if (lower === "false" || lower === "0" || lower === "off" || lower === "no") return false;
-  return true;
+  return lower === "true" || lower === "1" || lower === "on" || lower === "yes";
 }

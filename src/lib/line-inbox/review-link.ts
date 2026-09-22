@@ -1,4 +1,8 @@
-export const LINE_ORDER_REVIEW_URL = "https://used-car-export-dashboard.vercel.app/m/orders";
+const APP_BASE_URL =
+  process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, "") ||
+  "https://vigo4u-operations.pennat.chatgpt.site";
+
+export const LINE_ORDER_REVIEW_URL = `${APP_BASE_URL}/m/orders`;
 
 export type LineReviewCarLabelInput = {
   plate?: string | null;

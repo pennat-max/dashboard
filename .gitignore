@@ -15,6 +15,12 @@
 
 # production
 /build
+/dist/
+/.vinext/
+/.wrangler/
+/.sites-runtime/
+/outputs/
+/work/
 
 # misc
 .DS_Store

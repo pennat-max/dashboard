@@ -1,8059 +1,3809 @@
-"use client";
-
-import React, {
-  Fragment,
-  useCallback,
-  useId,
-  useMemo,
-  useDeferredValue,
-  useRef,
-  useState,
-  useEffect,
-  useLayoutEffect,
-  startTransition,
-} from "react";
-import { flushSync } from "react-dom";
-import { createClient } from "@supabase/supabase-js";
-import Link from "next/link";
-import Image from "next/image";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import type { Car } from "@/types/car";
-import type { OrderTrackingSaleStatusSummary, OrderTrackingSummarySnapshot } from "@/lib/data/cars";
-import {
-  ORDER_ITEMS_TABLE_NAME,
-  ORDER_TASK_UPDATES_TABLE_NAME,
-  type OrderItemFilterIndexLite,
-} from "@/lib/data/orders";
-import {
-  ORDER_TRACKING_SALE_CODES,
-  normalizeSaleAssigneesMap,
-  resolveSaleStaffForOrder,
-} from "@/lib/orders/sale-assignees-shared";
-import { isStaffRosterNameExcluded, normalizeStaffRosterNames } from "@/lib/orders/staff-roster-shared";
-import { vehicleMatchesOrderSearch } from "@/lib/orders/vehicle-search";
-import { buildOrderTrackingShareOpenUrl } from "@/lib/line/order-tracking-share-url";
-import {
-  LineInboxBridgeProvider,
-  LineInboxFloatingNavigator,
-  LineInboxCarAiSection,
-  type LineInboxPickCarPayload,
-} from "@/components/orders/mobile-v2/line-inbox-ai-toolbar";
-import {
-  ORDER_ITEM_REF_PIC_EN,
-  ORDER_ITEM_TAM_ROOP_TOKEN,
-  orderItemLabelContainsTamRoop,
-  parseEnglishPhotoRefMarkers,
-  stripEnglishPhotoRefMarkers,
-} from "@/lib/orders/order-item-tam-roop-token";
-import {
-  ORDER_TRACKING_ITEM_STATUSES,
-  DEFAULT_STORE_DEPOSIT_MAX_DAYS,
-  defaultItemStatusPoliciesNormalized,
-  normalizeItemStatusPoliciesRaw,
-  normalizedItemPoliciesToStoredJson,
-  arrivalDueCalendarDaysUntilBangkok,
-  matchesDueTodayChip,
-  storeDepositEffectiveMaxDays,
-  storeDepositRemainingLabel,
-  storeDepositTone,
-  slaExceededInStatus,
-  type ItemStatusPoliciesNormalized,
-  type ResolvedItemRowStatusPolicy,
-} from "@/lib/orders/item-status-policies";
-
-/** alias ‚Äî ‡∏ü‡∏±‡∏á‡∏Å‡πå‡∏ä‡∏±‡∏ô‡πÉ‡∏ô lib ‡πÄ‡∏î‡∏µ‡∏¢‡∏ß‡∏Å‡∏±‡∏ö‡πÄ‡∏î‡∏¥‡∏°‡∏ó‡∏µ‡πà‡πÄ‡∏Ñ‡∏¢‡∏Æ‡∏≤‡∏£‡πå‡∏î‡πÇ‡∏Ñ‡πâ‡∏î‡πÑ‡∏ß‡πâ‡∏Ç‡πâ‡∏≤‡∏á‡∏•‡πà‡∏≤‡∏á */
-const calendarDaysUntilDueBangkok = arrivalDueCalendarDaysUntilBangkok;
-
-const ORDER_ITEM_TAM_ROOP_TOKEN_REGEX =
-  /(‡∏ï‡∏≤‡∏°‡∏£‡∏π‡∏õ|‡∏ï‡∏≤‡∏°‡∏†‡∏≤‡∏û|ref\s*pic|as\s+photo|see\s+photo)/gi;
-
-const SALE_STATUSES = ["‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î", "‡∏à‡∏≠‡∏á", "‡∏£‡∏≠‡∏™‡πà‡∏á", "‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß", "‡∏ß‡πà‡∏≤‡∏á"] as const;
-const ITEM_STATUSES = ORDER_TRACKING_ITEM_STATUSES;
-const WAITING = ["‡πÄ‡∏ä‡πá‡∏Ñ", "‡∏ï‡πâ‡∏≠‡∏á‡∏™‡∏±‡πà‡∏á", "‡∏™‡∏±‡πà‡∏á"] as const;
-const DONE = ["‡∏°‡∏µ", "‡∏°‡∏≤", "‡∏£‡∏ñ‡∏ô‡∏≠‡∏Å", "‡∏ä‡πà‡∏≤‡∏á‡∏ô‡∏≠‡∏Å", "‡∏à‡∏ö"] as const;
-const STATUS_ACTION_NOTE = "__NOTE__";
-const SALE_FILTER_UNASSIGNED = "__sale_unassigned__";
-const KNOWN_SALE_CODES = new Set<string>(ORDER_TRACKING_SALE_CODES.map((code) => code.toUpperCase()));
-/** ‡∏Ñ‡∏ß‡∏≤‡∏°‡∏Å‡∏ß‡πâ‡∏≤‡∏á‡∏õ‡∏∏‡πà‡∏°‡∏ï‡πà‡∏≠‡∏ä‡πà‡∏≠‡∏á‡πÄ‡∏°‡∏∑‡πà‡∏≠‡∏õ‡∏±‡∏î‡∏ã‡πâ‡∏≤‡∏¢‡πÄ‡∏õ‡∏¥‡∏î (px) ‚Äî ‡∏™‡∏≤‡∏°‡∏ä‡πà‡∏≠‡∏á = ‡πÄ‡∏û‡∏¥‡πà‡∏°‡∏á‡∏≤‡∏ô ¬∑ ‡πÄ‡∏û‡∏¥‡πà‡∏°‡πÅ‡∏ñ‡∏ß ¬∑ ‡∏•‡∏ö */
-const SWIPE_ROW_ACTION_PX = 80;
-/** ‡∏£‡∏∞‡∏¢‡∏∞‡πÄ‡∏õ‡∏¥‡∏î‡πÄ‡∏ï‡πá‡∏°‡πÄ‡∏°‡∏∑‡πà‡∏≠‡∏õ‡∏±‡∏î‡∏ã‡πâ‡∏≤‡∏¢ (‡∏™‡∏≤‡∏°‡∏õ‡∏∏‡πà‡∏°‡πÄ‡∏ó‡πà‡∏≤‡∏Å‡∏±‡∏ô) */
-const SWIPE_ROW_LEFT_OPEN_PX = SWIPE_ROW_ACTION_PX * 3;
-/** ‡∏à‡∏≤‡∏Å‡∏õ‡∏¥‡∏î ‚Üí ‡∏õ‡∏±‡∏î‡∏ã‡πâ‡∏≤‡∏¢‡πÄ‡∏Å‡∏¥‡∏ô‡∏™‡∏±‡∏î‡∏™‡πà‡∏ß‡∏ô‡∏ô‡∏µ‡πâ‡πÅ‡∏•‡πâ‡∏ß‡∏õ‡∏•‡πà‡∏≠‡∏¢ = ‡∏™‡πÅ‡∏ô‡∏õ‡πÄ‡∏õ‡∏¥‡∏î (‡∏ï‡πà‡∏≥ = ‡∏õ‡∏±‡∏î‡∏ô‡∏¥‡∏î‡πÄ‡∏î‡∏µ‡∏¢‡∏ß‡∏Å‡πá‡∏•‡πá‡∏≠‡∏Å‡πÑ‡∏î‡πâ) */
-const SWIPE_ROW_SNAP_RATIO = 0.09;
-/** ‡πÅ‡∏¢‡∏Å‡∏ó‡∏¥‡∏®‡∏ó‡∏≤‡∏á‡∏•‡∏≤‡∏Å‡πÅ‡∏ô‡∏ß‡∏ô‡∏≠‡∏ô vs ‡πÄ‡∏•‡∏∑‡πà‡∏≠‡∏ô‡∏´‡∏ô‡πâ‡∏≤‡πÅ‡∏ô‡∏ß‡∏ï‡∏±‡πâ‡∏á ‚Äî ‡∏•‡∏î‡∏Å‡∏≤‡∏£‡πÅ‡∏¢‡πà‡∏á‡∏™‡∏Å‡∏≠‡∏£‡πå‡∏• */
-const SWIPE_TOUCH_SLOP_PX = 12;
-/** ‡πÅ‡∏ñ‡∏ß‡∏£‡πà‡∏≤‡∏á intake ‡∏ó‡∏µ‡πà‡∏≠‡∏¢‡∏π‡πà‡∏´‡∏•‡∏±‡∏á‡πÅ‡∏ñ‡∏ß‡∏™‡∏∏‡∏î‡∏ó‡πâ‡∏≤‡∏¢‡∏Ç‡∏≠‡∏á‡∏Å‡∏≤‡∏£‡πå‡∏î (‡∏õ‡∏∏‡πà‡∏°‡πÄ‡∏û‡∏¥‡πà‡∏°‡πÅ‡∏ñ‡∏ß‡∏ß‡πà‡∏≤‡∏á‡πÉ‡∏ô‡∏ü‡∏≠‡∏£‡πå‡∏°) */
-const INLINE_INSERT_AFTER_END = "__inline_after_last__";
-
-type InlineDraftRow = {
-  id: string;
-  name: string;
-  duplicate: boolean;
-  /** ‡∏ï‡∏¥‡πä‡∏Å‡πÄ‡∏û‡∏∑‡πà‡∏≠‡∏™‡πà‡∏á‡πÄ‡∏Ç‡πâ‡∏≤‡πÄ‡∏û‡∏¥‡πà‡∏°‡∏á‡∏≤‡∏ô‡∏à‡∏£‡∏¥‡∏á */
-  selected: boolean;
-  assignee: string;
-  status: ItemStatusValue;
-  insertAfterUid: string;
-};
-type UiLang = "th" | "en";
-/** ‡∏î‡∏∂‡∏á‡∏•‡∏á‡∏£‡∏µ‡πÄ‡∏ü‡∏£‡∏ä ‚Äî ‡∏£‡∏∞‡∏¢‡∏∞‡∏î‡∏∂‡∏á (‡∏´‡∏•‡∏±‡∏á‡∏•‡∏î‡πÅ‡∏£‡∏á) ‡∏ó‡∏µ‡πà‡∏õ‡∏•‡πà‡∏≠‡∏¢‡πÅ‡∏•‡πâ‡∏ß‡πÉ‡∏´‡πâ refresh */
-const PTR_RELEASE_DAMPED_PX = 28;
-const STAFF_ROSTER_STORAGE_KEY = "vigo4u.orderTracking.staffRoster";
-const SALE_ASSIGNEES_STORAGE_KEY = "vigo4u.orderTracking.saleAssignees";
-const ITEM_STATUS_ROSTER_STORAGE_KEY = "vigo4u.orderTracking.itemStatusRoster";
-const ITEM_STATUS_LABELS_STORAGE_KEY = "vigo4u.orderTracking.itemStatusLabels";
-const ITEM_STATUS_POLICIES_STORAGE_KEY = "vigo4u.orderTracking.itemStatusPolicies.v1";
-const STAFF_ROSTER_API_PATH = "/api/m/order-tracking/staff-roster";
-const ORDER_TRACKING_CARD_DETAILS_API_PATH = "/api/m/order-tracking/card-details";
-const ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT = 20;
-const ORDER_TRACKING_EXPERIMENT_INCREMENT = 10;
-const ORDER_TRACKING_EXPERIMENT_AHEAD_BUFFER = 20;
-/** ‡∏ä‡∏¥‡∏õ‡∏Å‡∏£‡∏≠‡∏á‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏ó‡∏µ‡πà‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏ä‡∏∑‡πà‡∏≠‡∏û‡∏ô‡∏±‡∏Å‡∏á‡∏≤‡∏ô ‚Äî ‡∏Ñ‡πà‡∏≤‡∏†‡∏≤‡∏¢‡πÉ‡∏ô ‡πÑ‡∏°‡πà‡∏ä‡∏ô‡∏Å‡∏±‡∏ö‡∏ä‡∏∑‡πà‡∏≠‡∏à‡∏£‡∏¥‡∏á */
-const STAFF_FILTER_UNASSIGNED = "__UNASSIGNED__";
-const STAFF_FILTER_UNASSIGNED_LABEL = "‡πÑ‡∏°‡πà‡∏£‡∏∞‡∏ö‡∏∏‡∏ä‡∏∑‡πà‡∏≠";
-/** ‡∏Å‡∏£‡∏≠‡∏á‡∏ï‡∏≤‡∏°‡∏£‡∏≠‡∏ö‡∏™‡πà‡∏á (‡∏Ñ‡πà‡∏≤ booked_shipping) ‚Äî token = prefix + shipGroupKey(ship) */
-const STAFF_FILTER_BOOKED_SHIP_PREFIX = "__BOOKED_SHIP__";
-/** ‡∏Å‡∏£‡∏≠‡∏á‡∏ï‡∏≤‡∏°‡∏ä‡∏∑‡πà‡∏≠‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤ (‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏Ç‡∏≤‡∏¢ ‡∏à‡∏≠‡∏á) ‚Äî token = prefix + buyerGroupKey(buyer) */
-const STAFF_FILTER_BOOKED_BUYER_PREFIX = "__BOOKED_BUYER__";
-/** ‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß: ‡∏Å‡∏£‡∏≠‡∏á‡∏ï‡∏≤‡∏° cars.shipped (‡∏ß‡πà‡∏≤‡∏á = ‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏Ç‡πâ‡∏≠‡∏Ñ‡∏ß‡∏≤‡∏°) */
-const STAFF_FILTER_SOLD_SHIPPED_EMPTY = "__SOLD_SHIPPED_EMPTY__";
-const STAFF_FILTER_SOLD_SHIPPED_PREFIX = "__SOLD_SHIP__";
-/** ‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß: ‡∏Å‡∏£‡∏≠‡∏á‡∏ï‡∏≤‡∏° model year (‡∏ß‡πà‡∏≤‡∏á = ‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏õ‡∏µ‡πÉ‡∏ô‡∏£‡∏∞‡∏ö‡∏ö) */
-const STAFF_FILTER_SOLD_MODEL_YEAR_EMPTY = "__SOLD_MY_EMPTY__";
-const STAFF_FILTER_SOLD_MODEL_YEAR_PREFIX = "__SOLD_MY__";
-/** ‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏Ç‡∏≤‡∏¢ ‡∏ß‡πà‡∏≤‡∏á: ‡∏Å‡∏£‡∏≠‡∏á‡∏ï‡∏≤‡∏° model year (‡πÅ‡∏¢‡∏Å‡∏à‡∏≤‡∏Å‡∏ä‡∏∏‡∏î‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß) */
-const STAFF_FILTER_VACANT_MODEL_YEAR_EMPTY = "__VAC_MY_EMPTY__";
-const STAFF_FILTER_VACANT_MODEL_YEAR_PREFIX = "__VAC_MY__";
-/** legacy ‡∏ä‡∏¥‡∏õ‡∏£‡∏ß‡∏° (‡πÄ‡∏î‡∏¥‡∏°) ‚Äî ‡∏¢‡∏±‡∏á‡∏£‡∏≠‡∏á‡∏£‡∏±‡∏ö‡πÉ‡∏ô state ‡πÅ‡∏ï‡πà UI ‡πÉ‡∏ä‡πâ‡∏ä‡∏¥‡∏õ‡∏ï‡πà‡∏≠‡∏£‡∏≠‡∏ö */
-const STAFF_FILTER_BOOKED_SHIPPING = "__BOOKED_SHIPPING__";
-const ITEM_STATUS_PREFS_API_PATH = "/api/m/order-tracking/item-status-prefs";
-const ORDER_PHOTOS_LIST_API_PATH = "/api/m/order-photos/list";
-const ORDER_PHOTOS_UPLOAD_API_PATH = "/api/m/order-photos/upload";
-const ORDER_PHOTOS_DELETE_API_PATH = "/api/m/order-photos/delete";
-/** ‡∏î‡∏∂‡∏á‡∏£‡∏π‡∏õ‡∏à‡∏≤‡∏Å URL ‡∏ö‡∏ô‡πÄ‡∏ã‡∏¥‡∏£‡πå‡∏ü‡πÄ‡∏ß‡∏≠‡∏£‡πå ‚Äî ‡πÉ‡∏ä‡πâ‡πÄ‡∏°‡∏∑‡πà‡∏≠‡∏•‡∏≤‡∏Å‡∏à‡∏≤‡∏Å LINE ‡πÄ‡∏î‡∏™‡∏Å‡πå‡∏ó‡πá‡∏≠‡∏õ‡πÑ‡∏î‡πâ‡πÅ‡∏ï‡πà‡πÄ‡∏õ‡πá‡∏ô‡∏•‡∏¥‡∏á‡∏Å‡πå ‡πÑ‡∏°‡πà‡πÉ‡∏ä‡πà‡πÑ‡∏ü‡∏•‡πå */
-const ORDER_PHOTOS_FETCH_URL_API_PATH = "/api/m/order-photos/fetch-url";
-const ORDER_ITEMS_TRANSLATE_CARD_API_PATH = "/api/m/order-items/translate-card";
-const ORDER_ITEMS_TRANSLATE_ALL_API_PATH = "/api/m/order-items/translate-all";
-const ORDER_TRACKING_TRANSLATE_CAR_SUMMARY_API_PATH = "/api/m/order-tracking/translate-car-summary";
-const ORDER_TRACKING_UI_LANG_STORAGE_KEY = "vigo4u.orderTracking.uiLang";
-
-/** LINE / Chrome ‡∏´‡∏•‡∏≤‡∏¢‡∏Å‡∏£‡∏ì‡∏µ‡πÉ‡∏´‡πâ‡πÄ‡∏õ‡πá‡∏ô URL ‡πÉ‡∏ô text ‡πÑ‡∏°‡πà‡πÉ‡∏ä‡πà File */
-function extractImageUrlsFromDataTransfer(dt: DataTransfer | null): string[] {
-  if (!dt) return [];
-  const out = new Set<string>();
-  const tryAddHttps = (raw: string) => {
-    const m = raw.match(/https:\/\/[^\s"'<>`)\]]+/i);
-    if (!m?.[0]) return;
-    let u = m[0].replace(/[,);]+$/g, "");
-    u = u.replace(/&amp;/g, "&");
-    try {
-      if (new URL(u).protocol !== "https:") return;
-      out.add(u);
-    } catch {
-      /* ignore */
-    }
-  };
-
-  try {
-    const types = dt.types ? Array.from(dt.types as Iterable<string>) : [];
-    for (const type of types) {
-      if (!type || type === "Files") continue;
-      let data = "";
-      try {
-        data = dt.getData(type);
-      } catch {
-        continue;
-      }
-      if (!data) continue;
-      const tl = type.toLowerCase();
-      /** Chrome ‡∏ö‡∏≤‡∏á‡πÅ‡∏´‡∏•‡πà‡∏á ‡πÄ‡∏ä‡πà‡∏ô ‡∏•‡∏≤‡∏Å‡∏à‡∏≤‡∏Å‡πÅ‡∏≠‡∏õ/‡πÄ‡∏ß‡πá‡∏ö */
-      if (tl.includes("downloadurl")) {
-        const lines = data.split(/\n/).map((s) => s.trim()).filter(Boolean);
-        const last = lines[lines.length - 1];
-        if (last) tryAddHttps(last);
-        tryAddHttps(data);
-      }
-      if (type === "text/uri-list" || tl.includes("uri-list")) {
-        for (const line of data.split(/\r?\n/)) {
-          const u = line.trim();
-          if (!u || u.startsWith("#")) continue;
-          tryAddHttps(u.split("\t")[0] ?? u);
-        }
-      }
-      if (type === "text/plain") {
-        const matches = data.match(/https:\/\/[^\s<>"']+/gi) ?? [];
-        for (const x of matches) tryAddHttps(x);
-      }
-      if (type === "text/html") {
-        const matches = data.match(/https:\/\/[^"'\\s>]+/gi) ?? [];
-        for (const x of matches) {
-          /** ‡∏•‡∏î false positive ‚Äî ‡∏¢‡∏≠‡∏°‡∏ú‡∏π‡∏Å‡πÄ‡∏Ñ‡∏£‡∏∑‡∏≠‡∏Ç‡πà‡∏≤‡∏¢‡∏¢‡∏≠‡∏î‡∏ô‡∏¥‡∏¢‡∏° + ‡∏ô‡∏≤‡∏°‡∏™‡∏Å‡∏∏‡∏•‡∏£‡∏π‡∏õ */
-          const clean = x.replace(/&amp;/g, "&");
-          if (
-            /line-scdn|line\.me|line-apps|obs\.line|imgur|fbcdn|instagram|googleusercontent/i.test(clean) ||
-            /\.(jpe?g|png|webp|gif)(\?|#|$|[&])/i.test(clean)
-          ) {
-            tryAddHttps(clean);
-          }
-        }
-      }
-    }
-    /** ‡∏ñ‡πâ‡∏≤‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡πÑ‡∏î‡πâ URL ‚Äî ‡πÇ‡∏´‡∏•‡∏î‡∏ó‡∏∏‡∏Å type ‡πÅ‡∏•‡πâ‡∏ß‡∏î‡∏∂‡∏á https ‡∏ó‡∏µ‡πà‡∏ô‡πà‡∏≤‡∏à‡∏∞‡πÄ‡∏õ‡πá‡∏ô‡∏£‡∏π‡∏õ (‡∏´‡∏•‡∏≤‡∏¢‡πÅ‡∏≠‡∏õ‡∏£‡∏∞‡∏ö‡∏∏ MIME ‡∏õ‡∏£‡∏∞‡∏´‡∏•‡∏≤‡∏î) */
-    if (out.size === 0) {
-      for (const type of types) {
-        if (!type || type === "Files") continue;
-        try {
-          const data = dt.getData(type);
-          if (!data || !data.includes("https://")) continue;
-          const ms = data.match(/https:\/\/[^\s"'<>`)\]]+/gi) ?? [];
-          for (const x of ms) {
-            if (/line-scdn|obs\.line|line\.me|line-apps/i.test(x)) tryAddHttps(x);
-            else if (/\.(jpe?g|png|webp|gif)(\?|#|$|[&])/i.test(x)) tryAddHttps(x);
-          }
-        } catch {
-          /* ignore */
-        }
-      }
-    }
-  } catch {
-    /* ignore */
-  }
-
-  return Array.from(out);
-}
-
-function isUnauthorizedApiError(message: string): boolean {
-  const m = message.trim();
-  return m === "Unauthorized" || m.startsWith("Unauthorized");
-}
-
-function parseStaffRosterJson(raw: string | null): string[] | null {
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    const names = normalizeStaffRosterNames(parsed);
-    return names.length ? names : null;
-  } catch {
-    return null;
-  }
-}
-
-function readStaffRosterFromStorage(): string[] {
-  if (typeof window === "undefined") return [];
-  return parseStaffRosterJson(localStorage.getItem(STAFF_ROSTER_STORAGE_KEY)) ?? [];
-}
-
-function writeStaffRosterToStorage(names: string[]) {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.setItem(STAFF_ROSTER_STORAGE_KEY, JSON.stringify(names));
-  } catch {
-    /* ignore quota / private mode */
-  }
-}
-
-function readSaleAssigneesFromStorage(): Record<string, string> {
-  if (typeof window === "undefined") return {};
-  try {
-    const raw = localStorage.getItem(SALE_ASSIGNEES_STORAGE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as unknown;
-    return normalizeSaleAssigneesMap(parsed) as Record<string, string>;
-  } catch {
-    return {};
-  }
-}
-
-function writeSaleAssigneesToStorage(map: Record<string, string>) {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.setItem(SALE_ASSIGNEES_STORAGE_KEY, JSON.stringify(map));
-  } catch {
-    /* ignore */
-  }
-}
-/** ‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡πÄ‡∏ã‡∏•‡∏•‡πå‡πÄ‡∏û‡∏¥‡πà‡∏°‡∏à‡∏≤‡∏Å‡∏ä‡∏µ‡∏ï ‚Äî ALL + ‡∏£‡∏´‡∏±‡∏™‡∏à‡∏≤‡∏Å sale-assignees-shared */
-const ALL_SALES = ["ALL", ...ORDER_TRACKING_SALE_CODES] as const;
-const ORDERS_INITIAL_PAGE_SIZE = 20;
-const ORDERS_PAGE_INCREMENT = 10;
-/** ‡∏Ñ‡∏ß‡∏≤‡∏°‡∏¢‡∏≤‡∏ß‡∏™‡∏π‡∏á‡∏™‡∏∏‡∏î‡∏ä‡πà‡∏≠‡∏á‡∏Ñ‡πâ‡∏ô‡∏´‡∏≤ (‡∏û‡∏¥‡∏°‡∏û‡πå / ‡∏ß‡∏≤‡∏á‡∏à‡∏≤‡∏Å LINE / ‡∏Ñ‡∏•‡∏¥‡∏õ‡∏ö‡∏≠‡∏£‡πå‡∏î) */
-const VEHICLE_SEARCH_MAX = 48;
-const SALE_STATUS_PRIORITY: Record<SaleStatusValue, number> = {
-  ‡∏£‡∏≠‡∏™‡πà‡∏á: 0,
-  ‡∏à‡∏≠‡∏á: 1,
-  ‡∏ß‡πà‡∏≤‡∏á: 2,
-  ‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß: 3,
-};
-
-type SaleValue = string;
-type SaleStatusValue = Exclude<(typeof SALE_STATUSES)[number], "‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î">;
-type SaleStatusFilterValue = (typeof SALE_STATUSES)[number];
-type ItemStatusValue = (typeof ITEM_STATUSES)[number];
-const ITEM_STATUS_DUE_TODAY = "‡∏°‡∏≤‡∏ß‡∏±‡∏ô‡∏ô‡∏µ‡πâ" as const;
-type ItemStatusFilterValue = ItemStatusValue | typeof ITEM_STATUS_DUE_TODAY;
-const ITEM_STATUS_ORDER: ItemStatusValue[] = [
-  "‡πÄ‡∏ä‡πá‡∏Ñ",
-  "‡∏°‡∏µ",
-  "‡∏ï‡πâ‡∏≠‡∏á‡∏™‡∏±‡πà‡∏á",
-  "‡∏™‡∏±‡πà‡∏á",
-  "‡∏°‡∏≤",
-  "‡∏£‡∏ñ‡∏ô‡∏≠‡∏Å",
-  "‡∏ä‡πà‡∏≤‡∏á‡∏ô‡∏≠‡∏Å",
-  "‡∏ù‡∏≤‡∏Å‡∏™‡πÇ‡∏ï‡∏£‡πå",
-  "‡∏ù‡∏≤‡∏Å‡∏Å‡∏±‡∏ö‡∏£‡∏ñ",
-  "‡∏à‡∏ö",
-];
-
-/** roster ‡∏ß‡πà‡∏≤‡∏á = ‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏Å‡∏≥‡∏´‡∏ô‡∏î‡πÄ‡∏≠‡∏á ‚Üí ‡πÅ‡∏™‡∏î‡∏á‡∏ä‡∏¥‡∏õ‡∏Ñ‡∏£‡∏ö‡∏ï‡∏≤‡∏°‡∏•‡∏≥‡∏î‡∏±‡∏ö‡∏°‡∏≤‡∏ï‡∏£‡∏ê‡∏≤‡∏ô */
-function effectiveItemStatusRoster(roster: ItemStatusValue[]): ItemStatusValue[] {
-  return roster.length > 0 ? roster : [...ITEM_STATUS_ORDER];
-}
-
-/** ‡∏ß‡πà‡∏≤‡∏á‡πÉ‡∏ô input = ‡∏õ‡∏¥‡∏î‡∏Ñ‡πà‡∏≤‡∏ó‡∏µ‡πà‡∏ï‡πâ‡∏≠‡∏á‡∏Å‡∏≤‡∏£ (null); ‡∏≠‡∏¢‡πà‡∏≤‡∏ô‡∏±‡∏ö NaN */
-function parseOptionalPolicyDay(raw: string): number | null {
-  const t = String(raw).trim();
-  if (!t) return null;
-  const n = Math.round(Number(t));
-  if (!Number.isFinite(n)) return null;
-  return Math.min(730, Math.max(1, n));
-}
-
-const ITEM_STATUS_EN_LABELS: Record<ItemStatusValue, string> = {
-  ‡πÄ‡∏ä‡πá‡∏Ñ: "Check",
-  ‡∏°‡∏µ: "In stock",
-  ‡∏ï‡πâ‡∏≠‡∏á‡∏™‡∏±‡πà‡∏á: "Need order",
-  ‡∏™‡∏±‡πà‡∏á: "Ordered",
-  ‡∏°‡∏≤: "Received",
-  ‡∏£‡∏ñ‡∏ô‡∏≠‡∏Å: "Outsource car",
-  ‡∏ä‡πà‡∏≤‡∏á‡∏ô‡∏≠‡∏Å: "Outsource garage",
-  ‡∏ù‡∏≤‡∏Å‡∏™‡πÇ‡∏ï‡∏£‡πå: "Store hold",
-  ‡∏ù‡∏≤‡∏Å‡∏Å‡∏±‡∏ö‡∏£‡∏ñ: "Hold with car",
-  ‡∏à‡∏ö: "Done",
-};
-
-const SALE_STATUS_EN_LABELS: Record<SaleStatusFilterValue, string> = {
-  ‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î: "All",
-  ‡∏à‡∏≠‡∏á: "Booked",
-  ‡∏£‡∏≠‡∏™‡πà‡∏á: "Waiting Ship",
-  ‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß: "Shipped",
-  ‡∏ß‡πà‡∏≤‡∏á: "Available",
-};
-
-function displayItemStatusLabel(st: ItemStatusValue, uiLang: UiLang): string {
-  return uiLang === "en" ? ITEM_STATUS_EN_LABELS[st] ?? st : st;
-}
-
-function displaySaleStatusLabel(st: SaleStatusFilterValue, uiLang: UiLang): string {
-  return uiLang === "en" ? SALE_STATUS_EN_LABELS[st] ?? st : st;
-}
-
-/** ‡∏ä‡∏¥‡∏õ‡∏Å‡∏£‡∏≠‡∏á‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏ó‡∏µ‡πà‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏ä‡∏∑‡πà‡∏≠‡∏û‡∏ô‡∏±‡∏Å‡∏á‡∏≤‡∏ô ‚Äî ‡πÅ‡∏™‡∏î‡∏á EN ‡πÄ‡∏°‡∏∑‡πà‡∏≠ UI ‡πÄ‡∏õ‡πá‡∏ô‡∏≠‡∏±‡∏á‡∏Å‡∏§‡∏© (‡∏Ñ‡∏µ‡∏¢‡πå‡∏†‡∏≤‡∏¢‡πÉ‡∏ô‡πÉ‡∏ä‡πâ STAFF_FILTER_UNASSIGNED) */
-function displayStaffFilterUnassignedLabel(uiLang: UiLang): string {
-  return uiLang === "en" ? "Unassigned" : STAFF_FILTER_UNASSIGNED_LABEL;
-}
-
-/** ‡∏•‡∏≥‡∏î‡∏±‡∏ö‡∏ä‡∏¥‡∏õ‡πÉ‡∏ô‡∏ï‡∏±‡∏ß‡∏Å‡∏£‡∏≠‡∏á‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ ‚Äî ‡∏Ñ‡∏á‡∏ó‡∏µ‡πà‡∏ï‡∏≤‡∏°‡πÅ‡∏ñ‡∏ß‡∏î‡πâ‡∏≤‡∏ô‡∏ö‡∏ô (‡πÑ‡∏°‡πà‡∏ï‡∏≤‡∏°‡∏•‡∏≥‡∏î‡∏±‡∏ö‡∏•‡∏≤‡∏Å‡πÉ‡∏ô‡∏à‡∏±‡∏î‡∏Å‡∏≤‡∏£‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞) */
-function sortItemStatusesForFilterToolbar(statuses: ItemStatusValue[]): ItemStatusValue[] {
-  const rank = (s: ItemStatusValue) => {
-    const i = ITEM_STATUS_ORDER.indexOf(s);
-    return i >= 0 ? i : ITEM_STATUS_ORDER.length + 1;
-  };
-  return [...statuses].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b, "th"));
-}
-
-/**
- * ‡πÇ‡∏ó‡∏ô‡∏ä‡∏¥‡∏õ‡∏ï‡∏±‡∏ß‡∏Å‡∏£‡∏≠‡∏á‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£
- * ‡πÄ‡∏ä‡πá‡∏Ñ ‡πÄ‡∏´‡∏•‡∏∑‡∏≠‡∏á ¬∑ ‡∏°‡∏µ ‡πÄ‡∏Ç‡∏µ‡∏¢‡∏ß ¬∑ ‡∏™‡∏±‡πà‡∏á ‡∏™‡πâ‡∏° ¬∑ ‡∏°‡∏≤ = ‡∏£‡∏±‡∏ö‡πÅ‡∏•‡πâ‡∏ß (‡πÄ‡∏Ç‡∏µ‡∏¢‡∏ß‡∏≠‡∏µ‡∏Å‡πÇ‡∏ó‡∏ô) ¬∑ ‡∏à‡∏ö ‡∏ü‡πâ‡∏≤ ¬∑ ‡∏£‡∏ñ‡∏ô‡∏≠‡∏Å/‡∏ä‡πà‡∏≤‡∏á‡∏ô‡∏≠‡∏Å ‡πÄ‡∏Ç‡∏µ‡∏¢‡∏ß‡πÄ‡∏Ç‡πâ‡∏° ¬∑ ‡∏ù‡∏≤‡∏Å‡∏™‡πÇ‡∏ï‡∏£‡πå ‡πÄ‡∏ó‡∏≤
- */
-function toolbarItemStatusFilterChipClasses(s: ItemStatusFilterValue, active: boolean): string {
-  if (s === ITEM_STATUS_DUE_TODAY) {
-    return active
-      ? "bg-red-600 text-white shadow-sm ring-1 ring-red-500/40"
-      : "bg-rose-100 text-red-800 ring-1 ring-rose-300/90 hover:bg-rose-200/90";
-  }
-  if (s === "‡πÄ‡∏ä‡πá‡∏Ñ") {
-    return active
-      ? "bg-amber-500 text-white shadow-sm ring-1 ring-amber-600/45"
-      : "bg-amber-100 text-amber-950 ring-1 ring-amber-300/90 hover:bg-amber-200/90";
-  }
-  if (s === "‡∏°‡∏µ") {
-    return active
-      ? "bg-emerald-600 text-white shadow-sm ring-1 ring-emerald-500/40"
-      : "bg-emerald-100 text-emerald-900 ring-1 ring-emerald-300/85 hover:bg-emerald-200/90";
-  }
-  if (s === "‡∏™‡∏±‡πà‡∏á") {
-    return active
-      ? "bg-orange-600 text-white shadow-sm ring-1 ring-orange-500/40"
-      : "bg-orange-100 text-orange-950 ring-1 ring-orange-300/90 hover:bg-orange-200/90";
-  }
-  // ‡∏Ñ‡∏ß‡∏≤‡∏°‡∏´‡∏°‡∏≤‡∏¢‡∏ó‡∏≤‡∏á‡∏£‡πâ‡∏≤‡∏ô ‚âà „Äå‡∏£‡∏±‡∏ö‡πÅ‡∏•‡πâ‡∏ß„Äç ‚Äî ‡πÇ‡∏Ñ‡πâ‡∏î‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏Ñ‡∏∑‡∏≠ „Äå‡∏°‡∏≤„Äç
-  if (s === "‡∏°‡∏≤") {
-    return active
-      ? "bg-green-600 text-white shadow-sm ring-1 ring-green-600/35"
-      : "bg-green-100 text-green-900 ring-1 ring-green-300/85 hover:bg-green-200/90";
-  }
-  if (s === "‡∏à‡∏ö") {
-    return active
-      ? "bg-sky-600 text-white shadow-sm ring-1 ring-sky-500/35"
-      : "bg-sky-100 text-sky-900 ring-1 ring-sky-300/85 hover:bg-sky-200/90";
-  }
-  if (s === "‡∏£‡∏ñ‡∏ô‡∏≠‡∏Å" || s === "‡∏ä‡πà‡∏≤‡∏á‡∏ô‡∏≠‡∏Å") {
-    return active
-      ? "bg-emerald-900 text-white shadow-sm ring-1 ring-emerald-950/50"
-      : "bg-emerald-200 text-emerald-950 ring-1 ring-emerald-700/35 hover:bg-emerald-300/90";
-  }
-  if (s === "‡∏ù‡∏≤‡∏Å‡∏™‡πÇ‡∏ï‡∏£‡πå") {
-    return active
-      ? "bg-gray-700 text-white shadow-sm ring-1 ring-gray-800/45"
-      : "bg-gray-200 text-gray-900 ring-1 ring-gray-400/75 hover:bg-gray-300/90";
-  }
-  return active ? "bg-slate-950 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200/70";
-}
-
-const ALLOWED_ITEM_STATUS_SET = new Set<string>(ITEM_STATUSES);
-type ItemStatusLabelMap = Partial<Record<ItemStatusValue, string>>;
-
-function normalizeItemStatusRoster(input: unknown): ItemStatusValue[] {
-  if (!Array.isArray(input)) return [];
-  const seen = new Set<ItemStatusValue>();
-  const unique: ItemStatusValue[] = [];
-  for (const x of input) {
-    const s = String(x).trim();
-    if (!ALLOWED_ITEM_STATUS_SET.has(s)) continue;
-    const st = s as ItemStatusValue;
-    if (seen.has(st)) continue;
-    seen.add(st);
-    unique.push(st);
-  }
-  if (!unique.length) return [];
-  const ordered = [...ITEM_STATUS_ORDER].filter((s) => seen.has(s));
-  const extras = unique.filter((s) => !ordered.includes(s));
-  return [...ordered, ...extras];
-}
-
-function parseItemStatusRosterJson(raw: string | null): ItemStatusValue[] | null {
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    return normalizeItemStatusRoster(parsed);
-  } catch {
-    return null;
-  }
-}
-
-/** ‡∏ä‡∏¥‡∏õ‡∏Å‡∏£‡∏≠‡∏á‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ ‚Äî ‡πÄ‡∏´‡∏°‡∏∑‡∏≠‡∏ô roster ‡∏û‡∏ô‡∏±‡∏Å‡∏á‡∏≤‡∏ô ¬∑ ‡πÄ‡∏Å‡πá‡∏ö localStorage ‡πÄ‡∏Ñ‡∏£‡∏∑‡πà‡∏≠‡∏á‡∏ô‡∏µ‡πâ */
-function readItemStatusRosterFromStorage(): ItemStatusValue[] {
-  if (typeof window === "undefined") return [];
-  const parsed = parseItemStatusRosterJson(localStorage.getItem(ITEM_STATUS_ROSTER_STORAGE_KEY)) ?? [];
-  if (
-    parsed.length === ITEM_STATUS_ORDER.length &&
-    ITEM_STATUS_ORDER.every((s, i) => parsed[i] === s)
-  ) {
-    return [];
-  }
-  return parsed;
-}
-
-function writeItemStatusRosterToStorage(roster: ItemStatusValue[]) {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.setItem(ITEM_STATUS_ROSTER_STORAGE_KEY, JSON.stringify(roster));
-  } catch {
-    /* ignore */
-  }
-}
-
-function parseItemStatusLabelsJson(raw: string | null): ItemStatusLabelMap | null {
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== "object") return null;
-    const out: ItemStatusLabelMap = {};
-    for (const status of ITEM_STATUSES) {
-      const value = (parsed as Record<string, unknown>)[status];
-      if (value == null) continue;
-      const label = String(value).trim();
-      if (!label || label === status) continue;
-      out[status] = label;
-    }
-    return out;
-  } catch {
-    return null;
-  }
-}
-
-function readItemStatusLabelsFromStorage(): ItemStatusLabelMap {
-  if (typeof window === "undefined") return {};
-  return parseItemStatusLabelsJson(localStorage.getItem(ITEM_STATUS_LABELS_STORAGE_KEY)) ?? {};
-}
-
-function writeItemStatusLabelsToStorage(labels: ItemStatusLabelMap) {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.setItem(ITEM_STATUS_LABELS_STORAGE_KEY, JSON.stringify(labels));
-  } catch {
-    /* ignore */
-  }
-}
-
-function writeItemStatusPoliciesSparseToStorage(policiesSparse: Record<string, unknown>) {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.setItem(ITEM_STATUS_POLICIES_STORAGE_KEY, JSON.stringify(policiesSparse));
-  } catch {
-    /* ignore */
-  }
-}
-
-function readItemStatusPoliciesFromStorageNormalized(): ItemStatusPoliciesNormalized | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = localStorage.getItem(ITEM_STATUS_POLICIES_STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as unknown;
-    return normalizeItemStatusPoliciesRaw(parsed);
-  } catch {
-    return null;
-  }
-}
-
-function normalizeItemStatusLabels(input: unknown): ItemStatusLabelMap {
-  if (!input || typeof input !== "object") return {};
-  const row = input as Record<string, unknown>;
-  const next: ItemStatusLabelMap = {};
-  for (const status of ITEM_STATUSES) {
-    const value = row[status];
-    if (value == null) continue;
-    const label = String(value).trim();
-    if (!label || label === status) continue;
-    next[status] = label;
-  }
-  return next;
-}
-
-const WAITING_SET = new Set<ItemStatusValue>(WAITING);
-const DONE_SET = new Set<ItemStatusValue>(DONE);
-
-type OrderItem = {
-  id?: string | null;
-  orderTaskId?: string | null;
-  name: string;
-  nameEn?: string;
-  status: ItemStatusValue;
-  assignee: string;
-  dueDate?: string;
-  /** ‡∏ù‡∏≤‡∏Å‡∏™‡πÇ‡∏ï‡∏£‡πå: ‡∏ß‡∏±‡∏ô‡πÄ‡∏£‡∏¥‡πà‡∏°‡∏ô‡∏±‡∏ö 30 ‡∏ß‡∏±‡∏ô (yyyy-mm-dd ‡∏Å‡∏ó‡∏°.) ‡∏à‡∏≤‡∏Å updated_at/created_at ‡πÉ‡∏ô DB */
-  clockStartYmd?: string;
-  /** ‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡πÄ‡∏õ‡∏•‡∏µ‡πà‡∏¢‡∏ô‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏•‡πà‡∏≤‡∏™‡∏∏‡∏î (yyyy-mm-dd ‡∏Å‡∏ó‡∏°.) ‡∏à‡∏≤‡∏Å status_changed_at ‡πÉ‡∏ô DB */
-  statusChangedAtYmd?: string;
-  note?: string;
-  /** ‡πÅ‡∏õ‡∏•‡∏≠‡∏±‡∏ï‡πÇ‡∏ô‡∏°‡∏±‡∏ï‡∏¥‡∏Ç‡∏≠‡∏á‡∏´‡∏°‡∏≤‡∏¢‡πÄ‡∏´‡∏ï‡∏∏ (note_en) ‚Äî ‡πÅ‡∏™‡∏î‡∏á‡πÄ‡∏°‡∏∑‡πà‡∏≠ UI ‡πÄ‡∏õ‡πá‡∏ô‡∏†‡∏≤‡∏©‡∏≤‡∏≠‡∏±‡∏á‡∏Å‡∏§‡∏© */
-  noteEn?: string;
-  good?: boolean;
-  supplier?: string;
-  eta?: string;
-  price?: string;
-  overdue?: boolean;
-};
-
-type OrderPhotoEntry = { id: string; url: string; created_at?: string | null };
-
-type Order = {
-  id: string;
-  carRowId: string | null;
-  carId: number | null;
-  sale: string;
-  modelYear: string;
-  saleStatus: SaleStatusValue;
-  /** ‡∏Ç‡πâ‡∏≠‡∏Ñ‡∏ß‡∏≤‡∏° shipped ‡∏à‡∏≤‡∏Å cars.shipped ‚Äî ‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß‡πÉ‡∏ä‡πâ‡∏Å‡∏£‡∏≠‡∏á/‡πÅ‡∏™‡∏î‡∏á‡πÅ‡∏¢‡∏Å‡∏ï‡∏≤‡∏°‡∏ô‡∏µ‡πâ (‡πÑ‡∏°‡πà‡πÉ‡∏ä‡πà booked_shipping) */
-  shipped: string;
-  ship: string;
-  link: string;
-  fullPlate: string;
-  plate: string;
-  car: string;
-  chassis: string;
-  buyer: string;
-  salePrice: string;
-  cost: string;
-  costBreakdown: string;
-  /** ‡∏ä‡∏∑‡πà‡∏≠‡πÄ‡∏î‡∏µ‡∏¢‡∏ß‡∏Å‡∏±‡∏ö mock ‚Äî ‡∏ñ‡πâ‡∏≤‡∏°‡∏µ‡∏à‡∏∞‡πÉ‡∏ä‡πâ‡πÅ‡∏ó‡∏ô costBreakdown ‡πÉ‡∏ô‡∏Å‡∏≤‡∏£‡πå‡∏î */
-  costDetail?: string;
-  expense: string;
-  /** ‡∏™‡∏£‡∏∏‡∏õ‡πÄ‡∏≠‡∏Å‡∏™‡∏≤‡∏£/‡πÄ‡∏•‡πà‡∏° (‡∏à‡∏≤‡∏Å cars ‡πÄ‡∏°‡∏∑‡πà‡∏≠‡∏°‡∏µ) */
-  documentDetail: string;
-  repairDetails: string;
-  repairDetail?: string;
-  partAccessoriesRaw: string;
-  photo: string;
-  expensePdf: string | null;
-  updates: Array<{
-    id?: string | null;
-    actionType: string;
-    oldValue: string;
-    newValue: string;
-    note: string;
-    updatedBy: string;
-    createdAt: string;
-  }>;
-  items: OrderItem[];
-};
-
-/**
- * ‡∏à‡∏±‡∏î‡πÄ‡∏£‡∏µ‡∏¢‡∏á‡∏Å‡∏≤‡∏£‡πå‡∏î‡πÉ‡∏ô‡∏•‡∏¥‡∏™‡∏ï‡πå: ‡∏°‡∏µ‡∏á‡∏≤‡∏ô‡∏Ñ‡πâ‡∏≤‡∏á (‡∏°‡∏µ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡πÅ‡∏•‡∏∞‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏à‡∏ö) ‚Üí ‡∏°‡∏µ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏à‡∏ö‡πÅ‡∏•‡πâ‡∏ß ‚Üí ‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£
- */
-function orderCardWorkPresenceRank(order: Order): number {
-  const list = order.items ?? [];
-  if (list.length === 0) return 2;
-  const hasOpenWork = list.some((it) => !(it.good ?? false) && !DONE_SET.has(it.status));
-  return hasOpenWork ? 0 : 1;
-}
-
-/** ‡∏£‡∏π‡∏õ‡∏ó‡∏µ‡πà‡πÉ‡∏™‡πà‡πÉ‡∏ô LINE / ‡∏•‡∏¥‡∏á‡∏Å‡πå‡∏Å‡∏≤‡∏£‡πå‡∏î‡πÑ‡∏î‡πâ ‚Äî ‡∏ï‡πâ‡∏≠‡∏á‡πÄ‡∏õ‡πá‡∏ô http(s) ‡πÄ‡∏ó‡πà‡∏≤‡∏ô‡∏±‡πâ‡∏ô (‡πÑ‡∏°‡πà‡∏™‡∏£‡πâ‡∏≤‡∏á‡∏•‡∏¥‡∏á‡∏Å‡πå‡∏ñ‡πâ‡∏≤‡πÄ‡∏õ‡πá‡∏ô `#` ‡∏´‡∏£‡∏∑‡∏≠‡πÑ‡∏°‡πà‡πÉ‡∏ä‡πà URL) */
-function orderPhotoHttpUrl(photo: string | undefined): string | null {
-  const t = String(photo ?? "").trim();
-  if (!t || t === "#" || !/^https?:\/\//i.test(t)) return null;
-  return t;
-}
-
-type MobileOrderTrackingHomeProps = {
-  carsData?: Car[];
-  orderItemsByCar?: Record<
-    string,
-    Array<{
-      id?: string | null;
-      order_task_id?: string | null;
-      label: string;
-      label_en?: string | null;
-      status: string;
-      assignee_staff: string | null;
-      due_date?: string | null;
-      note?: string | null;
-      note_en?: string | null;
-      outside_supplier: string | null;
-      outside_eta_date: string | null;
-      outside_price: number | null;
-      clock_start_ymd?: string | null;
-      status_changed_at?: string | null;
-    }>
-  >;
-  orderUpdatesByCar?: Record<
-    string,
-    Array<{
-      id?: string | null;
-      order_task_id?: string | null;
-      role?: string | null;
-      message?: string | null;
-      created_at?: string | null;
-    }>
-  >;
-  orderItemFilterIndexByCar?: Record<string, OrderItemFilterIndexLite[]>;
-  orderChipCacheExperimentEnabled?: boolean;
-  orderChipCacheBadgeLabel?: string | null;
-  experimentInitialHydratedCarKeys?: string[];
-  dataWarnings?: string[];
-  /** ‡∏à‡∏≤‡∏Å `/m/orders?order=...` ‚Äî ‡πÄ‡∏•‡∏∑‡πà‡∏≠‡∏ô‡πÑ‡∏õ‡∏Å‡∏≤‡∏£‡πå‡∏î‡πÅ‡∏•‡∏∞‡∏Å‡∏£‡∏≠‡∏á‡∏ó‡∏∞‡πÄ‡∏ö‡∏µ‡∏¢‡∏ô‡πÉ‡∏´‡πâ‡πÇ‡∏ú‡∏•‡πà */
-  initialFocusedOrderId?: string | null;
-  /** origin ‡∏à‡∏≤‡∏Å request (‡πÄ‡∏ã‡∏¥‡∏£‡πå‡∏ü‡πÄ‡∏ß‡∏≠‡∏£‡πå) ‚Äî ‡πÉ‡∏´‡πâ‡∏•‡∏¥‡∏á‡∏Å‡πå‡πÅ‡∏ä‡∏£‡πå LINE ‡∏°‡∏µ URL ‡πÄ‡∏ï‡πá‡∏°‡πÅ‡∏°‡πâ‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà hydrate */
-  shareBaseUrl?: string | null;
-  /** locale ‡πÄ‡∏£‡∏¥‡πà‡∏°‡∏ï‡πâ‡∏ô‡∏à‡∏≤‡∏Å cookie ‡∏ù‡∏±‡πà‡∏á‡πÄ‡∏ã‡∏¥‡∏£‡πå‡∏ü‡πÄ‡∏ß‡∏≠‡∏£‡πå */
-  initialUiLang?: UiLang;
-  /** ‡∏™‡∏£‡∏∏‡∏õ‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏Ç‡∏≤‡∏¢‡∏à‡∏≤‡∏Å‡∏£‡∏ñ‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î (‡πÑ‡∏°‡πà‡πÇ‡∏î‡∏ô cap ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏£‡∏≠‡∏ö‡πÅ‡∏£‡∏Å) */
-  saleStatusSummaryAllCars?: OrderTrackingSaleStatusSummary | null;
-  /** snapshot ‡∏™‡∏£‡∏∏‡∏õ‡∏ó‡∏∏‡∏Å‡∏Å‡∏•‡πà‡∏≠‡∏á‡∏à‡∏≤‡∏Å cache table */
-  summarySnapshotAllCars?: OrderTrackingSummarySnapshot | null;
-  /** ‡∏ñ‡πâ‡∏≤ true: ‡∏´‡πâ‡∏≤‡∏° fallback ‡πÑ‡∏õ‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏• demo ‡πÉ‡∏ô‡πÑ‡∏ü‡∏•‡πå */
-  disableDemoFallback?: boolean;
-  /** ‡πÇ‡∏´‡∏•‡∏î‡∏™‡∏£‡∏∏‡∏õ‡∏Å‡πà‡∏≠‡∏ô ‡πÅ‡∏•‡πâ‡∏ß‡∏Ñ‡πà‡∏≠‡∏¢ hydrate ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏£‡∏ñ‡∏≠‡∏±‡∏ï‡πÇ‡∏ô‡∏°‡∏±‡∏ï‡∏¥ */
-  deferCarsHydration?: boolean;
-  /** ‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏Ç‡∏≤‡∏¢‡∏ó‡∏µ‡πà‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡πÑ‡∏ß‡πâ‡∏ï‡∏±‡πâ‡∏á‡πÅ‡∏ï‡πà‡πÄ‡∏õ‡∏¥‡∏î‡∏´‡∏ô‡πâ‡∏≤ */
-  initialSaleStatusFilters?: SaleStatusFilterValue[];
-};
-
-const ORDERS: Order[] = [
-  {
-    id: "OT-1024",
-    carRowId: null,
-    carId: null,
-    sale: "WAN",
-    saleStatus: "‡∏à‡∏≠‡∏á",
-    shipped: "",
-    ship: "2-6.2",
-    link: "https://vigo4u-os.com/m/orders/OT-1024",
-    fullPlate: "71331",
-    plate: "71331",
-    car: "ROCCO 4WD 2.8 OVERLAND Plus AT Double_Cab GRAY Jan26",
-    chassis: "MR0YA3AV803071331",
-    modelYear: "",
-    buyer: "RIZWAN ABID",
-    salePrice: "$47,200",
-    cost: "$45,218",
-    costBreakdown:
-      "27,422(32.47) --> 890,500(Total Cost) = 880,000(Car Price) + 10,500(Expense) [‡∏Å‡∏≥‡πÑ‡∏£] --> kie10000 kie860000 ‡πÄ‡∏•‡πà‡∏°‡∏û‡∏£‡πâ‡∏≠‡∏° +10000 kie5000‡∏Ñ‡∏≠‡∏°‡πÄ‡∏≠‡πÄ‡∏¢‡πà‡∏ô‡πÄ‡∏≠‡πá‡∏° ‡∏£‡∏±‡∏ö‡∏£‡∏ñ‡πÄ‡∏ä‡∏µ‡∏¢‡∏á‡∏£‡∏≤‡∏¢ ‡πÄ‡∏ï‡∏¥‡∏°‡∏ô‡πâ‡∏≥‡∏°‡∏±‡∏ô ‡∏à‡πâ‡∏≤‡∏á‡∏Ñ‡∏ô‡∏Ç‡∏±‡∏ö ‡πÄ‡∏ä‡πà‡∏≤‡∏£‡∏ñ5500",
-    costDetail:
-      "27,422(32.47) --> 890,500(Total Cost) = 880,000(Car Price) + 10,500(Expense) [‡∏Å‡∏≥‡πÑ‡∏£] --> kie10000 kie860000 ‡πÄ‡∏•‡πà‡∏°‡∏û‡∏£‡πâ‡∏≠‡∏° +10000 kie5000‡∏Ñ‡∏≠‡∏°‡πÄ‡∏≠‡πÄ‡∏¢‡πà‡∏ô‡πÄ‡∏≠‡πá‡∏° ‡∏£‡∏±‡∏ö‡∏£‡∏ñ‡πÄ‡∏ä‡∏µ‡∏¢‡∏á‡∏£‡∏≤‡∏¢ ‡πÄ‡∏ï‡∏¥‡∏°‡∏ô‡πâ‡∏≥‡∏°‡∏±‡∏ô ‡∏à‡πâ‡∏≤‡∏á‡∏Ñ‡∏ô‡∏Ç‡∏±‡∏ö ‡πÄ‡∏ä‡πà‡∏≤‡∏£‡∏ñ5500",
-    expense: "177,343",
-    photo: "#photos-1024",
-    expensePdf: "#expenses-1024",
-    documentDetail: "‡πÄ‡∏•‡πà‡∏°‡∏û‡∏£‡πâ‡∏≠‡∏° / ‡πÄ‡∏≠‡∏Å‡∏™‡∏≤‡∏£‡∏Ñ‡∏£‡∏ö / ‡∏£‡∏≠‡πÇ‡∏≠‡∏ô‡∏´‡∏•‡∏±‡∏á‡∏à‡πà‡∏≤‡∏¢‡∏Ñ‡∏£‡∏ö",
-    repairDetails: "‡∏ã‡πà‡∏≠‡∏°‡∏™‡∏µ‡∏Å‡∏±‡∏ô‡∏ä‡∏ô‡∏´‡∏ô‡πâ‡∏≤ / ‡πÄ‡∏ä‡πá‡∏Ñ‡∏ä‡πà‡∏ß‡∏á‡∏•‡πà‡∏≤‡∏á / ‡πÄ‡∏Å‡πá‡∏ö‡∏á‡∏≤‡∏ô‡πÑ‡∏ü‡∏´‡∏ô‡πâ‡∏≤",
-    repairDetail: "‡∏ã‡πà‡∏≠‡∏°‡∏™‡∏µ‡∏Å‡∏±‡∏ô‡∏ä‡∏ô‡∏´‡∏ô‡πâ‡∏≤ / ‡πÄ‡∏ä‡πá‡∏Ñ‡∏ä‡πà‡∏ß‡∏á‡∏•‡πà‡∏≤‡∏á / ‡πÄ‡∏Å‡πá‡∏ö‡∏á‡∏≤‡∏ô‡πÑ‡∏ü‡∏´‡∏ô‡πâ‡∏≤",
-    partAccessoriesRaw: "",
-    updates: [],
-    items: [
-      { name: "‡∏•‡πâ‡∏≠‡πÅ‡∏°‡πá‡∏Å 17 ‡∏ô‡∏¥‡πâ‡∏ß", status: "‡∏°‡∏µ", assignee: "", good: true },
-      { name: "‡πÑ‡∏ü LED", status: "‡∏°‡∏µ", assignee: "", good: true },
-      { name: "‡πÇ‡∏£‡∏ö‡∏≤‡∏£‡πå", status: "‡∏™‡∏±‡πà‡∏á", assignee: "", supplier: "‡∏ñ‡∏≤‡∏ß‡∏£", eta: "29 Apr", price: "‡∏ø3,800" },
-      { name: "‡∏Å‡∏±‡∏ô‡∏ä‡∏ô‡∏´‡∏ô‡πâ‡∏≤", status: "‡πÄ‡∏ä‡πá‡∏Ñ", assignee: "" },
-      { name: "‡∏¢‡∏≤‡∏á AT", status: "‡πÄ‡∏ä‡πá‡∏Ñ", assignee: "" },
-    ],
-  },
-  {
-    id: "OT-1025",
-    carRowId: null,
-    carId: null,
-    sale: "FAH",
-    saleStatus: "‡∏£‡∏≠‡∏™‡πà‡∏á",
-    shipped: "",
-    ship: "‡πÄ‡∏£‡∏∑‡∏≠ 2 May",
-    link: "https://vigo4u-os.com/m/orders/OT-1025",
-    fullPlate: "‡∏Ç‡∏Ç 9021",
-    plate: "9021",
-    car: "FORTUNER 2.4 4WD 2020",
-    chassis: "MR0DB8FS700889912",
-    modelYear: "2020",
-    buyer: "Premier / Barbados",
-    salePrice: "$41,200",
-    cost: "34,600",
-    costBreakdown: "1,105,000(Total Cost) = 1,070,000(Car Price) + 35,000(Expense) [‡∏Å‡∏≥‡πÑ‡∏£‡∏ô‡πâ‡∏≠‡∏¢] --> Premier Barbados",
-    expense: "‡∏ø9,800",
-    photo: "#photos-1025",
-    expensePdf: "#expenses-1025",
-    documentDetail: "‡πÄ‡∏≠‡∏Å‡∏™‡∏≤‡∏£‡∏£‡∏≠‡πÄ‡∏ä‡πá‡∏Ñ‡πÄ‡∏•‡πà‡∏° / ‡∏™‡∏≥‡πÄ‡∏ô‡∏≤‡∏ú‡∏π‡πâ‡∏Ç‡∏≤‡∏¢‡∏Ñ‡∏£‡∏ö",
-    repairDetails: "‡πÄ‡∏õ‡∏•‡∏µ‡πà‡∏¢‡∏ô‡∏ö‡∏±‡∏ô‡πÑ‡∏î‡∏Ç‡πâ‡∏≤‡∏á / ‡πÄ‡∏Å‡πá‡∏ö‡∏£‡∏≠‡∏¢‡∏£‡∏≠‡∏ö‡∏Ñ‡∏±‡∏ô",
-    partAccessoriesRaw: "",
-    updates: [],
-    items: [
-      { name: "‡∏ö‡∏±‡∏ô‡πÑ‡∏î‡∏Ç‡πâ‡∏≤‡∏á", status: "‡∏à‡∏ö", assignee: "", good: true },
-      { name: "‡∏Å‡∏•‡πâ‡∏≠‡∏á‡∏´‡∏•‡∏±‡∏á", status: "‡∏à‡∏ö", assignee: "", good: true },
-      { name: "‡∏ü‡∏¥‡∏•‡πå‡∏°", status: "‡∏à‡∏ö", assignee: "", good: true },
-    ],
-  },
-  {
-    id: "OT-1026",
-    carRowId: null,
-    carId: null,
-    sale: "GOOD",
-    saleStatus: "‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß",
-    shipped: "‡πÄ‡∏£‡∏∑‡∏≠‡∏≠‡∏≠‡∏Å 12 May 2025",
-    ship: "",
-    link: "https://vigo4u-os.com/m/orders/OT-1026",
-    fullPlate: "‡∏õ‡πâ‡∏≤‡∏¢‡πÅ‡∏î‡∏á 12345",
-    plate: "12345",
-    car: "TRAVO 2.8 4WD 2025",
-    chassis: "MR0NEWTRAVO12345",
-    modelYear: "2025",
-    buyer: "New stock",
-    salePrice: "$38,500",
-    cost: "31,200",
-    costBreakdown: "995,000(Total Cost) = 980,000(Car Price) + 15,000(Expense) [‡∏£‡∏≠‡∏õ‡∏¥‡∏î‡∏á‡∏≤‡∏ô] --> New stock",
-    expense: "‡∏ø24,000",
-    photo: "#photos-1026",
-    expensePdf: "#expenses-1026",
-    documentDetail: "‡∏£‡∏ñ‡πÉ‡∏´‡∏°‡πà / ‡πÄ‡∏≠‡∏Å‡∏™‡∏≤‡∏£‡∏£‡∏≠‡πÉ‡∏ö‡∏Å‡∏≥‡∏Å‡∏±‡∏ö",
-    repairDetails: "‡∏ï‡∏¥‡∏î‡∏ï‡∏±‡πâ‡∏á‡∏ä‡∏∏‡∏î‡πÅ‡∏ï‡πà‡∏á / ‡∏ï‡∏£‡∏ß‡∏à‡∏£‡∏∞‡∏ö‡∏ö‡πÑ‡∏ü",
-    partAccessoriesRaw: "",
-    updates: [],
-    items: [
-      { name: "‡πÇ‡∏£‡∏ö‡∏≤‡∏£‡πå", status: "‡πÄ‡∏ä‡πá‡∏Ñ", assignee: "" },
-      { name: "‡∏ü‡∏¥‡∏•‡πå‡∏°", status: "‡∏°‡∏µ", assignee: "", good: true },
-      { name: "‡∏ä‡∏∏‡∏î‡πÅ‡∏ï‡πà‡∏á", status: "‡∏™‡∏±‡πà‡∏á", assignee: "", supplier: "‡∏£‡πâ‡∏≤‡∏ô‡πÅ‡∏ï‡πà‡∏á", eta: "‡πÄ‡∏•‡∏¢ 2 ‡∏ß‡∏±‡∏ô", price: "‡∏ø12,000", overdue: true },
-    ],
-  },
-];
-
-const cn = (...v: Array<string | false | null | undefined>) => v.filter(Boolean).join("\n");
-const norm = (v: unknown) => String(v || "").replace(/\s+/g, "").toLowerCase();
-
-const TOOLBAR_FLAG_SVG_BASE = "h-[1.375rem] shrink-0 rounded-[3px] shadow-sm ring-1 ring-black/10";
-
-/** ‡∏ò‡∏á‡πÄ‡∏•‡πá‡∏Å‡∏™‡∏≥‡∏´‡∏£‡∏±‡∏ö‡∏õ‡∏∏‡πà‡∏°‡∏™‡∏•‡∏±‡∏ö‡∏†‡∏≤‡∏©‡∏≤ ‚Äî ‡πÉ‡∏ä‡πâ SVG ‡πÅ‡∏ó‡∏ô‡∏≠‡∏µ‡πÇ‡∏°‡∏à‡∏¥ (Windows ‡∏°‡∏±‡∏Å‡πÑ‡∏°‡πà‡πÄ‡∏£‡∏ô‡πÄ‡∏î‡∏≠‡∏£‡πå‡∏ò‡∏á‡πÄ‡∏õ‡πá‡∏ô‡∏†‡∏≤‡∏û) */
-function OrderTrackingToolbarFlagTh({ className }: { className?: string }) {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      viewBox="0 0 900 600"
-      className={cn(TOOLBAR_FLAG_SVG_BASE, "w-[2.0625rem]", className)}
-      aria-hidden
-      focusable="false"
-    >
-      <rect width="900" height="100" fill="#ED1C24" />
-      <rect y="100" width="900" height="100" fill="#fff" />
-      <rect y="200" width="900" height="200" fill="#241468" />
-      <rect y="400" width="900" height="100" fill="#fff" />
-      <rect y="500" width="900" height="100" fill="#ED1C24" />
-    </svg>
-  );
-}
-
-function OrderTrackingToolbarFlagGb({ className }: { className?: string }) {
-  const clipId = useId().replace(/:/g, "_");
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      viewBox="0 0 60 30"
-      className={cn(TOOLBAR_FLAG_SVG_BASE, "w-[2.5625rem]", className)}
-      aria-hidden
-      focusable="false"
-    >
-      <defs>
-        <clipPath id={clipId}>
-          <rect width="60" height="30" rx="0.8" ry="0.8" />
-        </clipPath>
-      </defs>
-      <g clipPath={`url(#${clipId})`}>
-        <rect width="60" height="30" fill="#012169" />
-        <path stroke="#fff" strokeWidth="10" d="M0 0 L60 30 M60 0 L0 30" />
-        <path stroke="#C8102E" strokeWidth="6" d="M0 0 L60 30 M60 0 L0 30" />
-        <path stroke="#fff" strokeWidth="12" d="M30 0 V30 M0 15 H60" />
-        <path stroke="#C8102E" strokeWidth="8" d="M30 0 V30 M0 15 H60" />
-      </g>
-    </svg>
-  );
-}
-
-/**
- * ‡∏™‡∏µ‡∏ï‡πà‡∏≠‡∏û‡∏ô‡∏±‡∏Å‡∏á‡∏≤‡∏ô (‡πÅ‡∏Æ‡∏ä‡∏ä‡∏∑‡πà‡∏≠) ‚Äî ‡πÉ‡∏ä‡πâ‡∏ó‡∏±‡πâ‡∏á‡∏ä‡πà‡∏≠‡∏á‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡πÉ‡∏ô‡∏Å‡∏≤‡∏£‡πå‡∏î‡πÅ‡∏•‡∏∞‡∏ä‡∏¥‡∏õ‡∏Å‡∏£‡∏≠‡∏á‡∏î‡πâ‡∏≤‡∏ô‡∏ö‡∏ô‡πÉ‡∏´‡πâ‡∏ï‡∏£‡∏á‡∏Å‡∏±‡∏ô
- * ‡∏ä‡∏∏‡∏î‡∏™‡∏µ‡∏¢‡∏≤‡∏ß (~28 ‡πÇ‡∏ó‡∏ô) + FNV-1a ‡∏•‡∏î‡∏Å‡∏≤‡∏£‡∏ä‡∏ô‡πÄ‡∏°‡∏∑‡πà‡∏≠‡∏°‡∏µ‡∏ä‡∏¥‡∏õ‡πÄ‡∏¢‡∏≠‡∏∞ ‚Äî ‡∏ä‡∏∑‡πà‡∏≠‡πÄ‡∏î‡∏¥‡∏°‡πÑ‡∏î‡πâ‡∏™‡∏µ‡∏Ñ‡∏á‡∏ó‡∏µ‡πà
- * surface = ‡πÅ‡∏ö‡∏ö‡πÉ‡∏ô card ¬∑ active = ‡∏ä‡∏¥‡∏õ‡∏ï‡∏≠‡∏ô‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏Å‡∏£‡∏≠‡∏á
- */
-const ASSIGNEE_PALETTE = [
-  { surface: "bg-rose-200 text-rose-950 ring-rose-600/50", active: "bg-rose-700 text-white ring-rose-900/55" },
-  { surface: "bg-red-200 text-red-950 ring-red-600/50", active: "bg-red-700 text-white ring-red-900/55" },
-  { surface: "bg-orange-200 text-orange-950 ring-orange-600/50", active: "bg-orange-700 text-white ring-orange-900/55" },
-  { surface: "bg-amber-200 text-amber-950 ring-amber-600/50", active: "bg-amber-700 text-white ring-amber-900/55" },
-  { surface: "bg-yellow-200 text-yellow-950 ring-yellow-600/45", active: "bg-yellow-700 text-white ring-yellow-900/50" },
-  { surface: "bg-lime-200 text-lime-950 ring-lime-600/50", active: "bg-lime-700 text-white ring-lime-900/55" },
-  { surface: "bg-green-200 text-green-950 ring-green-600/50", active: "bg-green-700 text-white ring-green-900/55" },
-  { surface: "bg-emerald-200 text-emerald-950 ring-emerald-600/50", active: "bg-emerald-700 text-white ring-emerald-900/55" },
-  { surface: "bg-teal-200 text-teal-950 ring-teal-600/50", active: "bg-teal-700 text-white ring-teal-900/55" },
-  { surface: "bg-cyan-200 text-cyan-950 ring-cyan-600/50", active: "bg-cyan-700 text-white ring-cyan-900/55" },
-  { surface: "bg-sky-200 text-sky-950 ring-sky-600/50", active: "bg-sky-700 text-white ring-sky-900/55" },
-  { surface: "bg-blue-200 text-blue-950 ring-blue-600/50", active: "bg-blue-700 text-white ring-blue-900/55" },
-  { surface: "bg-indigo-200 text-indigo-950 ring-indigo-600/50", active: "bg-indigo-700 text-white ring-indigo-900/55" },
-  { surface: "bg-violet-200 text-violet-950 ring-violet-600/50", active: "bg-violet-700 text-white ring-violet-900/55" },
-  { surface: "bg-purple-200 text-purple-950 ring-purple-600/50", active: "bg-purple-700 text-white ring-purple-900/55" },
-  { surface: "bg-fuchsia-200 text-fuchsia-950 ring-fuchsia-600/50", active: "bg-fuchsia-700 text-white ring-fuchsia-900/55" },
-  { surface: "bg-pink-200 text-pink-950 ring-pink-600/50", active: "bg-pink-700 text-white ring-pink-900/55" },
-  { surface: "bg-stone-200 text-stone-900 ring-stone-600/45", active: "bg-stone-700 text-white ring-stone-900/50" },
-  { surface: "bg-zinc-200 text-zinc-900 ring-zinc-600/45", active: "bg-zinc-700 text-white ring-zinc-900/50" },
-  { surface: "bg-neutral-200 text-neutral-900 ring-neutral-600/45", active: "bg-neutral-700 text-white ring-neutral-900/50" },
-  { surface: "bg-slate-200 text-slate-900 ring-slate-600/45", active: "bg-slate-700 text-white ring-slate-900/50" },
-  /* ‡πÇ‡∏ó‡∏ô‡πÄ‡∏Ç‡πâ‡∏°‡∏Ç‡∏∂‡πâ‡∏ô‡πÄ‡∏•‡πá‡∏Å‡∏ô‡πâ‡∏≠‡∏¢ ‚Äî ‡πÅ‡∏¢‡∏Å‡∏à‡∏≤‡∏Å‡πÅ‡∏ñ‡∏ß -200 ‡πÄ‡∏î‡∏¥‡∏°‡πÄ‡∏°‡∏∑‡πà‡∏≠‡∏°‡∏µ‡∏ä‡∏¥‡∏õ‡πÄ‡∏¢‡∏≠‡∏∞ */
-  { surface: "bg-orange-300 text-orange-950 ring-orange-700/45", active: "bg-orange-800 text-white ring-orange-950/55" },
-  { surface: "bg-lime-300 text-lime-950 ring-lime-700/45", active: "bg-lime-800 text-white ring-lime-950/55" },
-  { surface: "bg-sky-300 text-sky-950 ring-sky-700/45", active: "bg-sky-800 text-white ring-sky-950/55" },
-  { surface: "bg-violet-300 text-violet-950 ring-violet-700/45", active: "bg-violet-800 text-white ring-violet-950/55" },
-  { surface: "bg-amber-300 text-amber-950 ring-amber-700/45", active: "bg-amber-800 text-white ring-amber-950/55" },
-  { surface: "bg-teal-300 text-teal-950 ring-teal-700/45", active: "bg-teal-800 text-white ring-teal-950/55" },
-  { surface: "bg-fuchsia-300 text-fuchsia-950 ring-fuchsia-700/45", active: "bg-fuchsia-800 text-white ring-fuchsia-950/55" },
-] as const;
-
-function assigneeStablePaletteIndex(assigneeLabel: string): number {
-  const s = assigneeLabel.trim();
-  /** FNV-1a 32-bit ‚Äî ‡∏Å‡∏£‡∏∞‡∏à‡∏≤‡∏¢‡∏î‡∏µ‡∏Å‡∏ß‡πà‡∏≤ hash*31 ‡πÄ‡∏°‡∏∑‡πà‡∏≠‡πÇ‡∏°‡∏î‡∏π‡πÇ‡∏•‡∏ä‡∏∏‡∏î‡∏™‡∏µ‡∏¢‡∏≤‡∏ß */
-  let h = 2166136261;
-  for (let i = 0; i < s.length; i += 1) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return Math.abs(h) % ASSIGNEE_PALETTE.length;
-}
-
-function assigneeSelectSurfaceClasses(assignee: string): string {
-  const name = String(assignee ?? "").trim();
-  if (!name) return "bg-white text-slate-800 ring-slate-200/75";
-  return ASSIGNEE_PALETTE[assigneeStablePaletteIndex(name)]!.surface;
-}
-
-/**
- * ‡∏ä‡∏¥‡∏õ‡πÅ‡∏ñ‡∏ö‡∏û‡∏ô‡∏±‡∏Å‡∏á‡∏≤‡∏ô ‚Äî ‡∏à‡∏±‡∏î index ‡πÑ‡∏°‡πà‡∏ã‡πâ‡∏≥‡πÉ‡∏ô‡∏£‡∏≠‡∏ö‡πÄ‡∏î‡∏µ‡∏¢‡∏ß‡∏Å‡∏±‡∏ô (‡∏ä‡∏∑‡πà‡∏≠‡∏ä‡∏∏‡∏î‡πÄ‡∏î‡∏µ‡∏¢‡∏ß‡∏Å‡∏±‡∏ô‡πÑ‡∏î‡πâ‡∏™‡∏µ‡∏Ñ‡∏á‡∏ó‡∏µ‡πà‡∏à‡∏≤‡∏Å‡πÅ‡∏Æ‡∏ä‡∏à‡∏ô‡∏Å‡∏ß‡πà‡∏≤‡∏à‡∏∞‡∏ä‡∏ô)
- */
-function buildStaffToolbarAssigneePaletteIndexMap(names: readonly string[]): Map<string, number> {
-  const sorted = [...names].sort((a, b) => a.localeCompare(b, "en"));
-  const used = new Set<number>();
-  const map = new Map<string, number>();
-  const L = ASSIGNEE_PALETTE.length;
-  for (const name of sorted) {
-    let idx = assigneeStablePaletteIndex(name) % L;
-    if (used.size < L) {
-      let tries = 0;
-      while (used.has(idx) && tries < L) {
-        idx = (idx + 1) % L;
-        tries += 1;
-      }
-      used.add(idx);
-    }
-    map.set(name, idx);
-  }
-  return map;
-}
-
-/** ‡∏ä‡∏¥‡∏õ‡∏Å‡∏£‡∏≠‡∏á‡∏ä‡∏∑‡πà‡∏≠‡∏û‡∏ô‡∏±‡∏Å‡∏á‡∏≤‡∏ô ‚Äî ‡πÉ‡∏ä‡πâ‡∏™‡∏µ‡πÄ‡∏î‡∏µ‡∏¢‡∏ß‡∏Å‡∏±‡∏ö‡∏ü‡∏¥‡∏•‡∏î‡πå‡∏û‡∏ô‡∏±‡∏Å‡∏á‡∏≤‡∏ô‡πÉ‡∏ô‡∏Å‡∏≤‡∏£‡πå‡∏î ¬∑ paletteIndexOverride = ‡∏™‡∏µ‡∏Ñ‡∏á‡∏ó‡∏µ‡πà‡∏à‡∏≤‡∏Å‡πÅ‡∏ñ‡∏ö (‡πÑ‡∏°‡πà‡∏ã‡πâ‡∏≥‡πÉ‡∏ô‡∏Å‡∏•‡∏∏‡πà‡∏°‡∏ä‡∏¥‡∏õ) */
-function assigneeStaffFilterChipClasses(staffLabel: string, selected: boolean, paletteIndexOverride?: number): string {
-  const name = String(staffLabel ?? "").trim();
-  if (!name) {
-    return selected ? "bg-slate-950 text-white ring-slate-800/40" : "bg-slate-100 text-slate-700 ring-slate-200/80 hover:bg-slate-200/70";
-  }
-  const idx =
-    paletteIndexOverride !== undefined && paletteIndexOverride >= 0
-      ? paletteIndexOverride % ASSIGNEE_PALETTE.length
-      : assigneeStablePaletteIndex(name);
-  const { surface, active } = ASSIGNEE_PALETTE[idx]!;
-  if (selected) return active;
-  return cn(surface, "hover:brightness-[0.97]");
-}
-
-/** ‡πÉ‡∏ä‡πâ‡∏™‡∏£‡πâ‡∏≤‡∏á‡∏•‡∏¥‡∏á‡∏Å‡πå `/m/orders?order=‚Ä¶` ‚Äî ‡∏•‡∏≥‡∏î‡∏±‡∏ö: ‡∏à‡∏≤‡∏Å‡πÄ‡∏ã‡∏¥‡∏£‡πå‡∏ü‡πÄ‡∏ß‡∏≠‡∏£‡πå ‚Üí window ‚Üí env */
-function resolveShareAppBase(publicOriginProp: string | undefined | null): string {
-  const fromServer = String(publicOriginProp ?? "").trim().replace(/\/$/, "");
-  if (fromServer) return fromServer;
-  if (typeof window !== "undefined" && window.location?.origin && window.location.origin !== "null") {
-    return window.location.origin.replace(/\/$/, "");
-  }
-  const pub = String(process.env.NEXT_PUBLIC_APP_URL ?? "").trim().replace(/\/$/, "");
-  if (pub) return pub;
-  const vc = String(process.env.VERCEL_URL ?? "").trim();
-  if (vc) return (vc.startsWith("http") ? vc : `https://${vc}`).replace(/\/$/, "");
-  return "";
-}
-
-/** ‡∏Ñ‡∏≥‡∏Ñ‡πâ‡∏ô‡πÄ‡∏î‡∏µ‡∏¢‡∏ß‡∏à‡∏±‡∏ö‡∏ó‡∏±‡πâ‡∏á‡πÄ‡∏•‡∏Ç‡∏ó‡∏∞‡πÄ‡∏ö‡∏µ‡∏¢‡∏ô (‡πÅ‡∏•‡∏∞‡∏õ‡πâ‡∏≤‡∏¢‡πÄ‡∏ï‡πá‡∏°) ‡πÄ‡∏•‡∏Ç‡∏ï‡∏±‡∏ß‡∏ñ‡∏±‡∏á ‡πÅ‡∏•‡∏∞‡∏£‡∏∏‡πà‡∏ô‡∏£‡∏ñ */
-const matchesVehicleSearch = vehicleMatchesOrderSearch;
-
-function useDebouncedValue<T>(value: T, delayMs: number): T {
-  const [debounced, setDebounced] = useState(value);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebounced(value), delayMs);
-    return () => window.clearTimeout(timer);
-  }, [value, delayMs]);
-
-  return debounced;
-}
-
-function itemMatchesStaffFilter(assignee: string | undefined | null, staffSelection: string): boolean {
-  if (isBookedShipStaffFilter(staffSelection)) return false;
-  if (isBookedBuyerStaffFilter(staffSelection)) return false;
-  if (isSoldShippedStaffFilter(staffSelection)) return false;
-  if (isSoldModelYearStaffFilter(staffSelection)) return false;
-  if (isVacantSaleModelYearStaffFilter(staffSelection)) return false;
-  if (staffSelection === "‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î") return true;
-  if (staffSelection === STAFF_FILTER_UNASSIGNED) return !String(assignee ?? "").trim();
-  return String(assignee ?? "").trim() === staffSelection;
-}
-
-/** ‡∏ö‡∏£‡∏£‡∏ó‡∏±‡∏î‡πÅ‡∏£‡∏Å‡∏à‡∏≤‡∏Å‡∏Å‡∏≤‡∏£‡∏ß‡∏≤‡∏á ‚Äî ‡πÑ‡∏ó‡∏¢ / A‚ÄìZ / ‡πÄ‡∏•‡∏Ç / ‡∏ä‡πà‡∏≠‡∏á‡∏ß‡πà‡∏≤‡∏á */
-function sanitizeVehicleSearchPaste(raw: string): string {
-  const line = raw
-    .split(/\r?\n/)
-    .map((s) => s.trim())
-    .find(Boolean) ?? "";
-  const cleaned = line
-    .replace(/[^\u0E00-\u0E7Fa-zA-Z0-9 \-]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-  return cleaned.slice(0, VEHICLE_SEARCH_MAX);
-}
-
-/** ‡∏Ç‡∏ì‡∏∞‡∏û‡∏¥‡∏°‡∏û‡πå‡πÉ‡∏ô‡∏ä‡πà‡∏≠‡∏á‡∏Ñ‡πâ‡∏ô‡∏´‡∏≤ ‚Äî ‡∏≠‡∏ô‡∏∏‡∏ç‡∏≤‡∏ï‡πÑ‡∏ó‡∏¢ / A‚ÄìZ / ‡πÄ‡∏•‡∏Ç / ‡∏ä‡πà‡∏≠‡∏á‡∏ß‡πà‡∏≤‡∏á / - (‡πÑ‡∏°‡πà‡∏£‡∏ß‡∏°‡∏ö‡∏£‡∏£‡∏ó‡∏±‡∏î‡πÉ‡∏´‡∏°‡πà) */
-function sanitizeVehicleSearchInput(raw: string): string {
-  return raw.replace(/[^\u0E00-\u0E7Fa-zA-Z0-9 \-]/g, "").slice(0, VEHICLE_SEARCH_MAX);
-}
-
-function formatDueDateLabel(isoDate: string): string {
-  const v = String(isoDate ?? "").trim();
-  if (!v) return "";
-  const date = new Date(`${v}T00:00:00`);
-  if (Number.isNaN(date.getTime())) return v;
-  return date.toLocaleDateString("th-TH", { day: "numeric", month: "short" });
-}
-
-/** ‡∏ä‡∏∑‡πà‡∏≠‡πÄ‡∏î‡∏µ‡∏¢‡∏ß‡∏Å‡∏±‡∏ö mock ‚Äî ‡∏£‡∏±‡∏ö‡∏Ñ‡πà‡∏≤ yyyy-mm-dd */
-function formatDateInput(value: string): string {
-  if (!value) return "";
-  return formatDueDateLabel(value);
-}
-
-/** LINE share ‚Äî ‡∏à‡∏≥‡∏Å‡∏±‡∏î‡∏Ñ‡∏ß‡∏≤‡∏°‡∏¢‡∏≤‡∏ß URL ‡πÇ‡∏î‡∏¢‡∏õ‡∏£‡∏∞‡∏°‡∏≤‡∏ì */
-const LINE_SHARE_MAX_CHARS = 2200;
-
-function sortOrderItemsForShare(rows: OrderItem[]): OrderItem[] {
-  return [...rows].sort((a, b) => {
-    const ai = ITEM_STATUS_ORDER.indexOf(a.status);
-    const bi = ITEM_STATUS_ORDER.indexOf(b.status);
-    const orderDiff = (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
-    if (orderDiff !== 0) return orderDiff;
-    return String(a.name ?? "").localeCompare(String(b.name ?? ""), "en", { sensitivity: "base" });
-  });
-}
-
-/** ‡πÑ‡∏°‡πà‡∏ã‡πâ‡∏≥‡∏õ‡πâ‡∏≤‡∏¢‡πÄ‡∏°‡∏∑‡πà‡∏≠ spec ‡∏Ç‡∏∂‡πâ‡∏ô‡∏ï‡πâ‡∏ô‡∏î‡πâ‡∏ß‡∏¢‡πÄ‡∏•‡∏Ç‡∏ó‡∏∞‡πÄ‡∏ö‡∏µ‡∏¢‡∏ô‡πÄ‡∏î‡∏µ‡∏¢‡∏ß‡∏Å‡∏±‡∏ö fullPlate */
-function carHeadlineForShare(fullPlate: string, carSpec: string): string {
-  const p = fullPlate.trim();
-  const c = carSpec.trim();
-  if (!c) return p && p !== "-" ? p : "‡∏£‡∏≤‡∏¢‡∏•‡∏∞‡πÄ‡∏≠‡∏µ‡∏¢‡∏î‡∏£‡∏ñ";
-  if (!p || p === "-") return c;
-  if (c.startsWith(p)) return c;
-  return `${p} ${c}`.trim();
-}
-
-function orderItemShareLine(item: OrderItem, norms: ItemStatusPoliciesNormalized): string {
-  const name = String(item.name ?? "").trim() || "(‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏ä‡∏∑‡πà‡∏≠)";
-  const bits: string[] = [name, item.status];
-  const asg = String(item.assignee ?? "").trim();
-  if (asg) bits.push(asg);
-  const rowPol = norms.byStatus[item.status as ItemStatusValue];
-  if (rowPol?.storeDepositClock) {
-    const cap = storeDepositEffectiveMaxDays(rowPol);
-    if (item.clockStartYmd?.trim()) {
-      bits.push(
-        `‡∏•‡∏á‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏• ${formatDateInput(item.clockStartYmd)} ¬∑ ${storeDepositRemainingLabel(item.clockStartYmd, cap)}`
-      );
-    } else {
-      bits.push(storeDepositRemainingLabel(undefined, cap));
-    }
-  } else if (rowPol?.arrivalDueDate && item.dueDate?.trim()) {
-    bits.push(`‡∏°‡∏≤ ${formatDateInput(item.dueDate)}`);
-  } else if (item.dueDate?.trim()) {
-    bits.push(`‡∏°‡∏≤ ${formatDateInput(item.dueDate)}`);
-  }
-  if (item.statusChangedAtYmd?.trim()) {
-    bits.push(`‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞ ${formatDateInput(item.statusChangedAtYmd)}`);
-  }
-  const note = item.note?.trim();
-  if (note) bits.push(`‡∏´‡∏°‡∏≤‡∏¢‡πÄ‡∏´‡∏ï‡∏∏: ${note}`);
-  return `‚ñ´Ô∏è ${bits.join(" ¬∑ ")}`;
-}
-
-const BANGKOK_TZ = "Asia/Bangkok";
-
-function todayBangkokYmd(): string {
-  return new Date().toLocaleDateString("en-CA", { timeZone: BANGKOK_TZ });
-}
-
-/** timestamptz ‡∏à‡∏≤‡∏Å DB ‚Üí yyyy-mm-dd (‡∏õ‡∏è‡∏¥‡∏ó‡∏¥‡∏ô‡∏Å‡∏ó‡∏°.) ‡∏™‡∏≥‡∏´‡∏£‡∏±‡∏ö‡πÅ‡∏™‡∏î‡∏á‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡πÄ‡∏õ‡∏•‡∏µ‡πà‡∏¢‡∏ô‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞ */
-function statusChangedAtYmdFromDbIso(iso: string | null | undefined): string | undefined {
-  const s = String(iso ?? "").trim();
-  if (!s) return undefined;
-  const parsed = Date.parse(/^\d{4}-\d{2}-\d{2}$/.test(s) ? `${s}T12:00:00+07:00` : s);
-  if (Number.isNaN(parsed)) return undefined;
-  const ymd = new Date(parsed).toLocaleDateString("en-CA", { timeZone: BANGKOK_TZ });
-  return /^\d{4}-\d{2}-\d{2}$/.test(ymd) ? ymd : undefined;
-}
-
-/** ‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡πÄ‡∏õ‡∏•‡∏µ‡πà‡∏¢‡∏ô‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞: ‡πÅ‡∏™‡∏î‡∏á‡πÄ‡∏â‡∏û‡∏≤‡∏∞‡∏Å‡∏£‡∏ì‡∏µ‡∏ú‡πà‡∏≤‡∏ô‡∏°‡∏≤‡πÄ‡∏Å‡∏¥‡∏ô 1 ‡∏ß‡∏±‡∏ô (>= 2 ‡∏ß‡∏±‡∏ô) */
-function statusChangedElapsedLabel(statusChangedYmd: string | undefined): string | null {
-  const raw = String(statusChangedYmd ?? "").trim().slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null;
-  const todayYmd = todayBangkokYmd();
-  const t0 = new Date(`${todayYmd}T12:00:00+07:00`).getTime();
-  const s0 = new Date(`${raw}T12:00:00+07:00`).getTime();
-  if (Number.isNaN(t0) || Number.isNaN(s0)) return null;
-  const elapsed = Math.round((t0 - s0) / (24 * 60 * 60 * 1000));
-  if (elapsed <= 1) return null;
-  return `${elapsed} ‡∏ß‡∏±‡∏ô`;
-}
-
-/** ‡πÄ‡∏´‡∏•‡∏∑‡∏≠‡∏á = ‡πÄ‡∏´‡∏•‡∏∑‡∏≠ 1 ‡∏ß‡∏±‡∏ô‡∏Å‡πà‡∏≠‡∏ô‡∏ß‡∏±‡∏ô‡∏°‡∏≤ ¬∑ ‡πÅ‡∏î‡∏á = ‡∏ß‡∏±‡∏ô‡∏ô‡∏µ‡πâ‡∏Ñ‡∏£‡∏ö‡∏´‡∏£‡∏∑‡∏≠‡πÄ‡∏•‡∏¢‡∏Å‡∏≥‡∏´‡∏ô‡∏î */
-function dueDateArrivalButtonTone(dueYmd: string | undefined): "amber" | "red" | "sky" {
-  const days = calendarDaysUntilDueBangkok(dueYmd);
-  if (days == null) return "sky";
-  if (days <= 0) return "red";
-  if (days === 1) return "amber";
-  return "sky";
-}
-
-/** ‡∏ï‡∏±‡∏ß‡∏Å‡∏£‡∏≠‡∏á‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏ö‡∏ô‡πÅ‡∏ñ‡∏ö‡πÄ‡∏Ñ‡∏£‡∏∑‡πà‡∏≠‡∏á‡∏°‡∏∑‡∏≠ ‚Äî ‡πÉ‡∏ä‡πâ‡∏Ñ‡∏π‡πà‡∏Å‡∏±‡∏ö‡∏Å‡∏£‡∏≠‡∏á‡∏û‡∏ô‡∏±‡∏Å‡∏á‡∏≤‡∏ô‡πÄ‡∏û‡∏∑‡πà‡∏≠‡∏ã‡πà‡∏≠‡∏ô‡πÅ‡∏ñ‡∏ß‡πÉ‡∏ô‡∏Å‡∏≤‡∏£‡πå‡∏î */
-function itemMatchesToolbarStatusFilter(
-  item: Pick<OrderItem, "status" | "good" | "dueDate">,
-  statusFilter: ItemStatusFilterValue | "",
-  dueTodayChip: ItemStatusPoliciesNormalized["dueToday"]
-): boolean {
-  if (!statusFilter) return true;
-  if (statusFilter === ITEM_STATUS_DUE_TODAY) return matchesDueTodayChip(item, dueTodayChip);
-  if (statusFilter === "‡∏à‡∏ö") return item.status === "‡∏à‡∏ö" || Boolean(item.good);
-  return item.status === statusFilter;
-}
-
-function toggleSetMember<T>(prev: Set<T>, key: T): Set<T> {
-  const next = new Set(prev);
-  if (next.has(key)) next.delete(key);
-  else next.add(key);
-  return next;
-}
-
-function orderMatchesSaleFilters(order: Order, saleFilters: Set<string>): boolean {
-  if (saleFilters.size === 0) return true;
-  const up = String(order.sale).toUpperCase();
-  for (const code of Array.from(saleFilters)) {
-    if (code === SALE_FILTER_UNASSIGNED && !KNOWN_SALE_CODES.has(up)) return true;
-    if (up === String(code).toUpperCase()) return true;
-  }
-  return false;
-}
-
-function orderMatchesSaleStatusFilters(order: Order, saleStatusFilters: Set<SaleStatusFilterValue>): boolean {
-  if (saleStatusFilters.size === 0) return true;
-  return saleStatusFilters.has(order.saleStatus);
-}
-
-function splitStaffFilters(staffFilters: Set<string>): {
-  itemStaffFilters: Set<string>;
-  bookedShipKeys: Set<string>;
-  bookedBuyerKeys: Set<string>;
-  soldShippedTokens: Set<string>;
-  soldModelYearTokens: Set<string>;
-  vacantModelYearTokens: Set<string>;
-  anyBookedShippingLegacy: boolean;
-} {
-  const itemStaffFilters = new Set<string>();
-  const bookedShipKeys = new Set<string>();
-  const bookedBuyerKeys = new Set<string>();
-  const soldShippedTokens = new Set<string>();
-  const soldModelYearTokens = new Set<string>();
-  const vacantModelYearTokens = new Set<string>();
-  let anyBookedShippingLegacy = false;
-  for (const f of Array.from(staffFilters)) {
-    if (f === STAFF_FILTER_BOOKED_SHIPPING) {
-      anyBookedShippingLegacy = true;
-      continue;
-    }
-    const sk = bookedShipKeyFromFilterToken(f);
-    if (sk !== null) {
-      bookedShipKeys.add(sk);
-      continue;
-    }
-    const bk = bookedBuyerKeyFromFilterToken(f);
-    if (bk !== null) {
-      bookedBuyerKeys.add(bk);
-      continue;
-    }
-    if (isSoldShippedStaffFilter(f)) {
-      soldShippedTokens.add(f);
-      continue;
-    }
-    if (isSoldModelYearStaffFilter(f)) {
-      soldModelYearTokens.add(f);
-      continue;
-    }
-    if (isVacantSaleModelYearStaffFilter(f)) {
-      vacantModelYearTokens.add(f);
-      continue;
-    }
-    itemStaffFilters.add(f);
-  }
-  return {
-    itemStaffFilters,
-    bookedShipKeys,
-    bookedBuyerKeys,
-    soldShippedTokens,
-    soldModelYearTokens,
-    vacantModelYearTokens,
-    anyBookedShippingLegacy,
-  };
-}
-
-/** ‡∏û‡∏ô‡∏±‡∏Å‡∏á‡∏≤‡∏ô‡∏´‡∏•‡∏≤‡∏¢‡∏ä‡∏¥‡∏õ ‚Äî OR ‡∏†‡∏≤‡∏¢‡πÉ‡∏ô‡∏ä‡∏∏‡∏î ¬∑ ‡∏ß‡πà‡∏≤‡∏á = ‡πÑ‡∏°‡πà‡∏à‡∏≥‡∏Å‡∏±‡∏î */
-function itemMatchesStaffFilters(assignee: string | undefined | null, staffFilters: Set<string>): boolean {
-  if (staffFilters.size === 0) return true;
-  for (const f of Array.from(staffFilters)) {
-    if (itemMatchesStaffFilter(assignee, f)) return true;
-  }
-  return false;
-}
-
-/** ‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏´‡∏•‡∏≤‡∏¢‡∏ä‡∏¥‡∏õ ‚Äî OR ¬∑ ‡∏ß‡πà‡∏≤‡∏á = ‡πÑ‡∏°‡πà‡∏à‡∏≥‡∏Å‡∏±‡∏î */
-function itemMatchesToolbarStatusFilters(
-  item: Pick<OrderItem, "status" | "good" | "dueDate">,
-  statusFilters: Set<ItemStatusFilterValue | typeof ITEM_STATUS_DUE_TODAY>,
-  dueTodayChip: ItemStatusPoliciesNormalized["dueToday"]
-): boolean {
-  if (statusFilters.size === 0) return true;
-  for (const f of Array.from(statusFilters)) {
-    if (itemMatchesToolbarStatusFilter(item, f, dueTodayChip)) return true;
-  }
-  return false;
-}
-
-function itemMatchesToolbarLineFiltersMulti(
-  item: Pick<OrderItem, "status" | "good" | "dueDate" | "assignee">,
-  staffFilters: Set<string>,
-  statusFilters: Set<ItemStatusFilterValue | typeof ITEM_STATUS_DUE_TODAY>,
-  dueTodayChip: ItemStatusPoliciesNormalized["dueToday"]
-): boolean {
-  return itemMatchesStaffFilters(item.assignee, staffFilters) && itemMatchesToolbarStatusFilters(item, statusFilters, dueTodayChip);
-}
-
-function orderCarKeys(order: Pick<Order, "carRowId" | "carId">): string[] {
-  const keys: string[] = [];
-  const rowId = String(order.carRowId ?? "").trim();
-  if (rowId) keys.push(`row:${rowId}`);
-  if (order.carId != null) {
-    const id = String(order.carId).trim();
-    if (id) keys.push(`id:${id}`);
-  }
-  return keys;
-}
-
-function orderCarRequest(order: Pick<Order, "carRowId" | "carId">): { row_id: string | null; id: number | null } {
-  return {
-    row_id: String(order.carRowId ?? "").trim() || null,
-    id: order.carId ?? null,
-  };
-}
-
-function filterIndexItemsForOrder(
-  order: Pick<Order, "carRowId" | "carId">,
-  indexByCar: Record<string, OrderItemFilterIndexLite[]>
-): Pick<OrderItem, "status" | "good" | "dueDate" | "assignee">[] {
-  const keys = orderCarKeys(order);
-  const rows = keys.map((key) => indexByCar[key] ?? []).find((list) => list.length > 0) ?? [];
-  return rows.map((item) => {
-    const status = normalizeItemStatus(item.status);
-    const dueDate = String(item.due_date ?? "").trim().slice(0, 10);
-    return {
-      status,
-      good: DONE_SET.has(status),
-      dueDate: /^\d{4}-\d{2}-\d{2}$/.test(dueDate) ? dueDate : undefined,
-      assignee: normalizeAssignee(item.assignee_staff),
-    };
-  });
-}
-
-function orderMatchesToolbarFilters(
-  order: Order,
-  staffFilters: Set<string>,
-  statusFilters: Set<ItemStatusFilterValue | typeof ITEM_STATUS_DUE_TODAY>,
-  dueTodayChip: ItemStatusPoliciesNormalized["dueToday"],
-  filterItems: Pick<OrderItem, "status" | "good" | "dueDate" | "assignee">[] = order.items
-): boolean {
-  const {
-    itemStaffFilters,
-    bookedShipKeys,
-    bookedBuyerKeys,
-    soldShippedTokens,
-    soldModelYearTokens,
-    vacantModelYearTokens,
-    anyBookedShippingLegacy,
-  } = splitStaffFilters(staffFilters);
-  if (anyBookedShippingLegacy || bookedShipKeys.size > 0) {
-    if (order.saleStatus !== "‡∏£‡∏≠‡∏™‡πà‡∏á") return false;
-    const shipK = shipGroupKey(order.ship);
-    if (bookedShipKeys.size > 0) {
-      if (!bookedShipKeys.has(shipK)) return false;
-    } else if (anyBookedShippingLegacy) {
-      if (!order.ship.trim()) return false;
-    }
-  }
-  if (bookedBuyerKeys.size > 0) {
-    if (order.saleStatus !== "‡∏à‡∏≠‡∏á") return false;
-    const buyerK = buyerGroupKey(order.buyer);
-    if (!bookedBuyerKeys.has(buyerK)) return false;
-  }
-  if (soldShippedTokens.size > 0) {
-    if (!orderMatchesSoldShippedStaffDim(order, soldShippedTokens)) return false;
-  }
-  if (soldModelYearTokens.size > 0) {
-    if (!orderMatchesSoldModelYearStaffDim(order, soldModelYearTokens)) return false;
-  }
-  if (vacantModelYearTokens.size > 0) {
-    if (!orderMatchesVacantSaleModelYearStaffDim(order, vacantModelYearTokens)) return false;
-  }
-  const useLineScope = itemStaffFilters.size > 0 || statusFilters.size > 0;
-  if (!useLineScope) return true;
-  if (filterItems.length === 0) return itemStaffFilters.size === 0;
-  return filterItems.some((item) => itemMatchesToolbarLineFiltersMulti(item, itemStaffFilters, statusFilters, dueTodayChip));
-}
-
-function firstNumber(raw: string): string {
-  const m = raw.match(/[0-9][0-9,]*(\.[0-9]+)?/);
-  return m ? m[0] : "-";
-}
-
-function formatUsd(raw: string): string {
-  const text = raw.trim();
-  if (!text) return "-";
-  if (text.includes("$") && text.includes(",")) return text;
-  const numeric = Number(text.replace(/[^0-9.-]/g, ""));
-  if (!Number.isFinite(numeric)) return text;
-  return `$${new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(numeric)}`;
-}
-
-function buildLineShareMessage(order: Order, shareItems: OrderItem[], cardUrl: string, norms: ItemStatusPoliciesNormalized): string {
-  const carLine = carHeadlineForShare(order.fullPlate, order.car);
-  const headerLines: string[] = [];
-  headerLines.push(`üöó ${carLine}`);
-  const chassis = String(order.chassis ?? "").trim();
-  if (chassis) headerLines.push(`üîñ ‡πÄ‡∏•‡∏Ç‡∏ñ‡∏±‡∏á ¬∑ ${chassis}`);
-  headerLines.push(`üìå Sale ¬∑ ${order.sale} ¬∑ ${order.saleStatus}`);
-  headerLines.push(`üë§ ‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤ ¬∑ ${order.buyer}`);
-  const shipT = order.ship?.trim() ?? "";
-  if (shipT) headerLines.push(`üö¢ ‡∏£‡∏≠‡∏ö‡πÄ‡∏£‡∏∑‡∏≠ ¬∑ ${shipT}`);
-  const sp = String(order.salePrice ?? "").trim();
-  if (sp && sp !== "-") headerLines.push(`üíµ ‡∏£‡∏≤‡∏Ñ‡∏≤‡∏Ç‡∏≤‡∏¢ ¬∑ ${formatUsd(sp)}`);
-
-  const header = headerLines.join("\n");
-  const sorted = sortOrderItemsForShare(shareItems);
-  const baseLines = sorted.map((it) => orderItemShareLine(it, norms));
-  const cardUrlT = cardUrl.trim();
-  const workLinkT = String(order.link ?? "").trim();
-  const linkBlock = cardUrlT
-    ? `\n‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ\nüîó ‡πÄ‡∏õ‡∏¥‡∏î‡∏Å‡∏≤‡∏£‡πå‡∏î‡πÉ‡∏ô‡πÅ‡∏≠‡∏õ\n${cardUrlT}`
-    : workLinkT && workLinkT !== "#"
-      ? `\n‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ\nüîó ‡∏•‡∏¥‡∏á‡∏Å‡πå‡∏á‡∏≤‡∏ô\n${workLinkT}`
-      : "";
-
-  let lines = [...baseLines];
-  const makeBody = (cur: string[]) => {
-    if (cur.length === 0) return `\n‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ\nüìã ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏á‡∏≤‡∏ô\n‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ`;
-    const omitted = baseLines.length - cur.length;
-    if (omitted > 0) {
-      return `\n‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ\nüìã ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏á‡∏≤‡∏ô (${sorted.length}) ¬∑ ‡πÅ‡∏™‡∏î‡∏á ${cur.length} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£\n${cur.join("\n")}\n‚Ä¶ ‡πÅ‡∏•‡∏∞‡∏≠‡∏µ‡∏Å ${omitted} ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ (‡∏î‡∏π‡∏Ñ‡∏£‡∏ö‡πÉ‡∏ô‡πÅ‡∏≠‡∏õ)`;
-    }
-    return `\n‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ\nüìã ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏á‡∏≤‡∏ô (${sorted.length})\n${cur.join("\n")}`;
-  };
-
-  let body = makeBody(lines);
-  let msg = header + body + linkBlock;
-  while (msg.length > LINE_SHARE_MAX_CHARS && lines.length > 1) {
-    lines = lines.slice(0, -1);
-    body = makeBody(lines);
-    msg = header + body + linkBlock;
-  }
-  if (msg.length > LINE_SHARE_MAX_CHARS) {
-    msg = `${msg.slice(0, LINE_SHARE_MAX_CHARS - 24).trimEnd()}\n‚Ä¶‡∏ï‡∏±‡∏î‡∏Ç‡πâ‡∏≠‡∏Ñ‡∏ß‡∏≤‡∏°`;
-  }
-  return msg;
-}
-
-function normalizeDocumentLink(raw: string): string | null {
-  const text = raw.trim();
-  if (!text) return null;
-  const urlMatch = text.match(/https?:\/\/[^\s]+/i);
-  if (urlMatch?.[0]) return urlMatch[0];
-  const flowAccountMatch = text.match(/(?:www\.)?share\.flowaccount\.com\/[^\s]+/i);
-  if (flowAccountMatch?.[0]) return `https://${flowAccountMatch[0].replace(/^https?:\/\//i, "")}`;
-  return null;
-}
-
-function shipGroupKey(ship: string): string {
-  return ship.trim().toLowerCase();
-}
-
-function bookedShipFilterTokenFromKey(shipKey: string): string {
-  return `${STAFF_FILTER_BOOKED_SHIP_PREFIX}${shipKey}`;
-}
-
-function bookedShipKeyFromFilterToken(f: string): string | null {
-  if (!f.startsWith(STAFF_FILTER_BOOKED_SHIP_PREFIX)) return null;
-  return f.slice(STAFF_FILTER_BOOKED_SHIP_PREFIX.length);
-}
-
-function isBookedShipStaffFilter(f: string): boolean {
-  return f.startsWith(STAFF_FILTER_BOOKED_SHIP_PREFIX) || f === STAFF_FILTER_BOOKED_SHIPPING;
-}
-
-function buyerGroupKey(buyer: string): string {
-  return buyer.trim().toLowerCase();
-}
-
-function bookedBuyerFilterTokenFromKey(buyerKey: string): string {
-  return `${STAFF_FILTER_BOOKED_BUYER_PREFIX}${buyerKey}`;
-}
-
-function bookedBuyerKeyFromFilterToken(f: string): string | null {
-  if (!f.startsWith(STAFF_FILTER_BOOKED_BUYER_PREFIX)) return null;
-  return f.slice(STAFF_FILTER_BOOKED_BUYER_PREFIX.length);
-}
-
-function isBookedBuyerStaffFilter(f: string): boolean {
-  return f.startsWith(STAFF_FILTER_BOOKED_BUYER_PREFIX);
-}
-
-function soldShippedLineGroupKey(line: string): string {
-  return line.trim().toLowerCase();
-}
-
-function soldShippedLineTokenFromKey(key: string): string {
-  return `${STAFF_FILTER_SOLD_SHIPPED_PREFIX}${key}`;
-}
-
-function soldShippedLineKeyFromFilterToken(f: string): string | null {
-  if (!f.startsWith(STAFF_FILTER_SOLD_SHIPPED_PREFIX)) return null;
-  return f.slice(STAFF_FILTER_SOLD_SHIPPED_PREFIX.length);
-}
-
-function isSoldShippedStaffFilter(f: string): boolean {
-  return f === STAFF_FILTER_SOLD_SHIPPED_EMPTY || f.startsWith(STAFF_FILTER_SOLD_SHIPPED_PREFIX);
-}
-
-function soldModelYearGroupKey(my: string): string {
-  return my.trim().toLowerCase();
-}
-
-function soldModelYearTokenFromKey(key: string): string {
-  return `${STAFF_FILTER_SOLD_MODEL_YEAR_PREFIX}${key}`;
-}
-
-function soldModelYearKeyFromFilterToken(f: string): string | null {
-  if (!f.startsWith(STAFF_FILTER_SOLD_MODEL_YEAR_PREFIX)) return null;
-  return f.slice(STAFF_FILTER_SOLD_MODEL_YEAR_PREFIX.length);
-}
-
-function isSoldModelYearStaffFilter(f: string): boolean {
-  return f === STAFF_FILTER_SOLD_MODEL_YEAR_EMPTY || f.startsWith(STAFF_FILTER_SOLD_MODEL_YEAR_PREFIX);
-}
-
-function stripSoldShippedStaffFilters(prev: Set<string>): Set<string> {
-  const next = new Set(prev);
-  for (const f of Array.from(next)) {
-    if (isSoldShippedStaffFilter(f)) next.delete(f);
-  }
-  return next;
-}
-
-function stripSoldModelYearStaffFilters(prev: Set<string>): Set<string> {
-  const next = new Set(prev);
-  for (const f of Array.from(next)) {
-    if (isSoldModelYearStaffFilter(f)) next.delete(f);
-  }
-  return next;
-}
-
-/** OR ‡∏†‡∏≤‡∏¢‡πÉ‡∏ô‡∏°‡∏¥‡∏ï‡∏¥‡πÄ‡∏î‡∏µ‡∏¢‡∏ß ‚Äî ‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß + ‡∏ä‡∏∏‡∏î‡∏ä‡∏¥‡∏õ shipped */
-function orderMatchesSoldShippedStaffDim(order: Order, tokens: Set<string>): boolean {
-  if (order.saleStatus !== "‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß") return false;
-  if (tokens.size === 0) return true;
-  const raw = String(order.shipped ?? "").trim();
-  const gk = soldShippedLineGroupKey(raw);
-  let ok = false;
-  if (tokens.has(STAFF_FILTER_SOLD_SHIPPED_EMPTY) && !raw) ok = true;
-  for (const t of Array.from(tokens)) {
-    const k = soldShippedLineKeyFromFilterToken(t);
-    if (k !== null && raw && k === gk) ok = true;
-  }
-  return ok;
-}
-
-function orderMatchesSoldModelYearStaffDim(order: Order, tokens: Set<string>): boolean {
-  if (order.saleStatus !== "‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß") return false;
-  if (tokens.size === 0) return true;
-  const rawMy = String(order.modelYear ?? "").trim();
-  const gk = soldModelYearGroupKey(rawMy);
-  let ok = false;
-  if (tokens.has(STAFF_FILTER_SOLD_MODEL_YEAR_EMPTY) && !rawMy) ok = true;
-  for (const t of Array.from(tokens)) {
-    const k = soldModelYearKeyFromFilterToken(t);
-    if (k !== null && rawMy && k === gk) ok = true;
-  }
-  return ok;
-}
-
-function vacantSaleModelYearTokenFromKey(key: string): string {
-  return `${STAFF_FILTER_VACANT_MODEL_YEAR_PREFIX}${key}`;
-}
-
-function vacantSaleModelYearKeyFromFilterToken(f: string): string | null {
-  if (!f.startsWith(STAFF_FILTER_VACANT_MODEL_YEAR_PREFIX)) return null;
-  return f.slice(STAFF_FILTER_VACANT_MODEL_YEAR_PREFIX.length);
-}
-
-function isVacantSaleModelYearStaffFilter(f: string): boolean {
-  return f === STAFF_FILTER_VACANT_MODEL_YEAR_EMPTY || f.startsWith(STAFF_FILTER_VACANT_MODEL_YEAR_PREFIX);
-}
-
-function stripVacantSaleModelYearStaffFilters(prev: Set<string>): Set<string> {
-  const next = new Set(prev);
-  for (const f of Array.from(next)) {
-    if (isVacantSaleModelYearStaffFilter(f)) next.delete(f);
-  }
-  return next;
-}
-
-/** OR ‡∏†‡∏≤‡∏¢‡πÉ‡∏ô‡∏°‡∏¥‡∏ï‡∏¥ ‚Äî ‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏Ç‡∏≤‡∏¢ ‡∏ß‡πà‡∏≤‡∏á + model year */
-function orderMatchesVacantSaleModelYearStaffDim(order: Order, tokens: Set<string>): boolean {
-  if (order.saleStatus !== "‡∏ß‡πà‡∏≤‡∏á") return false;
-  if (tokens.size === 0) return true;
-  const rawMy = String(order.modelYear ?? "").trim();
-  const gk = soldModelYearGroupKey(rawMy);
-  let ok = false;
-  if (tokens.has(STAFF_FILTER_VACANT_MODEL_YEAR_EMPTY) && !rawMy) ok = true;
-  for (const t of Array.from(tokens)) {
-    const k = vacantSaleModelYearKeyFromFilterToken(t);
-    if (k !== null && rawMy && k === gk) ok = true;
-  }
-  return ok;
-}
-
-function modelYearSortValue(value: string): number {
-  const text = value.trim();
-  if (!text) return 0;
-  const y4 = text.match(/\b(19|20)\d{2}\b/);
-  if (y4) return Number(y4[0]);
-  const y2 = text.match(/\b\d{2}\b/);
-  if (y2) {
-    const yy = Number(y2[0]);
-    if (!Number.isFinite(yy)) return 0;
-    return yy >= 80 ? 1900 + yy : 2000 + yy;
-  }
-  return 0;
-}
-
-function normalizeItemStatus(value: string): ItemStatusValue {
-  const text = value.trim();
-  if (!text) return "‡πÄ‡∏ä‡πá‡∏Ñ";
-  if (text === "requested") return "‡πÄ‡∏ä‡πá‡∏Ñ";
-  if (text === "ordered") return "‡∏™‡∏±‡πà‡∏á";
-  if (text === "ready") return "‡∏°‡∏µ";
-  if (text === "received") return "‡∏°‡∏≤";
-  if (text === "deposit_store" || text === "‡∏ù‡∏≤‡∏Å‡∏™‡πÇ‡∏ï‡∏£‡πå" || text === "‡∏ù‡∏≤‡∏Å‡∏™‡πÇ‡∏™‡∏£‡πå") return "‡∏ù‡∏≤‡∏Å‡∏™‡πÇ‡∏ï‡∏£‡πå";
-  if (
-    text === "deposit_in_car" ||
-    text === "in_car_storage" ||
-    text === "‡∏ù‡∏≤‡∏Å‡∏£‡∏ñ" ||
-    text === "‡∏ù‡∏≤‡∏Å‡∏Å‡∏±‡∏ö‡∏£‡∏ñ"
-  ) {
-    return "‡∏ù‡∏≤‡∏Å‡∏Å‡∏±‡∏ö‡∏£‡∏ñ";
-  }
-  if (text === "deposit" || text === "stored" || text === "‡∏ù‡∏≤‡∏Å") return "‡πÄ‡∏ä‡πá‡∏Ñ";
-  if (text === "done" || text === "completed") return "‡∏à‡∏ö";
-  if (ITEM_STATUSES.includes(text as ItemStatusValue)) return text as ItemStatusValue;
-  return "‡πÄ‡∏ä‡πá‡∏Ñ";
-}
-
-function normalizeAssignee(value: string | null | undefined): string {
-  return String(value ?? "").trim();
-}
-
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-/** ‡∏ï‡∏±‡∏î‡∏ä‡πà‡∏ß‡∏á‡∏ó‡πâ‡∏≤‡∏¢ spec ‡πÄ‡∏°‡∏∑‡πà‡∏≠‡∏°‡∏µ‡∏Ñ‡∏≥ (‡∏¢‡∏≤‡∏ß‡∏û‡∏≠) ‡∏ã‡πâ‡∏≥‡πÄ‡∏õ‡πá‡∏ô‡∏ö‡∏•‡πá‡∏≠‡∏Å‡∏ó‡∏µ‡πà‡∏™‡∏≠‡∏á ‚Äî ‡πÄ‡∏ä‡πà‡∏ô ‚Ä¶ FORTUNER ‚Ä¶ Dec15 FORTUNER ‚Ä¶ 15 */
-function trimDuplicateTrailingModelWordRun(spec: string): string {
-  const s = spec.trim();
-  const re = /\b([A-Z][A-Za-z0-9]{5,})\b/g;
-  const indicesBy = new Map<string, number[]>();
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(s)) !== null) {
-    const word = m[1].toUpperCase();
-    const arr = indicesBy.get(word) ?? [];
-    arr.push(m.index);
-    indicesBy.set(word, arr);
-  }
-  let cutFrom = s.length;
-  indicesBy.forEach((arr) => {
-    if (arr.length < 2) return;
-    const first = arr[0];
-    const lastStart = arr[arr.length - 1];
-    if (lastStart - first < 16) return;
-    cutFrom = Math.min(cutFrom, lastStart);
-  });
-  return cutFrom < s.length ? s.slice(0, cutFrom).trimEnd() : s;
-}
-
-/** ‡∏ï‡∏±‡∏î‡∏õ‡∏µ‡∏ó‡πâ‡∏≤‡∏¢ spec ‡∏ó‡∏µ‡πà‡∏ã‡πâ‡∏≥‡∏Å‡∏±‡∏ö model_year/c_year (‡πÄ‡∏ä‡πà‡∏ô ‚Ä¶ AT SUV 15) ‚Äî ‡πÑ‡∏°‡πà‡πÅ‡∏ï‡∏∞‡∏Ñ‡∏≥‡πÅ‡∏ö‡∏ö Dec15 ‡πÄ‡∏û‡∏£‡∏≤‡∏∞‡∏ï‡πâ‡∏≠‡∏á‡∏°‡∏µ‡∏ä‡πà‡∏≠‡∏á‡∏ß‡πà‡∏≤‡∏á‡∏ô‡∏≥‡∏´‡∏ô‡πâ‡∏≤‡∏õ‡∏µ */
-function stripTrailingModelYearFromSpec(spec: string, modelYearRaw: string): string {
-  let s = spec.trim();
-  const raw = modelYearRaw.trim();
-  if (!s || !raw) return s;
-  const tokens = new Set<string>([raw]);
-  const m4 = raw.match(/\b(19|20)(\d{2})\b/);
-  if (m4) {
-    tokens.add(m4[0]);
-    tokens.add(m4[2]);
-  } else if (/^\d{2}$/.test(raw)) {
-    tokens.add(raw);
-  }
-  for (const t of Array.from(tokens).sort((a, b) => b.length - a.length)) {
-    if (!t) continue;
-    const spaced = new RegExp(`\\s${escapeRegExp(t)}$`, "i");
-    if (spaced.test(s)) {
-      s = s.replace(spaced, "").trimEnd();
-      break;
-    }
-  }
-  return s;
-}
-
-function parseUpdateMessage(message: string | null | undefined): {
-  actionType: string;
-  oldValue: string;
-  newValue: string;
-  note: string;
-  updatedBy: string;
-} {
-  const text = String(message ?? "").trim();
-  const actionMatch = text.match(/^\[([^\]]+)\]/);
-  const actionType = actionMatch?.[1] ?? "unknown";
-  const oldMatch = text.match(/(?:^|\s)\bold=(.*?)(?:\s\|\s(?:new=|note=|by=)|$)/);
-  const newMatch = text.match(/(?:^|\s)\bnew=(.*?)(?:\s\|\s(?:note=|by=)|$)/);
-  const noteMatch = text.match(/(?:^|\s)\bnote=(.*?)(?:\s\|\s(?:by=)|$)/);
-  const byMatch = text.match(/(?:^|\s)\bby=(.*)$/);
-  return {
-    actionType,
-    oldValue: (oldMatch?.[1] ?? "-").trim(),
-    newValue: (newMatch?.[1] ?? "-").trim(),
-    note: (noteMatch?.[1] ?? "").trim(),
-    updatedBy: (byMatch?.[1] ?? "").trim(),
-  };
-}
-
-function toOrderFromCar(
-  car: Car,
-  index: number,
-  orderItemsByCar: NonNullable<MobileOrderTrackingHomeProps["orderItemsByCar"]>,
-  orderUpdatesByCar: NonNullable<MobileOrderTrackingHomeProps["orderUpdatesByCar"]>
-): Order {
-  const row = car as Car & {
-    total_cost?: string | number | null;
-    sale_price_usd?: string | number | null;
-    repair_cost?: string | number | null;
-    part_accessories?: string | number | null;
-    repair_details?: string | number | null;
-    doc_fee?: string | number | null;
-  };
-  const sale = (car.sale_support ?? "").trim() || "ALL";
-  const shipped = (car.shipped ?? "").trim();
-  /** Header badge / ship line: mockup ‚Üí `cars.booked_shipping` only (not `shipped`) */
-  const bookedShipping = (car.booked_shipping ?? "").trim();
-  const buyer = (car.buyer ?? "").trim() || "-";
-  const totalCostRaw = String(row.total_cost ?? "").trim();
-  const buyPriceRaw = String(car.buy_price ?? "").trim() || "0";
-  const expenseRaw = String(row.repair_cost ?? "").trim() || "0";
-  const repairDetailsRaw = String(row.repair_details ?? "").trim();
-  const partAccessoriesRaw = String(row.part_accessories ?? "").trim();
-  const partAccessoriesLink = normalizeDocumentLink(partAccessoriesRaw);
-  const docFeeRaw = String(row.doc_fee ?? "").trim();
-  const documentDetail = [String(car.document_status ?? "").trim(), String(car.initial_document ?? "").trim(), docFeeRaw]
-    .filter(Boolean)
-    .join(" ¬∑ ");
-  const costLine =
-    totalCostRaw || `${buyPriceRaw}(Total Cost) = ${buyPriceRaw}(Car Price) + ${expenseRaw}(Expense)`;
-  /** Primary cost text for card: raw total_cost / buy_price line (DB source of truth on `cars`) */
-  const costDetailResolved = totalCostRaw || costLine;
-  const hasShipped = Boolean(shipped);
-  const hasBookedShipping = Boolean(bookedShipping);
-  const hasBuyer = Boolean((car.buyer ?? "").trim());
-  // Order Tracking status rules:
-  // ‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß = shipped ‡∏°‡∏µ‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•
-  // ‡∏£‡∏≠‡∏™‡πà‡∏á = booked_shipping ‡∏°‡∏µ‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•
-  // ‡∏à‡∏≠‡∏á = buyer ‡∏°‡∏µ‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏• ‡πÅ‡∏ï‡πà shipped/booked_shipping ‡∏ß‡πà‡∏≤‡∏á
-  // ‡∏ß‡πà‡∏≤‡∏á = ‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡∏ó‡∏±‡πâ‡∏á buyer/shipped/booked_shipping
-  const saleStatus: SaleStatusValue = hasShipped
-    ? "‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß"
-    : hasBookedShipping
-      ? "‡∏£‡∏≠‡∏™‡πà‡∏á"
-      : hasBuyer
-        ? "‡∏à‡∏≠‡∏á"
-        : "‡∏ß‡πà‡∏≤‡∏á";
-  const rowId = String(car.row_id ?? "").trim();
-  const chassisFallback = String(car.chassis_number ?? "").trim();
-  const itemKeyByRowId = `row:${rowId}`;
-  const itemKeyByCarId = `id:${String(car.id ?? "").trim()}`;
-  const sourceItems = [...(orderItemsByCar[itemKeyByRowId] ?? []), ...(orderItemsByCar[itemKeyByCarId] ?? [])];
-  const sourceUpdates = [...(orderUpdatesByCar[itemKeyByRowId] ?? []), ...(orderUpdatesByCar[itemKeyByCarId] ?? [])];
-  const seen = new Set<string>();
-  const items: OrderItem[] = [];
-  for (const item of sourceItems) {
-    const status = normalizeItemStatus(item.status);
-    const assignee = normalizeAssignee(item.assignee_staff);
-    const dbId = String((item as { id?: unknown }).id ?? "").trim();
-    /** ‡∏≠‡∏¢‡πà‡∏≤‡∏ï‡∏±‡∏î‡∏´‡∏°‡∏≤‡∏¢‡πÄ‡∏´‡∏ï‡∏∏/‡πÅ‡∏ñ‡∏ß‡∏ï‡πà‡∏≤‡∏á‡∏Ç‡πâ‡∏≤‡∏°‡πÄ‡∏°‡∏∑‡πà‡∏≠‡∏°‡∏µ‡∏´‡∏•‡∏≤‡∏¢ order_items ‡πÄ‡∏´‡∏°‡∏∑‡∏≠‡∏ô‡∏ä‡∏∑‡πà‡∏≠ (‡∏Ñ‡∏µ‡∏¢‡πå‡πÄ‡∏î‡∏¥‡∏°‡∏ó‡∏≥‡πÉ‡∏´‡πâ‡πÄ‡∏´‡∏•‡∏∑‡∏≠‡πÅ‡∏ñ‡∏ß‡πÄ‡∏î‡∏µ‡∏¢‡∏ß) */
-    const key = dbId ? `id:${dbId}` : `${item.label}__${status}__${assignee}__${item.outside_supplier ?? ""}__${item.outside_eta_date ?? ""}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    items.push({
-      id: String((item as { id?: unknown }).id ?? "").trim() || null,
-      orderTaskId: String((item as { order_task_id?: unknown }).order_task_id ?? "").trim() || null,
-      name: item.label,
-      nameEn: String((item as { label_en?: unknown }).label_en ?? "").trim() || undefined,
-      status,
-      assignee,
-      /** fetchOrderItemsByCars ‡∏£‡∏ß‡∏° due_date + outside_eta_date, note + outside_note ‡πÅ‡∏•‡πâ‡∏ß */
-      dueDate: item.due_date?.trim() ? item.due_date.trim().slice(0, 10) : undefined,
-      clockStartYmd: (() => {
-        const raw = String((item as { clock_start_ymd?: unknown }).clock_start_ymd ?? "").trim().slice(0, 10);
-        return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : undefined;
-      })(),
-      statusChangedAtYmd: statusChangedAtYmdFromDbIso(String((item as { status_changed_at?: unknown }).status_changed_at ?? "").trim()),
-      note: item.note?.trim() || undefined,
-      noteEn: String((item as { note_en?: unknown }).note_en ?? "").trim() || undefined,
-      good: DONE_SET.has(status),
-      supplier: item.outside_supplier ?? undefined,
-      eta: item.outside_eta_date ?? undefined,
-      price: item.outside_price == null ? undefined : String(item.outside_price),
-    });
-  }
-
-  const updatesDedup = new Set<string>();
-  const updates = sourceUpdates
-    .map((rowUpdate) => {
-      const parsed = parseUpdateMessage(String(rowUpdate.message ?? ""));
-      return {
-        id: String(rowUpdate.id ?? "").trim() || null,
-        actionType: parsed.actionType,
-        oldValue: parsed.oldValue,
-        newValue: parsed.newValue,
-        note: parsed.note,
-        updatedBy: parsed.updatedBy || String(rowUpdate.role ?? "").trim() || "-",
-        createdAt: String(rowUpdate.created_at ?? "").trim() || "-",
-      };
-    })
-    .filter((u) => {
-      const key = `${u.id ?? ""}|${u.actionType}|${u.createdAt}|${u.oldValue}|${u.newValue}`;
-      if (updatesDedup.has(key)) return false;
-      updatesDedup.add(key);
-      return true;
-    })
-    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
-
-  const modelYear = String(car.model_year ?? car.c_year ?? "").trim();
-  const specRaw = (car.spec ?? "").trim() || `${car.brand ?? ""} ${car.model ?? ""}`.trim() || "Unknown Spec";
-  const carHeading = stripTrailingModelYearFromSpec(trimDuplicateTrailingModelWordRun(specRaw), modelYear);
-
-  return {
-    id: `OT-${rowId || car.id || chassisFallback || index + 1}`,
-    carRowId: rowId || null,
-    carId: Number.isFinite(Number(car.id)) ? Number(car.id) : null,
-    sale: sale as SaleValue,
-    modelYear,
-    saleStatus,
-    shipped: shipped || "",
-    ship: bookedShipping || "‡∏ß‡πà‡∏≤‡∏á",
-    link: "#",
-    fullPlate: String(car.plate_number ?? "").trim() || "-",
-    plate: String(car.plate_number ?? "").replace(/\D/g, ""),
-    car: carHeading,
-    chassis: String(car.chassis_number ?? "").trim() || "-",
-    buyer,
-    salePrice: String(row.sale_price_usd ?? "-"),
-    cost: firstNumber(totalCostRaw),
-    costBreakdown: costLine,
-    costDetail: costDetailResolved,
-    expense: expenseRaw,
-    documentDetail,
-    repairDetails: repairDetailsRaw,
-    repairDetail: repairDetailsRaw,
-    partAccessoriesRaw,
-    photo: String(car.picture ?? "").trim() || "#",
-    expensePdf: partAccessoriesLink,
-    updates,
-    items,
-  };
-}
-
-type OrderItemRow = OrderItem & { uid: string };
-
-/** ‡∏ö‡∏£‡∏£‡∏ó‡∏±‡∏î‡∏´‡∏±‡∏ß‡∏Ç‡πâ‡∏≠‡∏¢‡πà‡∏≠‡∏¢‡πÉ‡∏ô‡πÅ‡∏ú‡∏á‡∏£‡∏π‡∏õ‡∏ï‡∏≤‡∏°‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ ‚Äî ‡πÇ‡∏´‡∏°‡∏î EN ‡πÉ‡∏ä‡πâ name_en ‡∏ñ‡πâ‡∏≤‡∏°‡∏µ */
-function formatTamRoopSheetItemSubtitle(item: OrderItemRow | null | undefined, uiLang: UiLang): string {
-  if (!item) return "‚Äî";
-  const th = String(item.name ?? "").trim();
-  if (uiLang === "en") {
-    const en = stripEnglishPhotoRefMarkers(String(item.nameEn ?? "").trim()).trim();
-    return en || th || "‚Äî";
-  }
-  return th || "‚Äî";
-}
-
-/** ‡∏ã‡∏¥‡∏á‡∏Å‡πå‡∏Ç‡∏∂‡πâ‡∏ô‡πÅ‡∏°‡πà‡πÄ‡∏û‡∏∑‡πà‡∏≠‡∏ô‡∏±‡∏ö‡∏ä‡∏¥‡∏õ‡∏û‡∏ô‡∏±‡∏Å‡∏á‡∏≤‡∏ô / ‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ ‚Äî ‡πÑ‡∏°‡πà‡∏£‡∏ß‡∏° uid */
-function orderItemRowsToLiveOrderItems(rows: OrderItemRow[]): OrderItem[] {
-  return rows.map((row) => ({
-    id: row.id,
-    orderTaskId: row.orderTaskId,
-    name: row.name,
-    nameEn: row.nameEn,
-    status: row.status,
-    assignee: row.assignee,
-    dueDate: row.dueDate,
-    clockStartYmd: row.clockStartYmd,
-    statusChangedAtYmd: row.statusChangedAtYmd,
-    note: row.note,
-    noteEn: row.noteEn,
-    good: row.good,
-    supplier: row.supplier,
-    eta: row.eta,
-    price: row.price,
-    overdue: row.overdue,
-  }));
-}
-
-/** ‡∏™‡∏£‡∏∏‡∏õ‡πÄ‡∏â‡∏û‡∏≤‡∏∞‡∏ü‡∏¥‡∏•‡∏î‡πå‡∏ó‡∏µ‡πà‡∏°‡∏µ‡∏ú‡∏•‡∏ï‡πà‡∏≠‡∏ä‡∏¥‡∏õ‡πÅ‡∏ñ‡∏ö‡πÄ‡∏Ñ‡∏£‡∏∑‡πà‡∏≠‡∏á‡∏°‡∏∑‡∏≠ ‚Äî ‡∏•‡∏î setState ‡∏ã‡πâ‡∏≥ */
-function orderItemsLiveToolbarSignature(items: OrderItem[]): string {
-  return `${items.length}\x1d${items
-    .map((i) =>
-      [
-        String(i.id ?? ""),
-        i.status,
-        String(i.assignee ?? "").trim(),
-        String(i.dueDate ?? "").slice(0, 10),
-        i.good ? "1" : "0",
-        String(i.clockStartYmd ?? "").slice(0, 10),
-        String(i.statusChangedAtYmd ?? "").slice(0, 10),
-        String(i.name ?? "").trim(),
-      ].join("\x1f")
-    )
-    .join("\x1e")}`;
-}
-
-/** ‡∏ü‡∏¥‡∏•‡∏î‡πå‡∏ó‡∏µ‡πà‡∏™‡πà‡∏á `/api/m/order-items/update` ‚Äî ‡πÉ‡∏ä‡πâ‡∏ï‡∏±‡∏î‡∏™‡∏¥‡∏ô‡πÉ‡∏à‡∏ß‡πà‡∏≤‡∏ï‡πâ‡∏≠‡∏á‡∏¢‡∏¥‡∏á API ‡∏´‡∏£‡∏∑‡∏≠‡πÑ‡∏°‡πà */
-function orderItemPersistSignature(row: Pick<OrderItemRow, "name" | "status" | "assignee" | "dueDate" | "note">): string {
-  return JSON.stringify({
-    name: String(row.name ?? "").trim(),
-    status: row.status,
-    assignee: String(row.assignee ?? "").trim(),
-    due: String(row.dueDate ?? "").trim().slice(0, 10),
-    note: String(row.note ?? "").trim(),
-  });
-}
-
-/** ‡∏´‡∏•‡∏±‡∏á‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å intake ‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à ‚Äî ‡πÅ‡∏ó‡∏£‡∏Å‡πÅ‡∏ñ‡∏ß‡πÄ‡∏Ç‡πâ‡∏≤ state ‡πÉ‡∏ô‡∏Å‡∏≤‡∏£‡πå‡∏î‡∏ó‡∏±‡∏ô‡∏ó‡∏µ (‡πÑ‡∏°‡πà‡∏ï‡πâ‡∏≠‡∏á‡∏£‡∏≠ refresh) */
-function mergeInlineCleanedIntoItemRows(
-  existing: OrderItemRow[],
-  cleaned: Pick<InlineDraftRow, "id" | "name" | "status" | "assignee" | "insertAfterUid">[],
-  orderTaskIdFromApi: string | null,
-  saved?: Array<{ order_item_id: string; label: string; label_en: string | null }> | null
-): OrderItemRow[] {
-  const taskResolved =
-    String(orderTaskIdFromApi ?? "").trim() ||
-    existing.map((r) => String(r.orderTaskId ?? "").trim()).find(Boolean) ||
-    null;
-  const next = [...existing];
-  for (let i = 0; i < cleaned.length; i++) {
-    const draft = cleaned[i];
-    const name = draft.name.trim();
-    const assignee = String(draft.assignee ?? "").trim();
-    const status = draft.status;
-    const pack = saved?.[i];
-    const idFromApi = pack?.order_item_id ? String(pack.order_item_id).trim() : "";
-    const nameEnFromApi = String(pack?.label_en ?? "").trim();
-    const row: OrderItemRow = {
-      id: idFromApi || null,
-      orderTaskId: taskResolved,
-      name,
-      status,
-      assignee,
-      good: DONE_SET.has(status),
-      uid: `intake-${draft.id}`,
-      ...(nameEnFromApi ? { nameEn: nameEnFromApi } : {}),
-    };
-    if (draft.insertAfterUid === INLINE_INSERT_AFTER_END) {
-      next.push(row);
-      continue;
-    }
-    const idx = next.findIndex((r) => r.uid === draft.insertAfterUid);
-    if (idx >= 0) next.splice(idx + 1, 0, row);
-    else next.push(row);
-  }
-  return next;
-}
-
-/** EN ‡∏ó‡∏µ‡πà‡πÄ‡∏Å‡πá‡∏ö [[ref]]‚Ä¶[[/ref]] + ‡∏Ñ‡∏≥‡∏ß‡πà‡∏≤ see photo / ‡∏ï‡∏≤‡∏°‡∏£‡∏π‡∏õ ‚Äî ‡∏•‡∏¥‡∏á‡∏Å‡πå‡πÑ‡∏õ‡πÅ‡∏ú‡∏á‡∏£‡∏π‡∏õ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ */
-function OrderItemEnglishWithPhotoRefs({
-  text,
-  item,
-  onTamRoopClick,
-  linkClass,
-  rowScrollClass,
-  ariaLabel,
-}: {
-  text: string;
-  item: OrderItemRow;
-  onTamRoopClick: (row: OrderItemRow) => void;
-  linkClass: string;
-  rowScrollClass?: string;
-  ariaLabel?: string;
-}) {
-  const wrapScroll = (inner: React.ReactNode) =>
-    rowScrollClass ? (
-      <div className={rowScrollClass} role="group" aria-label={ariaLabel}>
-        {inner}
-      </div>
-    ) : (
-      <>{inner}</>
-    );
-
-  const photoBtn = (key: string, label: string, btnClass = linkClass) => (
-    <button
-      key={key}
-      type="button"
-      data-tam-roop-link=""
-      onPointerDown={(e) => e.stopPropagation()}
-      onClick={(e) => {
-        e.stopPropagation();
-        onTamRoopClick(item);
-      }}
-      className={btnClass}
-      title="Upload/view photos for this item"
-    >
-      {label}
-    </button>
-  );
-
-  const markerSegs = parseEnglishPhotoRefMarkers(text);
-  const hasMarkers = markerSegs.some((s) => s.kind === "photo");
-
-  const legacySplit = (chunk: string, keyPrefix: string) => {
-    const parts = chunk.split(ORDER_ITEM_TAM_ROOP_TOKEN_REGEX);
-    if (parts.length === 1) {
-      return <span className="whitespace-pre-wrap break-words">{chunk}</span>;
-    }
-    return parts.map((part, i) => (
-      <Fragment key={`${keyPrefix}-${i}`}>
-        {i % 2 === 0 ? (
-          <span className="whitespace-pre-wrap break-words">{part}</span>
-        ) : (
-          photoBtn(`${keyPrefix}-leg-${i}`, ORDER_ITEM_REF_PIC_EN)
-        )}
-      </Fragment>
-    ));
-  };
-
-  if (hasMarkers) {
-    return wrapScroll(
-      <>
-        {markerSegs.map((seg, i) =>
-          seg.kind === "photo" ? (
-            photoBtn(`mk-${i}`, seg.label)
-          ) : (
-            <Fragment key={`tx-${i}`}>{legacySplit(seg.text, `tx-${i}`)}</Fragment>
-          )
-        )}
-      </>
-    );
-  }
-
-  const enParts = text.split(ORDER_ITEM_TAM_ROOP_TOKEN_REGEX);
-  const hasPhotoTokenInTranslation = enParts.length > 1;
-
-  if (hasPhotoTokenInTranslation) {
-    return wrapScroll(
-      <>
-        {enParts.map((part, i) => (
-          <Fragment key={`en-${i}`}>
-            {i % 2 === 0 ? (
-              <span className="whitespace-pre-wrap break-words">{part}</span>
-            ) : (
-              photoBtn(`split-${i}`, ORDER_ITEM_REF_PIC_EN)
-            )}
-          </Fragment>
-        ))}
-      </>
-    );
-  }
-
-  /** ‡∏ä‡∏∑‡πà‡∏≠/note ‡πÅ‡∏õ‡∏•‡πÅ‡∏•‡πâ‡∏ß ‚Äî ‡∏°‡∏µ‡∏•‡∏¥‡∏á‡∏Å‡πå‡∏£‡∏π‡∏õ‡πÄ‡∏â‡∏û‡∏≤‡∏∞‡πÄ‡∏°‡∏∑‡πà‡∏≠‡∏Ç‡πâ‡∏≠‡∏Ñ‡∏ß‡∏≤‡∏°‡∏°‡∏µ ref / ‡∏Ñ‡∏≥‡∏ß‡πà‡∏≤ ‡∏ï‡∏≤‡∏°‡∏£‡∏π‡∏õ„Éª‡∏ï‡∏≤‡∏°‡∏†‡∏≤‡∏û„Éªsee photo ‚Ä¶ (‡πÑ‡∏°‡πà‡πÅ‡∏õ‡∏∞ see photo ‡∏ó‡πâ‡∏≤‡∏¢‡πÄ‡∏°‡∏∑‡πà‡∏≠‡πÑ‡∏°‡πà‡πÄ‡∏Å‡∏µ‡πà‡∏¢‡∏ß) */
-  return wrapScroll(<span className="whitespace-pre-wrap break-words">{text}</span>);
-}
-
-function OrderItemNameFieldWithTamRoop({
-  item,
-  showNoteRow,
-  uiLang,
-  patchItem,
-  flushPendingNamePersist,
-  onTamRoopClick,
-  onAfterNameBlur,
-}: {
-  item: OrderItemRow;
-  showNoteRow: boolean;
-  uiLang: UiLang;
-  patchItem: (target: OrderItemRow, patch: Partial<OrderItem>) => void;
-  flushPendingNamePersist: (uid: string) => void | Promise<void>;
-  onTamRoopClick: (row: OrderItemRow) => void;
-  /** ‡∏´‡∏•‡∏±‡∏á blur ‡∏ä‡∏∑‡πà‡∏≠ ‚Äî ‡πÑ‡∏î‡πâ‡∏Ç‡πâ‡∏≠‡∏Ñ‡∏ß‡∏≤‡∏°‡∏•‡πà‡∏≤‡∏™‡∏∏‡∏î‡∏à‡∏≤‡∏Å‡∏ä‡πà‡∏≠‡∏á (‡∏™‡∏≥‡∏´‡∏£‡∏±‡∏ö‡∏õ‡∏¥‡∏î‡πÅ‡∏ú‡∏á‡∏£‡∏π‡∏õ‡πÄ‡∏°‡∏∑‡πà‡∏≠‡πÑ‡∏°‡πà‡∏°‡∏µ „Äå‡∏ï‡∏≤‡∏°‡∏£‡∏π‡∏õ„Äç) */
-  onAfterNameBlur?: (uid: string, nextName: string) => void;
-}) {
-  const name = item.name ?? "";
-  const nameEn = String(item.nameEn ?? "").trim();
-  const [editing, setEditing] = useState(false);
-  const inputRef = useRef<HTMLInputElement | null>(null);
-  const hasTamRoopToken = orderItemLabelContainsTamRoop(name);
-
-  useLayoutEffect(() => {
-    if (!editing) return;
-    const el = inputRef.current;
-    if (!el) return;
-    el.focus();
-    const len = el.value.length;
-    try {
-      el.setSelectionRange(len, len);
-    } catch {
-      /* ignore */
-    }
-  }, [editing]);
-
-  const singleInputClass = cn(
-    "min-w-0 rounded-xl bg-transparent px-1.5 py-1.5 text-sm font-medium text-slate-900 outline-none focus:bg-white focus:ring-2 focus:ring-slate-300/80 sm:text-[15px]",
-    showNoteRow ? "w-full flex-1 basis-0 sm:min-w-[40%]" : "flex-1 basis-0"
-  );
-  const previewShellClass = cn(
-    "flex min-w-0 cursor-text items-baseline rounded-xl bg-transparent px-1.5 py-1.5 text-sm font-medium text-slate-900 outline-none ring-1 ring-transparent hover:bg-slate-50/80 sm:text-[15px]",
-    showNoteRow ? "w-full flex-1 basis-0 sm:min-w-[40%]" : "min-w-0 flex-1 basis-0"
-  );
-  const rowScrollClass = showNoteRow
-    ? "inline-flex max-w-full min-w-0 flex-1 flex-nowrap items-baseline gap-0 overflow-x-auto touch-pan-x [-webkit-overflow-scrolling:touch]"
-    : "inline-flex max-w-full min-w-0 flex-nowrap items-baseline gap-0";
-  const linkClass =
-    "inline shrink-0 cursor-pointer border-0 bg-transparent p-0 align-baseline font-inherit font-medium text-sky-600 underline decoration-sky-400 decoration-2 underline-offset-2 hover:text-sky-700 touch-manipulation active:text-sky-800";
-
-  if (!hasTamRoopToken && uiLang === "en" && nameEn && !editing) {
-    return (
-      <div
-        className={previewShellClass}
-        data-order-item-name-preview=""
-        tabIndex={0}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            setEditing(true);
-          }
-        }}
-        onClick={(e) => {
-          if ((e.target as HTMLElement).closest("[data-tam-roop-link]")) return;
-          setEditing(true);
-        }}
-      >
-        <OrderItemEnglishWithPhotoRefs
-          text={nameEn}
-          item={item}
-          onTamRoopClick={onTamRoopClick}
-          linkClass={linkClass}
-          rowScrollClass={rowScrollClass}
-          ariaLabel="Task name - tap to edit"
-        />
-      </div>
-    );
-  }
-
-  if (!hasTamRoopToken) {
-    return (
-      <input
-        ref={inputRef}
-        id={`order-item-name-${item.uid}`}
-        value={name}
-        onChange={(e) => patchItem(item, { name: e.target.value })}
-        onBlur={() => {
-          const next = String(inputRef.current?.value ?? name);
-          void flushPendingNamePersist(item.uid);
-          setEditing(false);
-          onAfterNameBlur?.(item.uid, next);
-        }}
-        placeholder={uiLang === "en" ? "Task name" : "‡∏ä‡∏∑‡πà‡∏≠‡∏á‡∏≤‡∏ô"}
-        className={singleInputClass}
-      />
-    );
-  }
-
-  if (!editing) {
-    if (uiLang === "en" && nameEn) {
-      return (
-        <div
-          className={previewShellClass}
-          data-order-item-name-preview=""
-          tabIndex={0}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              setEditing(true);
-            }
-          }}
-          onClick={(e) => {
-            if ((e.target as HTMLElement).closest("[data-tam-roop-link]")) return;
-            setEditing(true);
-          }}
-        >
-          <OrderItemEnglishWithPhotoRefs
-            text={nameEn}
-            item={item}
-            onTamRoopClick={onTamRoopClick}
-            linkClass={linkClass}
-            rowScrollClass={rowScrollClass}
-            ariaLabel="Task name - tap to edit"
-          />
-        </div>
-      );
-    }
-    const parts = name.split(ORDER_ITEM_TAM_ROOP_TOKEN_REGEX);
-    return (
-      <div
-        className={previewShellClass}
-        data-order-item-name-preview=""
-        tabIndex={0}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            setEditing(true);
-          }
-        }}
-        onClick={(e) => {
-          if ((e.target as HTMLElement).closest("[data-tam-roop-link]")) return;
-          setEditing(true);
-        }}
-      >
-        <div className={rowScrollClass} role="group" aria-label={uiLang === "en" ? "Task name - tap to edit" : "‡∏ä‡∏∑‡πà‡∏≠‡∏á‡∏≤‡∏ô ‚Äî ‡πÅ‡∏ï‡∏∞‡πÄ‡∏û‡∏∑‡πà‡∏≠‡πÅ‡∏Å‡πâ‡πÑ‡∏Ç"}>
-          {parts.map((part, i) => (
-            <Fragment key={`${item.uid}-tam-${i}`}>
-              {i % 2 === 0 ? <span className="whitespace-pre-wrap break-words">{part}</span> : null}
-              {i % 2 === 1 ? (
-                <button
-                  type="button"
-                  data-tam-roop-link=""
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onTamRoopClick(item);
-                  }}
-                  className={linkClass}
-                  title={uiLang === "en" ? "Upload/view photos for this item" : "‡πÄ‡∏û‡∏¥‡πà‡∏°‡∏£‡∏π‡∏õ‡πÅ‡∏•‡∏∞‡∏î‡∏π‡∏£‡∏π‡∏õ‡∏ï‡∏≤‡∏°‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏ô‡∏µ‡πâ"}
-                >
-                  {uiLang === "en" ? ORDER_ITEM_REF_PIC_EN : (part || ORDER_ITEM_TAM_ROOP_TOKEN)}
-                </button>
-              ) : null}
-            </Fragment>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <input
-      ref={inputRef}
-      id={`order-item-name-${item.uid}`}
-      value={name}
-      onChange={(e) => patchItem(item, { name: e.target.value })}
-      onBlur={() => {
-        const next = String(inputRef.current?.value ?? name);
-        void flushPendingNamePersist(item.uid);
-        setEditing(false);
-        onAfterNameBlur?.(item.uid, next);
-      }}
-      placeholder={uiLang === "en" ? "Task name" : "‡∏ä‡∏∑‡πà‡∏≠‡∏á‡∏≤‡∏ô"}
-      className={singleInputClass}
-    />
-  );
-}
-
-function OrderItemNoteField({
-  item,
-  uiLang,
-  patchItem,
-  flushPendingNotePersist,
-  onTamRoopClick,
-  onTranslateCard,
-  translateCardBusy,
-  translateCardDisabled,
-}: {
-  item: OrderItemRow;
-  uiLang: UiLang;
-  patchItem: (target: OrderItemRow, patch: Partial<OrderItem>) => void;
-  flushPendingNotePersist: (uid: string) => void | Promise<void>;
-  onTamRoopClick: (row: OrderItemRow) => void;
-  /** ‡∏õ‡∏∏‡πà‡∏°‡πÄ‡∏î‡∏µ‡∏¢‡∏ß‡∏Å‡∏±‡∏ö‡πÅ‡∏ñ‡∏ö‡∏î‡πâ‡∏≤‡∏ô‡∏ö‡∏ô‡∏Å‡∏≤‡∏£‡πå‡∏î ‚Äî ‡∏ß‡∏≤‡∏á‡πÉ‡∏Å‡∏•‡πâ‡∏´‡∏°‡∏≤‡∏¢‡πÄ‡∏´‡∏ï‡∏∏‡πÄ‡∏û‡∏£‡∏≤‡∏∞‡πÅ‡∏ñ‡∏ö‡∏ö‡∏ô‡∏ñ‡∏π‡∏Å scroll ‡∏ï‡∏±‡∏î‡∏ö‡πà‡∏≠‡∏¢ */
-  onTranslateCard?: () => void;
-  translateCardBusy?: boolean;
-  translateCardDisabled?: boolean;
-}) {
-  const thaiNote = item.note ?? "";
-  const noteEn = String(item.noteEn ?? "").trim();
-  const [editing, setEditing] = useState(false);
-  const inputRef = useRef<HTMLInputElement | null>(null);
-
-  useLayoutEffect(() => {
-    if (!editing) return;
-    const el = inputRef.current;
-    if (!el) return;
-    el.focus();
-    const len = el.value.length;
-    try {
-      el.setSelectionRange(len, len);
-    } catch {
-      /* ignore */
-    }
-  }, [editing]);
-
-  const previewShellClass =
-    "flex min-w-0 cursor-text items-start rounded-lg bg-white px-2 py-1.5 text-xs font-medium text-slate-800 outline-none ring-1 ring-slate-200/80 hover:bg-slate-50/80";
-  const inputClass =
-    "min-h-[2.25rem] min-w-0 flex-1 rounded-lg bg-white px-2 py-1.5 text-xs font-medium text-slate-800 outline-none ring-1 ring-slate-200/80 placeholder:text-slate-400 sm:min-w-[12rem]";
-  const noteLinkClass =
-    "inline shrink-0 cursor-pointer border-0 bg-transparent p-0 align-baseline font-inherit font-medium text-sky-600 underline decoration-sky-400 decoration-2 underline-offset-2 hover:text-sky-700 touch-manipulation active:text-sky-800 text-xs";
-
-  if (uiLang === "en" && noteEn && !editing) {
-    return (
-      <div
-        className={previewShellClass}
-        tabIndex={0}
-        role="group"
-        aria-label="Note ‚Äî tap to edit Thai text"
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            setEditing(true);
-          }
-        }}
-        onClick={(e) => {
-          if ((e.target as HTMLElement).closest("[data-tam-roop-link]")) return;
-          setEditing(true);
-        }}
-      >
-        <OrderItemEnglishWithPhotoRefs
-          text={noteEn}
-          item={item}
-          onTamRoopClick={onTamRoopClick}
-          linkClass={noteLinkClass}
-        />
-      </div>
-    );
-  }
-
-  const thaiInNote = /[\u0E00-\u0E7F]/.test(thaiNote);
-  if (uiLang === "en" && !noteEn && thaiInNote && !editing) {
-    const busy = Boolean(translateCardBusy);
-    const tOff = Boolean(translateCardDisabled);
-    return (
-      <div className="min-w-0 space-y-1.5">
-        <input
-          ref={inputRef}
-          value={thaiNote}
-          onChange={(e) => patchItem(item, { note: e.target.value })}
-          onBlur={() => {
-            void flushPendingNotePersist(item.uid);
-            setEditing(false);
-          }}
-          onFocus={() => setEditing(true)}
-          placeholder="Type‚Ä¶"
-          className={inputClass}
-        />
-        <div className="flex flex-wrap items-center gap-2 px-0.5">
-          <button
-            type="button"
-            onClick={() => onTranslateCard?.()}
-            disabled={busy || tOff || !onTranslateCard}
-            title={uiLang === "en" ? "Translate item names, notes, and cost summary on this card" : undefined}
-            className={cn(
-              "shrink-0 rounded-full px-2.5 py-1 text-[10px] font-semibold touch-manipulation",
-              busy || tOff || !onTranslateCard
-                ? "cursor-not-allowed bg-slate-200 text-slate-500"
-                : "bg-blue-100 text-blue-900 ring-1 ring-blue-200/80 active:bg-blue-200"
-            )}
-          >
-            {busy ? "Translating‚Ä¶" : "Translate EN"}
-          </button>
-          <p className="min-w-0 flex-1 text-[10px] leading-snug text-amber-800">
-            English fills here after this runs, or after you blur the note to save. Same action as the{" "}
-            <span className="font-semibold">Translate EN</span> pill in the scroll bar above the task list.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <input
-      ref={inputRef}
-      value={thaiNote}
-      onChange={(e) => patchItem(item, { note: e.target.value })}
-      onBlur={() => {
-        void flushPendingNotePersist(item.uid);
-        setEditing(false);
-      }}
-      onFocus={() => setEditing(true)}
-      placeholder={uiLang === "en" ? "Type‚Ä¶" : "‡∏û‡∏¥‡∏°‡∏û‡πå‚Ä¶"}
-      className={inputClass}
-    />
-  );
-}
-
-/** ‡∏Ç‡πâ‡∏≠‡∏Ñ‡∏ß‡∏≤‡∏°‡∏™‡∏£‡∏∏‡∏õ‡∏ï‡πâ‡∏ô‡∏ó‡∏∏‡∏ô/‡∏ã‡πà‡∏≠‡∏°/‡πÄ‡∏≠‡∏Å‡∏™‡∏≤‡∏£ ‚Äî ‡∏ï‡∏£‡∏ß‡∏à‡∏ß‡πà‡∏≤‡∏°‡∏µ‡∏≠‡∏±‡∏Å‡∏©‡∏£‡πÑ‡∏ó‡∏¢‡∏™‡∏≥‡∏´‡∏£‡∏±‡∏ö‡∏Ç‡∏±‡πâ‡∏ô‡πÅ‡∏õ‡∏• */
-function orderCarSummaryFieldsHaveThai(order: Order): boolean {
-  const cost = String(order.costDetail || order.costBreakdown || order.cost || "").trim();
-  const repair = String(order.repairDetail || order.repairDetails || "").trim();
-  const doc = String(order.documentDetail || "").trim();
-  return /[\u0E00-\u0E7F]/.test(`${cost}\n${repair}\n${doc}`);
-}
-
-const OrderCard = React.memo(function OrderCard({
-  order,
-  uiLang,
-  staffRosterNames,
-  saleAssigneesBySale,
-  shareBaseUrl,
-  itemStatusLabels,
-  itemPoliciesNorm,
-  itemStatusRosterForCard,
-  toolbarStaffFilters,
-  toolbarStatusFilters,
-  onLiveItemsChange,
-  lineInboxActive = false,
-}: {
-  order: Order;
-  uiLang: UiLang;
-  staffRosterNames: string[];
-  /** ‡πÄ‡∏ã‡∏•‡∏•‡πå ‚Üí ‡∏û‡∏ô‡∏±‡∏Å‡∏á‡∏≤‡∏ô‡∏£‡∏±‡∏ö‡∏ú‡∏¥‡∏î‡∏ä‡∏≠‡∏ö ‚Äî ‡πÉ‡∏ä‡πâ‡∏ï‡∏±‡πâ‡∏á‡∏Ñ‡πà‡∏≤‡πÄ‡∏£‡∏¥‡πà‡∏°‡∏ï‡∏≠‡∏ô‡πÄ‡∏û‡∏¥‡πà‡∏°‡∏á‡∏≤‡∏ô */
-  saleAssigneesBySale: Record<string, string>;
-  shareBaseUrl?: string | null;
-  itemStatusLabels?: ItemStatusLabelMap;
-  /** default + ‡∏à‡∏≤‡∏Å„Äå‡∏à‡∏±‡∏î‡∏Å‡∏≤‡∏£‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞„Äç‚Äî ‡∏Ñ‡∏ß‡∏ö‡∏Ñ‡∏∏‡∏° due / ‡∏ä‡∏¥‡∏õ‡∏°‡∏≤‡∏ß‡∏±‡∏ô‡∏ô‡∏µ‡πâ / ‡∏ù‡∏≤‡∏Å / SLA */
-  itemPoliciesNorm: ItemStatusPoliciesNormalized;
-  itemStatusRosterForCard: ItemStatusValue[];
-  /** ‡∏ï‡∏±‡∏ß‡∏Å‡∏£‡∏≠‡∏á‡πÅ‡∏ñ‡∏ö‡πÄ‡∏Ñ‡∏£‡∏∑‡πà‡∏≠‡∏á‡∏°‡∏∑‡∏≠ ‚Äî ‡∏ã‡πà‡∏≠‡∏ô‡πÅ‡∏ñ‡∏ß‡πÉ‡∏ô‡∏Å‡∏≤‡∏£‡πå‡∏î‡∏ó‡∏µ‡πà‡πÑ‡∏°‡πà‡∏ï‡∏£‡∏á‡∏û‡∏ô‡∏±‡∏Å‡∏á‡∏≤‡∏ô/‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞ (‡∏´‡∏•‡∏≤‡∏¢‡∏ä‡∏¥‡∏õ‡∏ï‡πà‡∏≠‡πÅ‡∏ñ‡∏ß = OR) */
-  toolbarStaffFilters: Set<string>;
-  toolbarStatusFilters: Set<ItemStatusFilterValue | typeof ITEM_STATUS_DUE_TODAY>;
-  /** ‡πÅ‡∏à‡πâ‡∏á‡πÅ‡∏°‡πà‡πÉ‡∏´‡πâ‡∏£‡∏ß‡∏°‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏•‡πà‡∏≤‡∏™‡∏∏‡∏î‡πÉ‡∏ô mappedOrders ‚Äî ‡∏ä‡∏¥‡∏õ‡∏ô‡∏±‡∏ö‡∏≠‡∏±‡∏õ‡πÄ‡∏î‡∏ï‡∏ó‡∏±‡∏ô‡∏ó‡∏µ */
-  onLiveItemsChange?: (orderId: string, items: OrderItem[]) => void;
-  /** ‡πÄ‡∏õ‡∏¥‡∏î‡∏Å‡∏≤‡∏£‡πå‡∏î‡πÅ‡∏•‡∏∞‡πÑ‡∏Æ‡πÑ‡∏•‡∏ï‡πå‡∏Ñ‡∏¥‡∏ß AI ¬∑ LINE ‡πÉ‡∏ô‡∏Å‡∏≤‡∏£‡πå‡∏î */
-  lineInboxActive?: boolean;
-}) {
-  const router = useRouter();
-  const pathname = usePathname() || "/m/orders";
-  const [items, setItems] = useState<OrderItemRow[]>(() =>
-    (order.items || []).map((item, index) => ({
-      ...item,
-      uid: String(item.id ?? "").trim() ? String(item.id) : `row-${order.id}-${index}-${norm(item.name)}`,
-    }))
-  );
-  const [showAllItems, setShowAllItems] = useState(false);
-  useEffect(() => {
-    if (lineInboxActive) setShowAllItems(true);
-  }, [lineInboxActive]);
-  /** ‡∏Ç‡∏¢‡∏≤‡∏¢‡∏î‡∏π‡πÅ‡∏ñ‡∏ß‡∏ó‡∏µ‡πà‡πÑ‡∏°‡πà‡∏ï‡∏£‡∏á‡∏ï‡∏±‡∏ß‡∏Å‡∏£‡∏≠‡∏á‡∏û‡∏ô‡∏±‡∏Å‡∏á‡∏≤‡∏ô/‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞ (‡πÇ‡∏´‡∏°‡∏î‡πÄ‡∏î‡∏¥‡∏°‡∏ä‡∏±‡πà‡∏ß‡∏Ñ‡∏£‡∏≤‡∏ß) */
-  const [toolbarOthersExpanded, setToolbarOthersExpanded] = useState(false);
-  const [showCost, setShowCost] = useState(false);
-  const [saveError, setSaveError] = useState("");
-  /** ‡∏Ñ‡∏≥‡πÅ‡∏ô‡∏∞‡∏ô‡∏≥‡πÄ‡∏°‡∏∑‡πà‡∏≠‡πÅ‡∏õ‡∏•‡∏ä‡∏∑‡πà‡∏≠ EN ‡πÑ‡∏°‡πà‡πÑ‡∏î‡πâ (‡∏°‡∏µ‡πÑ‡∏ó‡∏¢‡πÉ‡∏ô‡∏ä‡∏∑‡πà‡∏≠‡πÅ‡∏ï‡πà‡πÑ‡∏°‡πà‡πÑ‡∏î‡πâ label_en) */
-  const [translationNotice, setTranslationNotice] = useState("");
-  const [savingItemUid, setSavingItemUid] = useState<string | null>(null);
-  const [showInlineIntake, setShowInlineIntake] = useState(false);
-  const [inlineText, setInlineText] = useState("");
-  const [inlineItems, setInlineItems] = useState<InlineDraftRow[]>([]);
-  const [inlineSaving, setInlineSaving] = useState(false);
-  /** ‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‡∏ó‡∏µ‡∏•‡∏∞‡πÅ‡∏ñ‡∏ß‡∏à‡∏≤‡∏Å‡∏ü‡∏≠‡∏£‡πå‡∏°‡∏õ‡∏±‡∏î‡∏ã‡πâ‡∏≤‡∏¢ */
-  const [inlineRowSavingId, setInlineRowSavingId] = useState<string | null>(null);
-  const [inlineMessage, setInlineMessage] = useState("");
-  const [inlineAiBusy, setInlineAiBusy] = useState(false);
-  const [translateCardBusy, setTranslateCardBusy] = useState(false);
-  /** ‡πÅ‡∏õ‡∏•‡∏à‡∏≤‡∏Å‡∏õ‡∏∏‡πà‡∏° Translate EN ‚Äî ‡πÅ‡∏™‡∏î‡∏á‡πÄ‡∏°‡∏∑‡πà‡∏≠ uiLang=en */
-  const [carSummaryEn, setCarSummaryEn] = useState<{ cost: string; repair: string; document: string } | null>(null);
-  /** ‡πÇ‡∏´‡∏•‡∏î‡πÅ‡∏õ‡∏•‡∏ï‡∏≠‡∏ô‡πÄ‡∏õ‡∏¥‡∏î COST (EN) */
-  const [carSummaryTranslating, setCarSummaryTranslating] = useState(false);
-  const carSummaryRequestInFlightRef = useRef(false);
-  const carSummaryEnRef = useRef(carSummaryEn);
-  carSummaryEnRef.current = carSummaryEn;
-  const carSummarySourceKey = useMemo(
-    () =>
-      `${order.costDetail ?? ""}\x1e${order.repairDetail ?? order.repairDetails ?? ""}\x1e${order.documentDetail ?? ""}`,
-    [order.costDetail, order.documentDetail, order.repairDetail, order.repairDetails]
-  );
-  const [inlineCompareEnabled, setInlineCompareEnabled] = useState(false);
-  const [photoBusy, setPhotoBusy] = useState(false);
-  const [carPhotos, setCarPhotos] = useState<OrderPhotoEntry[]>([]);
-  const [photoViewerOpen, setPhotoViewerOpen] = useState(false);
-  const [photoViewerIndex, setPhotoViewerIndex] = useState(0);
-  const photoViewerStripRef = useRef<HTMLDivElement | null>(null);
-  const [noteOpenUid, setNoteOpenUid] = useState<string | null>(null);
-  const [datePickerUid, setDatePickerUid] = useState<string | null>(null);
-  const [tamRoopSheetUid, setTamRoopSheetUid] = useState<string | null>(null);
-  const [tamRoopItemPhotos, setTamRoopItemPhotos] = useState<OrderPhotoEntry[]>([]);
-  const [tamRoopPhotosFetchedForDbId, setTamRoopPhotosFetchedForDbId] = useState<string | null>(null);
-  const [tamRoopLoadingPhotos, setTamRoopLoadingPhotos] = useState(false);
-  const [tamRoopViewerOpen, setTamRoopViewerOpen] = useState(false);
-  const [tamRoopViewerIndex, setTamRoopViewerIndex] = useState(0);
-  const tamRoopViewerStripRef = useRef<HTMLDivElement | null>(null);
-  const tamRoopOverlayRef = useRef<HTMLDivElement | null>(null);
-  const itemsRef = useRef<OrderItemRow[]>(items);
-  const noteDebounceTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
-  const nameDebounceTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
-  const rowSwipeGestureRef = useRef<{
-    uid: string;
-    startX: number;
-    startY: number;
-    base: number;
-    lastOffset: number;
-    startedOpen: boolean;
-    phase: "pending" | "dragging";
-  } | null>(null);
-  const [rowSwipePx, setRowSwipePx] = useState<Record<string, number>>({});
-  const rowSwipePxRef = useRef(rowSwipePx);
-  rowSwipePxRef.current = rowSwipePx;
-  const swipeDragRafRef = useRef<number | null>(null);
-
-  const flushSwipeDragRaf = () => {
-    if (swipeDragRafRef.current != null) {
-      cancelAnimationFrame(swipeDragRafRef.current);
-      swipeDragRafRef.current = null;
-    }
-  };
-  const lastPersistedSigByUidRef = useRef<Record<string, string>>({});
-  const canAttachPhotos = Boolean(String(order.carRowId ?? "").trim() || order.carId != null);
-
-  const onLiveItemsChangeRef = useRef(onLiveItemsChange);
-  onLiveItemsChangeRef.current = onLiveItemsChange;
-
-  useEffect(() => {
-    itemsRef.current = items;
-  }, [items]);
-
-  useEffect(() => {
-    setCarSummaryEn(null);
-  }, [carSummarySourceKey]);
-
-  useEffect(() => {
-    const fn = onLiveItemsChangeRef.current;
-    if (!fn) return;
-    const t = window.setTimeout(() => {
-      fn(order.id, orderItemRowsToLiveOrderItems(itemsRef.current));
-    }, 80);
-    return () => {
-      clearTimeout(t);
-    };
-  }, [items, order.id]);
-
-  useEffect(() => {
-    const oid = order.id;
-    return () => {
-      const fn = onLiveItemsChangeRef.current;
-      if (!fn) return;
-      fn(oid, orderItemRowsToLiveOrderItems(itemsRef.current));
-    };
-  }, [order.id]);
-
-  const toolbarFiltersSig = `${Array.from(toolbarStaffFilters).sort().join("\u0001")}\u0000${Array.from(toolbarStatusFilters).sort().join("\u0001")}`;
-  useEffect(() => {
-    setToolbarOthersExpanded(false);
-  }, [toolbarFiltersSig]);
-
-  useEffect(() => {
-    const noteTimers = noteDebounceTimersRef.current;
-    const nameTimers = nameDebounceTimersRef.current;
-    return () => {
-      for (const t of Object.values(noteTimers)) {
-        if (t) clearTimeout(t);
-      }
-      for (const t of Object.values(nameTimers)) {
-        if (t) clearTimeout(t);
-      }
-    };
-  }, []);
-
-  useLayoutEffect(() => {
-    setItems((prev) => {
-      const mapped = (order.items || []).map((item, index) => ({
-        ...item,
-        uid: String(item.id ?? "").trim() ? String(item.id) : `row-${order.id}-${index}-${norm(item.name)}`,
-      }));
-      /** ‡∏´‡∏•‡∏±‡∏á router.refresh ‡∏ö‡∏≤‡∏á‡∏Ñ‡∏£‡∏±‡πâ‡∏á‡∏£‡∏≠‡∏ö‡πÇ‡∏´‡∏•‡∏î‡πÑ‡∏°‡πà‡∏°‡∏µ note_en/label_en (fallback select / replica ‡∏ä‡πâ‡∏≤) ‚Äî ‡∏≠‡∏¢‡πà‡∏≤‡πÄ‡∏ú‡∏≤ EN ‡∏ó‡∏µ‡πà‡πÄ‡∏û‡∏¥‡πà‡∏á‡πÅ‡∏õ‡∏• */
-      const prevById = new Map<string, OrderItemRow>();
-      const prevByUid = new Map<string, OrderItemRow>();
-      for (const r of prev) {
-        prevByUid.set(r.uid, r);
-        const id = String(r.id ?? "").trim();
-        if (id) prevById.set(id, r);
-      }
-      const merged = mapped.map((row) => {
-        const id = String(row.id ?? "").trim();
-        const old = id ? prevById.get(id) : prevByUid.get(row.uid);
-        if (!old) return row;
-        const serverNe = String(row.noteEn ?? "").trim();
-        const serverLe = String(row.nameEn ?? "").trim();
-        return {
-          ...row,
-          ...(!serverLe && String(old.nameEn ?? "").trim() ? { nameEn: old.nameEn } : {}),
-          ...(!serverNe && String(old.noteEn ?? "").trim() ? { noteEn: old.noteEn } : {}),
-        };
-      });
-
-      const nextSigs: Record<string, string> = {};
-      for (const row of merged) {
-        nextSigs[row.uid] = orderItemPersistSignature(row);
-      }
-      lastPersistedSigByUidRef.current = nextSigs;
-      return merged;
-    });
-  }, [order.items, order.id]);
-
-  const reloadPhotos = React.useCallback(async () => {
-    if (!canAttachPhotos) {
-      setCarPhotos([]);
-      return;
-    }
-    const p = new URLSearchParams();
-    if (order.carRowId) p.set("car_row_id", order.carRowId);
-    if (order.carId != null) p.set("car_id", String(order.carId));
-    try {
-      const res = await fetch(`${ORDER_PHOTOS_LIST_API_PATH}?${p.toString()}`, { cache: "no-store" });
-      const json = (await res.json()) as {
-        carPhotos?: OrderPhotoEntry[];
-      };
-      if (!res.ok) return;
-      setCarPhotos(Array.isArray(json.carPhotos) ? json.carPhotos : []);
-    } catch {
-      /* ignore */
-    }
-  }, [canAttachPhotos, order.carId, order.carRowId]);
-
-  useEffect(() => {
-    void reloadPhotos();
-  }, [reloadPhotos]);
-
-  const uploadPhotos = async (files: FileList | null) => {
-    if (!files?.length || !canAttachPhotos) return;
-    setPhotoBusy(true);
-    setSaveError("");
-    try {
-      const form = new FormData();
-      form.append("target_type", "car");
-      if (order.carRowId) form.append("car_row_id", order.carRowId);
-      if (order.carId != null) form.append("car_id", String(order.carId));
-      for (const file of Array.from(files)) form.append("files", file);
-      const res = await fetch(ORDER_PHOTOS_UPLOAD_API_PATH, { method: "POST", body: form });
-      const payload = (await res.json()) as { error?: string };
-      if (!res.ok) throw new Error(payload.error ?? res.statusText);
-      await reloadPhotos();
-    } catch (e) {
-      setSaveError(e instanceof Error ? e.message : "‡∏≠‡∏±‡∏õ‡πÇ‡∏´‡∏•‡∏î‡∏£‡∏π‡∏õ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-    } finally {
-      setPhotoBusy(false);
-    }
-  };
-
-  const deletePhoto = async (photoId: string) => {
-    if (!photoId) return;
-    setPhotoBusy(true);
-    setSaveError("");
-    try {
-      const res = await fetch(ORDER_PHOTOS_DELETE_API_PATH, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ photo_id: photoId }),
-      });
-      const payload = (await res.json()) as { error?: string };
-      if (!res.ok) throw new Error(payload.error ?? res.statusText);
-      await reloadPhotos();
-    } catch (e) {
-      setSaveError(e instanceof Error ? e.message : "‡∏•‡∏ö‡∏£‡∏π‡∏õ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-    } finally {
-      setPhotoBusy(false);
-    }
-  };
-
-  const translateCarSummaryViaApi = React.useCallback(
-    async (opts?: { panelLoading?: boolean }): Promise<boolean> => {
-      const costSrc = String(order.costDetail || order.costBreakdown || order.cost || "").trim();
-      const repairSrc = String(order.repairDetail || order.repairDetails || "").trim();
-      const docSrc = String(order.documentDetail || "").trim();
-      if (!/[\u0E00-\u0E7F]/.test(`${costSrc}\n${repairSrc}\n${docSrc}`)) return false;
-      if (carSummaryRequestInFlightRef.current) return false;
-      carSummaryRequestInFlightRef.current = true;
-      const showPanel = opts?.panelLoading === true;
-      if (showPanel) setCarSummaryTranslating(true);
-      try {
-        const sumRes = await fetch(ORDER_TRACKING_TRANSLATE_CAR_SUMMARY_API_PATH, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            cost_detail: costSrc,
-            repair_detail: repairSrc,
-            document_detail: docSrc,
-          }),
-        });
-        const sumPayload = (await sumRes.json()) as {
-          ok?: boolean;
-          cost_detail_en?: string;
-          repair_detail_en?: string;
-          document_detail_en?: string;
-        };
-        if (sumRes.ok && sumPayload.ok !== false) {
-          setCarSummaryEn({
-            cost: String(sumPayload.cost_detail_en ?? "").trim(),
-            repair: String(sumPayload.repair_detail_en ?? "").trim(),
-            document: String(sumPayload.document_detail_en ?? "").trim(),
-          });
-          return true;
-        }
-      } catch {
-        /* ignore */
-      } finally {
-        carSummaryRequestInFlightRef.current = false;
-        if (showPanel) setCarSummaryTranslating(false);
-      }
-      return false;
-    },
-    [
-      order.costDetail,
-      order.costBreakdown,
-      order.cost,
-      order.repairDetail,
-      order.repairDetails,
-      order.documentDetail,
-    ]
-  );
-
-  const translateCardItemsToEnglish = async () => {
-    if (translateCardBusy) return;
-    if (orderTaskIdsForCard.length === 0) {
-      setSaveError(
-        uiLang === "en"
-          ? "Cannot translate this card yet: items are not linked to an order task. Try saving a row or reloading."
-          : "‡∏¢‡∏±‡∏á‡πÅ‡∏õ‡∏•‡∏Å‡∏≤‡∏£‡πå‡∏î‡∏ô‡∏µ‡πâ‡πÑ‡∏°‡πà‡πÑ‡∏î‡πâ: ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏ú‡∏π‡∏Å order task ‚Äî ‡∏•‡∏≠‡∏á‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‡πÅ‡∏ñ‡∏ß‡∏´‡∏£‡∏∑‡∏≠‡∏£‡∏µ‡πÄ‡∏ü‡∏£‡∏ä‡∏´‡∏ô‡πâ‡∏≤"
-      );
-      return;
-    }
-    setTranslateCardBusy(true);
-    setSaveError("");
-    try {
-      const translatedById: Record<string, string> = {};
-      const noteTranslatedById: Record<string, string> = {};
-      for (const taskId of orderTaskIdsForCard) {
-        const res = await fetch(ORDER_ITEMS_TRANSLATE_CARD_API_PATH, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "same-origin",
-          body: JSON.stringify({ order_task_id: taskId }),
-        });
-        const payload = (await res.json()) as {
-          error?: string;
-          updated?: number;
-          translatedById?: Record<string, string>;
-          noteTranslatedById?: Record<string, string>;
-        };
-        if (!res.ok) throw new Error(payload.error ?? res.statusText);
-        Object.assign(translatedById, payload.translatedById ?? {});
-        Object.assign(noteTranslatedById, payload.noteTranslatedById ?? {});
-      }
-      if (Object.keys(translatedById).length > 0 || Object.keys(noteTranslatedById).length > 0) {
-        setItems((prev) =>
-          prev.map((row) => {
-            const id = String(row.id ?? "").trim();
-            const nameEn = id ? String(translatedById[id] ?? "").trim() : "";
-            const noteEn = id ? String(noteTranslatedById[id] ?? "").trim() : "";
-            if (!nameEn && !noteEn) return row;
-            return {
-              ...row,
-              ...(nameEn ? { nameEn } : {}),
-              ...(noteEn ? { noteEn } : {}),
-            };
-          })
-        );
-      }
-
-      try {
-        await translateCarSummaryViaApi();
-      } catch {
-        /* summary EN optional ‚Äî item labels still updated */
-      }
-
-      router.refresh();
-    } catch (e) {
-      setSaveError(e instanceof Error ? e.message : "‡πÅ‡∏õ‡∏•‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-    } finally {
-      setTranslateCardBusy(false);
-    }
-  };
-
-  const openPhotoViewer = (index: number) => {
-    if (index < 0 || index >= carPhotos.length) return;
-    setPhotoViewerIndex(index);
-    setPhotoViewerOpen(true);
-  };
-
-  const closePhotoViewer = () => setPhotoViewerOpen(false);
-
-  useEffect(() => {
-    if (!photoViewerOpen) return;
-    const el = photoViewerStripRef.current;
-    if (!el) return;
-    const left = photoViewerIndex * el.clientWidth;
-    el.scrollTo({ left, behavior: "auto" });
-  }, [photoViewerOpen, photoViewerIndex]);
-
-  useEffect(() => {
-    if (!tamRoopViewerOpen) return;
-    const el = tamRoopViewerStripRef.current;
-    if (!el) return;
-    const left = tamRoopViewerIndex * el.clientWidth;
-    el.scrollTo({ left, behavior: "auto" });
-  }, [tamRoopViewerOpen, tamRoopViewerIndex]);
-
-  const staffOptions = useMemo(() => {
-    const names = new Set<string>();
-    for (const n of staffRosterNames) {
-      const t = String(n).trim();
-      if (t && !isStaffRosterNameExcluded(t)) names.add(t);
-    }
-    for (const row of items) {
-      const n = String(row.assignee ?? "").trim();
-      if (n && !isStaffRosterNameExcluded(n)) names.add(n);
-    }
-    return Array.from(names).sort((a, b) => a.localeCompare(b, "en"));
-  }, [items, staffRosterNames]);
-
-  /** ‡πÄ‡∏û‡∏¥‡πà‡∏°‡∏á‡∏≤‡∏ô (LINE intake): ‡∏à‡∏±‡∏ö‡∏Ñ‡∏π‡πà‡∏ï‡∏≤‡∏°‡πÄ‡∏ã‡∏•‡∏•‡πå‡∏Ç‡∏≠‡∏á‡∏£‡∏ñ ‚Üí ‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏Ñ‡πà‡∏≠‡∏¢‡πÉ‡∏ä‡πâ‡∏ä‡∏∑‡πà‡∏≠‡πÅ‡∏£‡∏Å‡πÉ‡∏ô‡∏£‡∏≤‡∏¢‡∏ä‡∏∑‡πà‡∏≠‡∏û‡∏ô‡∏±‡∏Å‡∏á‡∏≤‡∏ô */
-  const defaultIntakeAssignee = useMemo(() => {
-    const mapped = resolveSaleStaffForOrder(order.sale, saleAssigneesBySale);
-    if (mapped && staffRosterNames.some((n) => n === mapped)) return mapped;
-    for (const n of staffRosterNames) {
-      const t = String(n).trim();
-      if (t && !isStaffRosterNameExcluded(t)) return t;
-    }
-    return "";
-  }, [order.sale, saleAssigneesBySale, staffRosterNames]);
-
-  const { itemStaffFilters: toolbarItemStaffFilters } = useMemo(
-    () => splitStaffFilters(toolbarStaffFilters),
-    [toolbarStaffFilters]
-  );
-  const toolbarLineFilterActive =
-    toolbarItemStaffFilters.size > 0 || toolbarStatusFilters.size > 0;
-  const toolbarDueTodayChipPolicy = itemPoliciesNorm.dueToday;
-  const itemsScoped = useMemo(() => {
-    if (!toolbarLineFilterActive) return items;
-    return items.filter((row) =>
-      itemMatchesToolbarLineFiltersMulti(row, toolbarItemStaffFilters, toolbarStatusFilters, toolbarDueTodayChipPolicy)
-    );
-  }, [
-    items,
-    toolbarLineFilterActive,
-    toolbarItemStaffFilters,
-    toolbarStatusFilters,
-    toolbarDueTodayChipPolicy,
-  ]);
-
-  const itemsOutsideToolbarFilter = useMemo(() => {
-    if (!toolbarLineFilterActive) return [] as OrderItemRow[];
-    return items.filter(
-      (row) =>
-        !itemMatchesToolbarLineFiltersMulti(row, toolbarItemStaffFilters, toolbarStatusFilters, toolbarDueTodayChipPolicy)
-    );
-  }, [
-    items,
-    toolbarLineFilterActive,
-    toolbarItemStaffFilters,
-    toolbarStatusFilters,
-    toolbarDueTodayChipPolicy,
-  ]);
-
-  const suppressToolbarOthers =
-    toolbarLineFilterActive && !toolbarOthersExpanded && itemsOutsideToolbarFilter.length > 0;
-  const itemsEffective = suppressToolbarOthers ? itemsScoped : items;
-
-  const { waiting, done, activeItems, hiddenDoneItems } = useMemo(() => {
-    const nextWaiting: OrderItemRow[] = [];
-    const nextDone: OrderItemRow[] = [];
-    const nextActiveItems: OrderItemRow[] = [];
-    const nextHiddenDoneItems: OrderItemRow[] = [];
-
-    for (const item of itemsEffective) {
-      if (WAITING_SET.has(item.status)) nextWaiting.push(item);
-      if (item.good || DONE_SET.has(item.status)) nextDone.push(item);
-      if (item.status === "‡∏à‡∏ö") nextHiddenDoneItems.push(item);
-      else nextActiveItems.push(item);
-    }
-
-    return {
-      waiting: nextWaiting,
-      done: nextDone,
-      activeItems: nextActiveItems,
-      hiddenDoneItems: nextHiddenDoneItems,
-    };
-  }, [itemsEffective]);
-  /** ‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏û‡∏ô‡∏±‡∏Å‡∏á‡∏≤‡∏ô / ‡∏´‡∏£‡∏∑‡∏≠‡∏Å‡∏£‡∏≠‡∏á‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡πÄ‡∏õ‡πá‡∏ô„Äå‡∏à‡∏ö„Äç ‚Äî ‡πÅ‡∏™‡∏î‡∏á‡πÅ‡∏ñ‡∏ß‡∏à‡∏ö‡πÉ‡∏ô‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏´‡∏•‡∏±‡∏Å ‡πÑ‡∏°‡πà‡∏ã‡πà‡∏≠‡∏ô‡∏´‡∏•‡∏±‡∏á‡∏õ‡∏∏‡πà‡∏°‡∏ã‡πà‡∏≠‡∏ô‡∏á‡∏≤‡∏ô‡∏à‡∏ö */
-  const showDoneRowsInMainList =
-    toolbarItemStaffFilters.size > 0 || toolbarStatusFilters.has("‡∏à‡∏ö");
-  /** ‡∏Ñ‡∏á‡∏•‡∏≥‡∏î‡∏±‡∏ö‡πÅ‡∏ñ‡∏ß‡∏ï‡∏≤‡∏°‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡πÄ‡∏î‡∏¥‡∏° ‚Äî ‡πÑ‡∏°‡πà‡πÄ‡∏£‡∏µ‡∏¢‡∏á‡∏ï‡∏≤‡∏°‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡πÄ‡∏ß‡∏•‡∏≤‡πÄ‡∏õ‡∏•‡∏µ‡πà‡∏¢‡∏ô‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡πÉ‡∏ô‡∏Å‡∏≤‡∏£‡πå‡∏î */
-  const compareItems =
-    showDoneRowsInMainList || showAllItems ? itemsEffective : activeItems;
-  const allDone = done.length >= itemsEffective.length && itemsEffective.length > 0;
-  const shareCardUrl = useMemo(() => {
-    const base = resolveShareAppBase(shareBaseUrl);
-    return buildOrderTrackingShareOpenUrl(order.id, base);
-  }, [order.id, shareBaseUrl]);
-  const lineShareText = useMemo(
-    () => buildLineShareMessage(order, items, shareCardUrl, itemPoliciesNorm),
-    [order, items, shareCardUrl, itemPoliciesNorm]
-  );
-  const lineShareUrl = useMemo(
-    () => `https://line.me/R/msg/text/?${encodeURIComponent(lineShareText)}`,
-    [lineShareText]
-  );
-  const orderTaskIdsForCard = useMemo(() => {
-    const ids = new Set<string>();
-    for (const row of items) {
-      const id = String(row.orderTaskId ?? "").trim();
-      if (id) ids.add(id);
-    }
-    return Array.from(ids);
-  }, [items]);
-  const statusLabelInCard = (st: ItemStatusValue): string => {
-    if (uiLang === "en") {
-      return displayItemStatusLabel(st, uiLang);
-    }
-    const custom = String(itemStatusLabels?.[st] ?? "").trim();
-    if (custom && custom !== st) return custom;
-    return displayItemStatusLabel(st, uiLang);
-  };
-  const statusOptionsForValue = (value: ItemStatusValue): ItemStatusValue[] => {
-    const base = itemStatusRosterForCard.length ? itemStatusRosterForCard : [...ITEM_STATUS_ORDER];
-    return base.includes(value) ? base : [value, ...base];
-  };
-
-  const clearNoteDebounce = (uid: string) => {
-    const timers = noteDebounceTimersRef.current;
-    const t = timers[uid];
-    if (t) clearTimeout(t);
-    delete timers[uid];
-  };
-
-  const clearNameDebounce = (uid: string) => {
-    const timers = nameDebounceTimersRef.current;
-    const t = timers[uid];
-    if (t) clearTimeout(t);
-    delete timers[uid];
-  };
-
-  const closeSwipeRows = () => {
-    flushSwipeDragRaf();
-    rowSwipeGestureRef.current = null;
-    setRowSwipePx({});
-  };
-
-  const persistItem = async (prevItem: OrderItemRow, nextItem: OrderItemRow) => {
-    const sig = orderItemPersistSignature(nextItem);
-    const prevSig = lastPersistedSigByUidRef.current[nextItem.uid];
-    const nameTrim = String(nextItem.name ?? "").trim();
-    const noteTrim = String(nextItem.note ?? "").trim();
-    /** ‡∏Å‡∏≤‡∏£‡πÅ‡∏õ‡∏• EN ‡∏≠‡∏¢‡∏π‡πà‡∏ó‡∏µ‡πà‡∏õ‡∏∏‡πà‡∏° Translate EN / ‡∏†‡∏≤‡∏©‡∏≤ UI ‚Äî save ‡∏≠‡∏¢‡πà‡∏≤‡∏á‡πÄ‡∏î‡∏µ‡∏¢‡∏ß‡πÑ‡∏°‡πà‡∏¢‡∏¥‡∏á‡∏ã‡πâ‡∏≥‡∏ñ‡πâ‡∏≤‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡πÄ‡∏´‡∏°‡∏∑‡∏≠‡∏ô‡πÄ‡∏î‡∏¥‡∏° */
-    if (prevSig !== undefined && prevSig === sig) return;
-    setSavingItemUid(nextItem.uid);
-    setSaveError("");
-    setTranslationNotice("");
-    try {
-      const res = await fetch("/api/m/order-items/update", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
-        body: JSON.stringify({
-          order_item_id: nextItem.id ?? null,
-          order_task_id: nextItem.orderTaskId ?? null,
-          car_row_id: order.carRowId,
-          car_id: order.carId,
-          item_name: nextItem.name,
-          item_status: nextItem.status,
-          assignee_staff: nextItem.assignee || null,
-          due_date: nextItem.dueDate || null,
-          note: nextItem.note || null,
-          updated_by: "mobile-card",
-          /** false = save ‡πÄ‡∏£‡πá‡∏ß; ‡πÉ‡∏´‡πâ‡πÄ‡∏£‡∏µ‡∏¢‡∏Å API ‡πÅ‡∏õ‡∏•‡πÅ‡∏¢‡∏Å (Translate EN / translate-card / translate-all) */
-          translate: false,
-        }),
-      });
-      const payload = (await res.json()) as {
-        error?: string;
-        order_item_id?: string | null;
-        order_task_id?: string | null;
-        status_changed_at?: string | null;
-        label_en?: string | null;
-        note_en?: string | null;
-        translation_status?: "no_keys" | "failed";
-        note_translation_status?: "no_keys" | "failed";
-      };
-      if (!res.ok) throw new Error(payload.error ?? res.statusText);
-      lastPersistedSigByUidRef.current[nextItem.uid] = sig;
-      const todayY = todayBangkokYmd();
-      const prevPolClock = itemPoliciesNorm.byStatus[prevItem.status as ItemStatusValue];
-      const nextPolClock = itemPoliciesNorm.byStatus[nextItem.status as ItemStatusValue];
-      const enteredStoreDepositClock =
-        Boolean(nextPolClock?.storeDepositClock) && !Boolean(prevPolClock?.storeDepositClock);
-      const nameEnFromServer = String(payload.label_en ?? "").trim();
-      const noteEnFromServer =
-        payload.note_en !== undefined
-          ? payload.note_en != null && String(payload.note_en).trim()
-            ? String(payload.note_en).trim()
-            : undefined
-          : undefined;
-      const ts = payload.translation_status;
-      const nts = payload.note_translation_status;
-      const labelOk = Boolean(nameEnFromServer || !nameTrim || !/[\u0E00-\u0E7F]/.test(nameTrim));
-      const noteOk = Boolean(noteEnFromServer || !noteTrim || !/[\u0E00-\u0E7F]/.test(noteTrim));
-      if (labelOk && noteOk) {
-        setTranslationNotice("");
-      } else if (ts === "no_keys" || nts === "no_keys") {
-        setTranslationNotice(
-          uiLang === "en"
-            ? "English names/notes need GEMINI_API_KEY or GROQ_API_KEY on the server (.env.local or Vercel env)."
-            : "‡∏ï‡∏±‡πâ‡∏á GEMINI_API_KEY ‡∏´‡∏£‡∏∑‡∏≠ GROQ_API_KEY ‡∏ö‡∏ô‡πÄ‡∏ã‡∏¥‡∏£‡πå‡∏ü‡πÄ‡∏ß‡∏≠‡∏£‡πå (.env.local / Vercel) ‡∏ñ‡∏∂‡∏á‡∏à‡∏∞‡πÅ‡∏õ‡∏•‡∏ä‡∏∑‡πà‡∏≠‡πÅ‡∏•‡∏∞‡∏´‡∏°‡∏≤‡∏¢‡πÄ‡∏´‡∏ï‡∏∏‡πÄ‡∏õ‡πá‡∏ô‡∏†‡∏≤‡∏©‡∏≤‡∏≠‡∏±‡∏á‡∏Å‡∏§‡∏©‡πÑ‡∏î‡πâ"
-        );
-      } else if (ts === "failed" || nts === "failed") {
-        setTranslationNotice(
-          uiLang === "en"
-            ? "Could not translate this label or note. Retry or check API quota / server logs."
-            : "‡πÅ‡∏õ‡∏•‡∏ä‡∏∑‡πà‡∏≠‡∏´‡∏£‡∏∑‡∏≠‡∏´‡∏°‡∏≤‡∏¢‡πÄ‡∏´‡∏ï‡∏∏‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à ‚Äî ‡∏•‡∏≠‡∏á‡πÉ‡∏´‡∏°‡πà‡∏´‡∏£‡∏∑‡∏≠‡πÄ‡∏ä‡πá‡∏Ñ‡πÇ‡∏Ñ‡∏ß‡∏ï‡∏≤ API / log ‡πÄ‡∏ã‡∏¥‡∏£‡πå‡∏ü‡πÄ‡∏ß‡∏≠‡∏£‡πå"
-        );
-      } else {
-        setTranslationNotice("");
-      }
-      setItems((current) =>
-        current.map((candidate) => {
-          if (candidate.uid !== nextItem.uid) return candidate;
-          let merged: OrderItemRow = {
-            ...candidate,
-            id: payload.order_item_id ?? candidate.id ?? null,
-            orderTaskId: payload.order_task_id ?? candidate.orderTaskId ?? null,
-            ...(nameEnFromServer ? { nameEn: nameEnFromServer } : {}),
-            ...(payload.note_en !== undefined
-              ? { noteEn: noteEnFromServer }
-              : {}),
-          };
-          const statusIso = String(payload.status_changed_at ?? "").trim();
-          if (statusIso) {
-            const ymd = statusChangedAtYmdFromDbIso(statusIso);
-            if (ymd) merged = { ...merged, statusChangedAtYmd: ymd };
-          } else if (prevItem.status !== nextItem.status) {
-            merged = { ...merged, statusChangedAtYmd: merged.statusChangedAtYmd ?? todayBangkokYmd() };
-          } else if (!String(prevItem.id ?? "").trim() && String(payload.order_item_id ?? "").trim()) {
-            merged = { ...merged, statusChangedAtYmd: merged.statusChangedAtYmd ?? todayBangkokYmd() };
-          }
-          if (!nextPolClock?.storeDepositClock) return merged;
-          const nextClock = enteredStoreDepositClock ? todayY : merged.clockStartYmd ?? todayY;
-          return { ...merged, clockStartYmd: nextClock };
-        })
-      );
-    } catch (error) {
-      setItems((current) => current.map((candidate) => (candidate.uid === prevItem.uid ? prevItem : candidate)));
-      setSaveError(error instanceof Error ? error.message : "‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-    } finally {
-      setSavingItemUid((current) => (current === nextItem.uid ? null : current));
-    }
-  };
-
-  /** flush ‡∏£‡∏∞‡∏´‡∏ß‡πà‡∏≤‡∏á‡∏û‡∏¥‡∏°‡∏û‡πå‡∏´‡∏°‡∏≤‡∏¢‡πÄ‡∏´‡∏ï‡∏∏ (debounce / blur / ‡∏õ‡∏¥‡∏î‡πÅ‡∏ñ‡∏ö) */
-  const flushPendingNotePersist = async (uid: string) => {
-    clearNoteDebounce(uid);
-    const live = itemsRef.current.find((row) => row.uid === uid);
-    if (!live) return;
-    await persistItem(live, live);
-  };
-
-  /** flush ‡∏£‡∏∞‡∏´‡∏ß‡πà‡∏≤‡∏á‡∏û‡∏¥‡∏°‡∏û‡πå‡∏ä‡∏∑‡πà‡∏≠‡∏á‡∏≤‡∏ô (debounce / blur) */
-  const flushPendingNamePersist = async (uid: string) => {
-    clearNameDebounce(uid);
-    const live = itemsRef.current.find((row) => row.uid === uid);
-    if (!live) return;
-    await persistItem(live, live);
-  };
-
-  const patchItem = (target: OrderItemRow, patch: Partial<OrderItem>) => {
-    const uid = target.uid;
-    const patchKeys = Object.keys(patch);
-    const isNoteOnlySave = patchKeys.length === 1 && patchKeys[0] === "note";
-    const isNameOnlySave = patchKeys.length === 1 && patchKeys[0] === "name";
-    const baseBeforePatch = itemsRef.current.find((r) => r.uid === uid) ?? target;
-    const nextStatusBeforePatch = (patch.status ?? baseBeforePatch.status) as ItemStatusValue;
-    const nextHypoBeforePatch: OrderItemRow = {
-      ...baseBeforePatch,
-      ...patch,
-      status: nextStatusBeforePatch,
-      good: DONE_SET.has(nextStatusBeforePatch),
-      ...(patch.status != null && patch.status !== baseBeforePatch.status ? { statusChangedAtYmd: todayBangkokYmd() } : {}),
-    };
-    if (orderItemPersistSignature(baseBeforePatch) === orderItemPersistSignature(nextHypoBeforePatch)) {
-      return;
-    }
-
-    closeSwipeRows();
-
-    if (isNoteOnlySave) {
-      clearNoteDebounce(uid);
-      setItems((prev) => {
-        const base = prev.find((r) => r.uid === uid) ?? target;
-        const nextStatus = (patch.status ?? base.status) as ItemStatusValue;
-        const next: OrderItemRow = {
-          ...base,
-          ...patch,
-          status: nextStatus,
-          good: DONE_SET.has(nextStatus),
-          ...(patch.status != null && patch.status !== base.status ? { statusChangedAtYmd: todayBangkokYmd() } : {}),
-        };
-        return prev.map((item) => (item.uid === uid ? next : item));
-      });
-      noteDebounceTimersRef.current[uid] = setTimeout(() => {
-        delete noteDebounceTimersRef.current[uid];
-        const live = itemsRef.current.find((row) => row.uid === uid);
-        if (live) void persistItem(live, live);
-      }, 280);
-      return;
-    }
-
-    if (isNameOnlySave) {
-      clearNameDebounce(uid);
-      setItems((prev) => {
-        const base = prev.find((r) => r.uid === uid) ?? target;
-        const nextStatus = (patch.status ?? base.status) as ItemStatusValue;
-        const next: OrderItemRow = {
-          ...base,
-          ...patch,
-          status: nextStatus,
-          good: DONE_SET.has(nextStatus),
-          ...(patch.status != null && patch.status !== base.status ? { statusChangedAtYmd: todayBangkokYmd() } : {}),
-        };
-        return prev.map((item) => (item.uid === uid ? next : item));
-      });
-      nameDebounceTimersRef.current[uid] = setTimeout(() => {
-        delete nameDebounceTimersRef.current[uid];
-        const live = itemsRef.current.find((row) => row.uid === uid);
-        if (live) void persistItem(live, live);
-      }, 280);
-      return;
-    }
-
-    clearNameDebounce(uid);
-    clearNoteDebounce(uid);
-    const baseEarly = itemsRef.current.find((r) => r.uid === uid) ?? target;
-    const nextStatusEarly = (patch.status ?? baseEarly.status) as ItemStatusValue;
-    const nextHypoEarly: OrderItemRow = {
-      ...baseEarly,
-      ...patch,
-      status: nextStatusEarly,
-      good: DONE_SET.has(nextStatusEarly),
-      ...(patch.status != null && patch.status !== baseEarly.status ? { statusChangedAtYmd: todayBangkokYmd() } : {}),
-    };
-    if (orderItemPersistSignature(baseEarly) === orderItemPersistSignature(nextHypoEarly)) {
-      return;
-    }
-    let prevSnap: OrderItemRow | null = null;
-    let nextRow: OrderItemRow | null = null;
-    /** ‡∏ö‡∏±‡∏á‡∏Ñ‡∏±‡∏ö‡πÉ‡∏´‡πâ updater ‡∏£‡∏±‡∏ô‡∏ó‡∏±‡∏ô‡∏ó‡∏µ ‚Äî ‡πÑ‡∏°‡πà‡∏á‡∏±‡πâ‡∏ô prevSnap/nextRow ‡∏≠‡∏≤‡∏à‡∏¢‡∏±‡∏á null ‡πÅ‡∏•‡πâ‡∏ß persist ‡πÑ‡∏°‡πà‡∏ñ‡∏π‡∏Å‡πÄ‡∏£‡∏µ‡∏¢‡∏Å (React 18 batching) */
-    flushSync(() => {
-      setItems((prev) => {
-        const base = prev.find((r) => r.uid === uid) ?? target;
-        const nextStatus = (patch.status ?? base.status) as ItemStatusValue;
-        const next: OrderItemRow = {
-          ...base,
-          ...patch,
-          status: nextStatus,
-          good: DONE_SET.has(nextStatus),
-          ...(patch.status != null && patch.status !== base.status ? { statusChangedAtYmd: todayBangkokYmd() } : {}),
-        };
-        prevSnap = { ...base };
-        nextRow = next;
-        return prev.map((item) => (item.uid === uid ? next : item));
-      });
-    });
-    if (prevSnap && nextRow) void persistItem(prevSnap, nextRow);
-  };
-
-  const updateStatus = (uid: string, status: string) => {
-    if (status === STATUS_ACTION_NOTE) {
-      void flushPendingNamePersist(uid);
-      setNoteOpenUid(uid);
-      return;
-    }
-    const current = itemsRef.current.find((item) => item.uid === uid);
-    if (!current) return;
-    if (current.status === status) return;
-    patchItem(current, { status: status as ItemStatusValue });
-  };
-
-  const updateAssignee = (uid: string, assignee: string) => {
-    const current = itemsRef.current.find((item) => item.uid === uid);
-    if (!current) return;
-    const nextAssignee = String(assignee ?? "").trim();
-    if (String(current.assignee ?? "").trim() === nextAssignee) return;
-    patchItem(current, { assignee: nextAssignee });
-  };
-
-  const handleDueDatePicked = (uid: string, isoValue: string) => {
-    const row = items.find((item) => item.uid === uid);
-    if (!row) {
-      setDatePickerUid(null);
-      return;
-    }
-    const normalized = isoValue.slice(0, 10);
-    if (row.dueDate?.slice(0, 10) === normalized) {
-      setDatePickerUid(null);
-      return;
-    }
-    patchItem(row, { dueDate: normalized, eta: normalized });
-    setDatePickerUid(null);
-  };
-
-  const tamRoopSheetItem = useMemo(() => {
-    if (!tamRoopSheetUid) return null;
-    return items.find((r) => r.uid === tamRoopSheetUid) ?? null;
-  }, [items, tamRoopSheetUid]);
-
-  const closeTamRoopSheet = React.useCallback(() => {
-    setTamRoopSheetUid(null);
-    setTamRoopItemPhotos([]);
-    setTamRoopPhotosFetchedForDbId(null);
-    setTamRoopViewerOpen(false);
-    setTamRoopLoadingPhotos(false);
-  }, []);
-
-  const loadTamRoopItemPhotos = React.useCallback(async () => {
-    const itemId = String(tamRoopSheetItem?.id ?? "").trim();
-    if (!itemId || !canAttachPhotos) return;
-    setTamRoopLoadingPhotos(true);
-    setSaveError("");
-    try {
-      const p = new URLSearchParams();
-      if (order.carRowId) p.set("car_row_id", order.carRowId);
-      if (order.carId != null) p.set("car_id", String(order.carId));
-      const res = await fetch(`${ORDER_PHOTOS_LIST_API_PATH}?${p.toString()}`, { cache: "no-store" });
-      const json = (await res.json()) as {
-        carPhotos?: OrderPhotoEntry[];
-        itemPhotosByItemId?: Record<string, OrderPhotoEntry[]>;
-        error?: string;
-      };
-      if (!res.ok) throw new Error(json.error ?? res.statusText);
-      const list = json.itemPhotosByItemId?.[itemId] ?? [];
-      setTamRoopItemPhotos(Array.isArray(list) ? list : []);
-      setTamRoopPhotosFetchedForDbId(itemId);
-    } catch (e) {
-      setSaveError(e instanceof Error ? e.message : "‡πÇ‡∏´‡∏•‡∏î‡∏£‡∏π‡∏õ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-    } finally {
-      setTamRoopLoadingPhotos(false);
-    }
-  }, [tamRoopSheetItem, order.carRowId, order.carId, canAttachPhotos]);
-
-  useEffect(() => {
-    if (!tamRoopSheetUid || !canAttachPhotos) return;
-    const itemId = String(tamRoopSheetItem?.id ?? "").trim();
-    if (!itemId) return;
-    void loadTamRoopItemPhotos();
-  }, [tamRoopSheetUid, tamRoopSheetItem?.id, canAttachPhotos, loadTamRoopItemPhotos]);
-
-  const isLikelyImageFile = (f: File): boolean =>
-    typeof f.size === "number" &&
-    f.size > 0 &&
-    (/^image\//i.test(f.type) ||
-      /\.(png|jpeg|jpg|webp|gif|heic|heif|bmp)$/i.test(String(f.name ?? "")));
-
-  /** ‡πÄ‡∏ß‡∏•‡∏≤‡∏°‡∏µ‡∏à‡∏≤‡∏Å Files ‡∏ò‡∏£‡∏£‡∏°‡∏î‡∏≤ ‡πÅ‡∏•‡∏∞‡∏Å‡∏£‡∏ì‡∏µ‡∏•‡∏≤‡∏Å‡∏à‡∏≤‡∏Å‡∏ó‡∏µ‡πà‡∏°‡∏≤‡πÄ‡∏´‡∏•‡∏∑‡∏≠‡πÄ‡∏â‡∏û‡∏≤‡∏∞ DataTransfer.items */
-  const gatherImageFilesFromDataTransfer = (dt: DataTransfer | null): File[] => {
-    if (!dt) return [];
-    const fromFiles = Array.from(dt.files ?? []).filter(isLikelyImageFile);
-    if (fromFiles.length > 0) return fromFiles;
-    const viaItems: File[] = [];
-    const items = dt.items;
-    if (!items?.length) return [];
-    for (let i = 0; i < items.length; i++) {
-      const it = items[i];
-      if (it.kind !== "file") continue;
-      const f = it.getAsFile();
-      if (!f?.size) continue;
-      const mimeHint = `${it.type || ""} ${f.type || ""}`;
-      if (isLikelyImageFile(f) || /^image\//i.test(mimeHint.trim())) viaItems.push(f);
-    }
-    return viaItems;
-  };
-
-  const gatherImageFilesFromClipboard = (cd: DataTransfer | null): File[] => {
-    if (!cd) return [];
-    const fromFiles = Array.from(cd.files ?? []).filter(isLikelyImageFile);
-    if (fromFiles.length > 0) return fromFiles;
-    const out: File[] = [];
-    const items = cd.items;
-    if (!items?.length) return [];
-    for (let i = 0; i < items.length; i++) {
-      const it = items[i];
-      if (it.kind !== "file") continue;
-      const f = it.getAsFile();
-      if (!f?.size) continue;
-      if (isLikelyImageFile(f) || /^image\//i.test(`${it.type || ""}`.trim())) out.push(f);
-    }
-    return out;
-  };
-
-  const uploadTamRoopItemPhotos = async (files: Iterable<File> | FileList | null | undefined) => {
-    const itemId = String(tamRoopSheetItem?.id ?? "").trim();
-    const list = files == null ? [] : Array.from(files as Iterable<File>);
-    const picked = list.filter(isLikelyImageFile);
-    if (!picked.length || !itemId || !canAttachPhotos) return;
-    setPhotoBusy(true);
-    setSaveError("");
-    try {
-      const form = new FormData();
-      form.append("target_type", "item");
-      form.append("order_item_id", itemId);
-      if (order.carRowId) form.append("car_row_id", order.carRowId);
-      if (order.carId != null) form.append("car_id", String(order.carId));
-      for (const file of picked) form.append("files", file);
-      const res = await fetch(ORDER_PHOTOS_UPLOAD_API_PATH, { method: "POST", body: form });
-      const payload = (await res.json()) as { error?: string };
-      if (!res.ok) throw new Error(payload.error ?? res.statusText);
-      await loadTamRoopItemPhotos();
-    } catch (e) {
-      setSaveError(e instanceof Error ? e.message : "‡∏≠‡∏±‡∏õ‡πÇ‡∏´‡∏•‡∏î‡∏£‡∏π‡∏õ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-    } finally {
-      setPhotoBusy(false);
-    }
-  };
-
-  /** ‡πÄ‡∏°‡∏∑‡πà‡∏≠‡∏•‡∏≤‡∏Å‡∏à‡∏≤‡∏Å LINE ‡πÑ‡∏î‡πâ‡∏•‡∏¥‡∏á‡∏Å‡πå‡∏£‡∏π‡∏õ‡πÅ‡∏ó‡∏ô‡πÑ‡∏ü‡∏•‡πå ‚Äî ‡πÉ‡∏´‡πâ‡πÄ‡∏ã‡∏¥‡∏£‡πå‡∏ü‡πÄ‡∏ß‡∏≠‡∏£‡πå‡∏î‡∏∂‡∏á (‡∏´‡∏•‡∏ö CORS) */
-  const uploadTamRoopItemPhotosFromUrls = async (urls: string[]) => {
-    const itemId = String(tamRoopSheetItem?.id ?? "").trim();
-    const list = Array.from(new Set(urls.map((u) => u.trim()).filter(Boolean)));
-    if (!list.length || !itemId || !canAttachPhotos) return;
-    setPhotoBusy(true);
-    setSaveError("");
-    try {
-      const res = await fetch(ORDER_PHOTOS_FETCH_URL_API_PATH, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          target_type: "item",
-          order_item_id: itemId,
-          car_row_id: order.carRowId,
-          car_id: order.carId,
-          urls: list,
-        }),
-      });
-      const payload = (await res.json()) as { error?: string };
-      if (!res.ok) throw new Error(payload.error ?? res.statusText);
-      await loadTamRoopItemPhotos();
-    } catch (e) {
-      setSaveError(e instanceof Error ? e.message : "‡πÇ‡∏´‡∏•‡∏î‡∏£‡∏π‡∏õ‡∏à‡∏≤‡∏Å‡∏•‡∏¥‡∏á‡∏Å‡πå‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-    } finally {
-      setPhotoBusy(false);
-    }
-  };
-
-  const uploadTamRoopPhotosLatestRef = useRef(uploadTamRoopItemPhotos);
-  uploadTamRoopPhotosLatestRef.current = uploadTamRoopItemPhotos;
-
-  /** ‡∏à‡∏±‡∏ö‡∏ß‡∏≤‡∏á‡∏£‡∏π‡∏õ‡πÅ‡∏°‡πâ focus ‡πÑ‡∏°‡πà‡∏≠‡∏¢‡∏π‡πà‡πÉ‡∏ô‡∏Å‡∏•‡πà‡∏≠‡∏á ‚Äî ‡πÉ‡∏ä‡πâ capture + ‡∏•‡∏≤‡∏Å‡∏ß‡∏≤‡∏á‡∏ó‡∏±‡πâ‡∏á‡∏à‡∏≠‡∏°‡∏∑‡∏î */
-  useEffect(() => {
-    if (!tamRoopSheetUid) return;
-    const itemId = String(tamRoopSheetItem?.id ?? "").trim();
-    if (!itemId || !canAttachPhotos) return;
-
-    const onCapturePaste = (ev: ClipboardEvent) => {
-      const list = gatherImageFilesFromClipboard(ev.clipboardData);
-      if (!list.length) return;
-      ev.preventDefault();
-      ev.stopPropagation();
-      void uploadTamRoopPhotosLatestRef.current(list);
-    };
-
-    document.addEventListener("paste", onCapturePaste, true);
-    queueMicrotask(() => {
-      tamRoopOverlayRef.current?.focus({ preventScroll: true });
-    });
-
-    return () => document.removeEventListener("paste", onCapturePaste, true);
-  }, [tamRoopSheetUid, tamRoopSheetItem?.id, canAttachPhotos]);
-
-  const onTamRoopSheetDragOver = (e: React.DragEvent) => {
-    const itemId = String(tamRoopSheetItem?.id ?? "").trim();
-    if (!itemId || !canAttachPhotos || photoBusy) return;
-    /** ‡πÉ‡∏´‡πâ‡πÄ‡∏õ‡∏¥‡∏î‡∏£‡∏±‡∏ö‡∏Å‡∏≤‡∏£ drop ‡πÄ‡∏°‡∏∑‡πà‡∏≠‡πÄ‡∏õ‡πá‡∏ô‡πÑ‡∏ü‡∏•‡πå (‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡∏•‡∏≤‡∏Å‡∏à‡∏≤‡∏Å‡πÄ‡∏î‡∏™‡∏Å‡πå‡∏ó‡πá‡∏≠‡∏õ/‡πÅ‡∏ó‡πá‡∏ö‡∏≠‡∏∑‡πà‡∏ô) */
-    e.preventDefault();
-    try {
-      e.dataTransfer.dropEffect = "copy";
-    } catch {
-      /* ignore */
-    }
-  };
-
-  const onTamRoopSheetDrop = (e: React.DragEvent) => {
-    const itemId = String(tamRoopSheetItem?.id ?? "").trim();
-    if (!itemId || !canAttachPhotos || photoBusy) return;
-    e.preventDefault();
-    const files = gatherImageFilesFromDataTransfer(e.dataTransfer);
-    if (files.length) {
-      void uploadTamRoopItemPhotos(files);
-      return;
-    }
-    const urls = extractImageUrlsFromDataTransfer(e.dataTransfer);
-    if (urls.length) {
-      void uploadTamRoopItemPhotosFromUrls(urls);
-    }
-  };
-
-  const deleteTamRoopItemPhoto = async (photoId: string) => {
-    if (!photoId) return;
-    setPhotoBusy(true);
-    setSaveError("");
-    try {
-      const res = await fetch(ORDER_PHOTOS_DELETE_API_PATH, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ photo_id: photoId }),
-      });
-      const payload = (await res.json()) as { error?: string };
-      if (!res.ok) throw new Error(payload.error ?? res.statusText);
-      await loadTamRoopItemPhotos();
-    } catch (e) {
-      setSaveError(e instanceof Error ? e.message : "‡∏•‡∏ö‡∏£‡∏π‡∏õ‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-    } finally {
-      setPhotoBusy(false);
-    }
-  };
-
-  const splitInlineTextWithCompare = () => {
-    setInlineCompareEnabled(true);
-    const shouldKeepInlineTaskLine = (rawLine: string): boolean => {
-      const line = rawLine.trim();
-      if (!line) return false;
-
-      const mentions = line.match(/@\S+/g) ?? [];
-      const wordCount = line.split(/\s+/).filter(Boolean).length;
-      /** ‡∏ö‡∏£‡∏£‡∏ó‡∏±‡∏î‡πÅ‡∏ó‡πá‡∏Å‡∏ä‡∏∑‡πà‡∏≠ (‡πÄ‡∏ä‡πà‡∏ô @A @B @C) */
-      if (mentions.length >= 2 && mentions.length * 2 >= wordCount) return false;
-      if (mentions.length >= 1 && wordCount <= 2) return false;
-
-      /** ‡∏ö‡∏£‡∏£‡∏ó‡∏±‡∏î‡∏´‡∏±‡∏ß‡∏£‡∏ñ/‡∏ó‡∏∞‡πÄ‡∏ö‡∏µ‡∏¢‡∏ô‡∏ó‡∏µ‡πà‡πÅ‡∏õ‡∏∞‡∏°‡∏≤‡∏Å‡∏±‡∏ö‡∏Ç‡πâ‡∏≠‡∏Ñ‡∏ß‡∏≤‡∏° LINE */
-      const hasThaiPlateLike = /[‡∏Å-‡∏Æ]{1,3}[-\s]?\d{1,4}/.test(line);
-      const hasVehicleSpecToken =
-        /(REVO|FORTUNER|HILUX|VIGO|RANGER|D-MAX|2WD|4WD|AT|MT|DOUBLE[_\s-]?CAB|SILVER|BLACK|WHITE|GRAY|GREY|JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)/i.test(
-          line
-        );
-      if (hasThaiPlateLike && hasVehicleSpecToken) return false;
-      /** ‡∏ö‡∏£‡∏£‡∏ó‡∏±‡∏î‡∏ó‡∏µ‡πà‡πÄ‡∏õ‡πá‡∏ô‡πÄ‡∏•‡∏Ç‡∏ó‡∏∞‡πÄ‡∏ö‡∏µ‡∏¢‡∏ô‡∏•‡πâ‡∏ß‡∏ô */
-      if (/^[0-9]{0,2}[‡∏Å-‡∏Æ]{1,3}[-\s]?[0-9]{1,4}$/i.test(line)) return false;
-      /** ‡∏ö‡∏£‡∏£‡∏ó‡∏±‡∏î chassis / VIN */
-      const hasChassisKeyword = /(chassis|vin|‡πÄ‡∏•‡∏Ç‡∏ñ‡∏±‡∏á|‡∏ï‡∏±‡∏ß‡∏ñ‡∏±‡∏á)/i.test(line);
-      const hasLongVinToken = /[a-z0-9-]{10,}/i.test(line);
-      if (hasChassisKeyword || hasLongVinToken) return false;
-
-      /** ‡∏ä‡∏∑‡πà‡∏≠/‡πÇ‡∏ô‡πâ‡∏ï‡∏†‡∏≤‡∏©‡∏≤‡∏≠‡∏±‡∏á‡∏Å‡∏§‡∏©‡∏•‡∏≠‡∏¢‡πÜ ‡πÄ‡∏ä‡πà‡∏ô faluk */
-      if (/^[a-zA-Z][a-zA-Z0-9 _-]{0,22}$/.test(line)) return false;
-
-      return true;
-    };
-
-    setInlineItems(
-      inlineText
-        .split("\n")
-        .map((line) => line.trim())
-        .filter(shouldKeepInlineTaskLine)
-        .map((name, index) => {
-          const duplicate = items.some((old) => norm(old.name).includes(norm(name)) || norm(name).includes(norm(old.name)));
-          return {
-            id: `${order.id}-new-${index}`,
-            name,
-            duplicate,
-            selected: !duplicate,
-            assignee: defaultIntakeAssignee,
-            status: "‡πÄ‡∏ä‡πá‡∏Ñ" as ItemStatusValue,
-            insertAfterUid: INLINE_INSERT_AFTER_END,
-          };
-        })
-    );
-  };
-
-  const splitInlineTextRaw = () => {
-    setInlineCompareEnabled(false);
-    setInlineItems(
-      inlineText
-        .split("\n")
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .map((name, index) => ({
-          id: `${order.id}-raw-${index}`,
-          name,
-          duplicate: false,
-          selected: true,
-          assignee: defaultIntakeAssignee,
-          status: "‡πÄ‡∏ä‡πá‡∏Ñ" as ItemStatusValue,
-          insertAfterUid: INLINE_INSERT_AFTER_END,
-        }))
-    );
-  };
-
-  const aiAssistInlineText = async () => {
-    if (!inlineText.trim() || inlineAiBusy) return;
-    setInlineAiBusy(true);
-    setInlineMessage("");
-    try {
-      const res = await fetch("/api/m/order-intake/ai-split", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text: inlineText,
-          existing_items: items.map((r) => String(r.name ?? "").trim()).filter(Boolean),
-        }),
-      });
-      const payload = (await res.json()) as { error?: string; lines?: string[] };
-      if (!res.ok) throw new Error(payload.error ?? res.statusText);
-      const lines = Array.isArray(payload.lines) ? payload.lines : [];
-      if (lines.length === 0) {
-        setInlineMessage("AI ‡πÑ‡∏°‡πà‡∏û‡∏ö‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏á‡∏≤‡∏ô‡∏à‡∏≤‡∏Å‡∏Ç‡πâ‡∏≠‡∏Ñ‡∏ß‡∏≤‡∏°‡∏ô‡∏µ‡πâ");
-        return;
-      }
-      setInlineText(lines.join("\n"));
-      /** ‡∏ï‡πà‡∏≠‡∏î‡πâ‡∏ß‡∏¢ split + ‡πÄ‡∏ó‡∏µ‡∏¢‡∏ö‡∏Ç‡∏≠‡∏á‡πÄ‡∏î‡∏¥‡∏°‡πÄ‡∏û‡∏∑‡πà‡∏≠‡∏ó‡∏≥ checkbox ‡πÉ‡∏´‡πâ‡πÄ‡∏•‡∏¢ */
-      queueMicrotask(() => splitInlineTextWithCompare());
-    } catch (e) {
-      setInlineMessage(e instanceof Error ? e.message : "AI ‡∏ä‡πà‡∏ß‡∏¢‡πÅ‡∏¢‡∏Å‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-    } finally {
-      setInlineAiBusy(false);
-    }
-  };
-
-  const removeInlineItem = (id: string) => {
-    setInlineItems((prev) => prev.filter((item) => item.id !== id));
-  };
-
-  const updateInlineItem = (
-    id: string,
-    patch: Partial<Pick<InlineDraftRow, "name" | "status" | "assignee" | "selected">>
-  ) => {
-    setInlineItems((prev) =>
-      prev.map((row) => {
-        if (row.id !== id) return row;
-        const nextName = patch.name !== undefined ? patch.name : row.name;
-        const next = { ...row, ...patch, name: nextName };
-        const trimmed = nextName.trim();
-        const duplicate =
-          inlineCompareEnabled &&
-          trimmed.length > 0 &&
-          items.some((old) => norm(old.name).includes(norm(trimmed)) || norm(trimmed).includes(norm(old.name)));
-        const selected =
-          patch.selected !== undefined
-            ? patch.selected
-            : patch.name !== undefined
-              ? inlineCompareEnabled
-                ? !duplicate
-                : row.selected
-              : row.selected;
-        return { ...next, duplicate, selected };
-      })
-    );
-  };
-
-  const pushEmptyInlineItem = (insertAfterUid: string = INLINE_INSERT_AFTER_END) => {
-    setInlineItems((prev) => [
-      ...prev,
-      {
-        id: `${order.id}-manual-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-        name: "",
-        duplicate: false,
-        selected: true,
-        assignee: defaultIntakeAssignee,
-        status: "‡πÄ‡∏ä‡πá‡∏Ñ" as ItemStatusValue,
-        insertAfterUid,
-      },
-    ]);
-  };
-
-  /** ‡πÅ‡∏ó‡∏£‡∏Å‡πÅ‡∏ñ‡∏ß‡∏ß‡πà‡∏≤‡∏á‡πÉ‡∏ï‡πâ‡πÅ‡∏ñ‡∏ß‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏ó‡∏µ‡πà‡∏™‡∏±‡πà‡∏á‡∏à‡∏≤‡∏Å‡∏õ‡∏±‡∏î‡∏ã‡πâ‡∏≤‡∏¢ */
-  const openIntakeAndAddEmptyRow = (afterItemUid: string) => {
-    setShowAllItems(true);
-    setShowInlineIntake(true);
-    pushEmptyInlineItem(afterItemUid);
-  };
-
-  const addInlineItemsToOrder = async () => {
-    if (!inlineItems.length) return;
-    const cleaned = inlineItems
-      .map((item) => ({ ...item, name: item.name.trim() }))
-      .filter((item) => item.name.length > 0 && item.selected);
-    if (!cleaned.length) return;
-    try {
-      setInlineSaving(true);
-      setInlineMessage("");
-      const res = await fetch("/api/m/order-intake/save", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          car_row_id: order.carRowId,
-          car_id: order.carId,
-          full_plate: order.fullPlate,
-          car_label: order.car,
-          items: cleaned.map((item) => ({
-            label: item.name,
-            status: item.status,
-            assignee_staff: item.assignee || null,
-          })),
-        }),
-      });
-      const payload = (await res.json()) as {
-        error?: string;
-        order_task_id?: string;
-        saved?: Array<{ order_item_id: string; label: string; label_en: string | null }>;
-      };
-      if (!res.ok) throw new Error(payload.error ?? res.statusText);
-      const taskId = String(payload.order_task_id ?? "").trim() || null;
-      const savedList = Array.isArray(payload.saved) ? payload.saved : null;
-      setItems((prev) => {
-        const prevUids = new Set(prev.map((r) => r.uid));
-        const merged = mergeInlineCleanedIntoItemRows(prev, cleaned, taskId, savedList);
-        for (const row of merged) {
-          if (!prevUids.has(row.uid)) {
-            lastPersistedSigByUidRef.current[row.uid] = orderItemPersistSignature(row);
-          }
-        }
-        return merged;
-      });
-      setInlineItems([]);
-      setInlineText("");
-      setShowInlineIntake(false);
-      setShowAllItems(false);
-      router.refresh();
-    } catch (error) {
-      setInlineMessage(error instanceof Error ? error.message : "‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-    } finally {
-      setInlineSaving(false);
-    }
-  };
-
-  /** ‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‡πÅ‡∏Ñ‡πà‡πÅ‡∏ñ‡∏ß‡πÄ‡∏î‡∏µ‡∏¢‡∏ß‡∏à‡∏≤‡∏Å‡∏ü‡∏≠‡∏£‡πå‡∏°‡∏ó‡∏µ‡πà‡πÄ‡∏õ‡∏¥‡∏î‡∏à‡∏≤‡∏Å‡∏õ‡∏±‡∏î‡∏ã‡πâ‡∏≤‡∏¢ ‚Äî ‡πÑ‡∏°‡πà‡∏ï‡πâ‡∏≠‡∏á‡∏£‡∏≠‡∏õ‡∏∏‡πà‡∏°‡∏£‡∏ß‡∏°‡∏î‡πâ‡∏≤‡∏ô‡∏•‡πà‡∏≤‡∏á */
-  const saveSingleInlineDraftRow = async (row: InlineDraftRow) => {
-    const name = row.name.trim();
-    if (!name) {
-      setInlineMessage(uiLang === "en" ? "Enter a task name before saving." : "‡∏Å‡∏£‡∏≠‡∏Å‡∏ä‡∏∑‡πà‡∏≠‡∏á‡∏≤‡∏ô‡∏Å‡πà‡∏≠‡∏ô‡∏Å‡∏î‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å");
-      return;
-    }
-    const cleaned: Pick<InlineDraftRow, "id" | "name" | "status" | "assignee" | "insertAfterUid">[] = [
-      { ...row, name },
-    ];
-    try {
-      setInlineRowSavingId(row.id);
-      setInlineMessage("");
-      const res = await fetch("/api/m/order-intake/save", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          car_row_id: order.carRowId,
-          car_id: order.carId,
-          full_plate: order.fullPlate,
-          car_label: order.car,
-          items: cleaned.map((item) => ({
-            label: item.name,
-            status: item.status,
-            assignee_staff: item.assignee || null,
-          })),
-        }),
-      });
-      const payload = (await res.json()) as {
-        error?: string;
-        order_task_id?: string;
-        saved?: Array<{ order_item_id: string; label: string; label_en: string | null }>;
-      };
-      if (!res.ok) throw new Error(payload.error ?? res.statusText);
-      const taskId = String(payload.order_task_id ?? "").trim() || null;
-      const savedList = Array.isArray(payload.saved) ? payload.saved : null;
-      setItems((prev) => {
-        const prevUids = new Set(prev.map((r) => r.uid));
-        const merged = mergeInlineCleanedIntoItemRows(prev, cleaned, taskId, savedList);
-        for (const r of merged) {
-          if (!prevUids.has(r.uid)) {
-            lastPersistedSigByUidRef.current[r.uid] = orderItemPersistSignature(r);
-          }
-        }
-        return merged;
-      });
-      setInlineItems((prev) => {
-        const next = prev.filter((r) => r.id !== row.id);
-        if (next.length === 0) {
-          setShowInlineIntake(false);
-          setShowAllItems(false);
-        }
-        return next;
-      });
-      router.refresh();
-    } catch (error) {
-      setInlineMessage(error instanceof Error ? error.message : "‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-    } finally {
-      setInlineRowSavingId(null);
-    }
-  };
-
-  const assigneeSelectOptions = (assignee: string) => {
-    const s = new Set<string>();
-    for (const n of staffOptions) {
-      const t = String(n).trim();
-      if (t) s.add(t);
-    }
-    const a = String(assignee ?? "").trim();
-    if (a) s.add(a);
-    return Array.from(s).sort((x, y) => x.localeCompare(y, "en"));
-  };
-
-  const handleDeleteItem = async (item: OrderItemRow) => {
-    if (typeof window !== "undefined" && !window.confirm("‡∏•‡∏ö‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏ô‡∏µ‡πâ?")) return;
-    closeSwipeRows();
-    clearNameDebounce(item.uid);
-    clearNoteDebounce(item.uid);
-    if (noteOpenUid === item.uid) setNoteOpenUid(null);
-    if (!item.id) {
-      setItems((prev) => prev.filter((r) => r.uid !== item.uid));
-      return;
-    }
-    setSavingItemUid(item.uid);
-    setSaveError("");
-    try {
-      const res = await fetch("/api/m/order-items/delete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          order_item_id: item.id,
-          order_task_id: item.orderTaskId ?? null,
-          car_row_id: order.carRowId,
-          car_id: order.carId,
-          updated_by: "mobile-card",
-        }),
-      });
-      const payload = (await res.json()) as { error?: string };
-      if (!res.ok) throw new Error(payload.error ?? res.statusText);
-      setItems((prev) => prev.filter((r) => r.uid !== item.uid));
-      router.refresh();
-    } catch (e) {
-      setSaveError(e instanceof Error ? e.message : "‡∏•‡∏ö‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à");
-    } finally {
-      setSavingItemUid((cur) => (cur === item.uid ? null : cur));
-    }
-  };
-
-  const onRowPointerDown = (e: React.PointerEvent, uid: string) => {
-    if (e.button !== 0) return;
-    const t = e.target;
-    if (
-      t instanceof HTMLInputElement ||
-      t instanceof HTMLSelectElement ||
-      t instanceof HTMLTextAreaElement ||
-      t instanceof HTMLOptionElement ||
-      t instanceof HTMLButtonElement
-    ) {
-      return;
-    }
-    if (t instanceof HTMLElement && t.closest("[data-order-item-name-preview]")) return;
-    const raw = rowSwipePxRef.current[uid] ?? 0;
-    const baseFromState = Math.min(0, Math.max(-SWIPE_ROW_LEFT_OPEN_PX, raw));
-    rowSwipeGestureRef.current = {
-      uid,
-      startX: e.clientX,
-      startY: e.clientY,
-      base: baseFromState,
-      lastOffset: baseFromState,
-      startedOpen: baseFromState < 0,
-      phase: "pending",
-    };
-  };
-
-  const onRowPointerMove = (e: React.PointerEvent, uid: string) => {
-    const g = rowSwipeGestureRef.current;
-    if (!g || g.uid !== uid) return;
-
-    if (g.phase === "pending") {
-      const dx = e.clientX - g.startX;
-      const dy = e.clientY - g.startY;
-      if (Math.max(Math.abs(dx), Math.abs(dy)) < SWIPE_TOUCH_SLOP_PX) return;
-      if (Math.abs(dy) >= Math.abs(dx)) {
-        rowSwipeGestureRef.current = null;
-        return;
-      }
-      g.phase = "dragging";
-      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-      setRowSwipePx(() => ({ [uid]: g.base }));
-    }
-
-    if (g.phase !== "dragging") return;
-    e.preventDefault();
-    const dx = e.clientX - g.startX;
-    const offset = Math.min(0, Math.max(-SWIPE_ROW_LEFT_OPEN_PX, g.base + dx));
-    g.lastOffset = offset;
-
-    if (swipeDragRafRef.current == null) {
-      swipeDragRafRef.current = requestAnimationFrame(() => {
-        swipeDragRafRef.current = null;
-        const active = rowSwipeGestureRef.current;
-        if (!active || active.uid !== uid || active.phase !== "dragging") return;
-        const off = active.lastOffset;
-        setRowSwipePx((prev) => ({ ...prev, [uid]: off }));
-      });
-    }
-  };
-
-  const onRowPointerUpOrCancel = (e: React.PointerEvent, uid: string) => {
-    flushSwipeDragRaf();
-    const g = rowSwipeGestureRef.current;
-    try {
-      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-    } catch {
-      /* ignore */
-    }
-    if (!g || g.uid !== uid) {
-      rowSwipeGestureRef.current = null;
-      return;
-    }
-    rowSwipeGestureRef.current = null;
-
-    if (g.phase === "pending") {
-      return;
-    }
-
-    const cur = g.lastOffset;
-    const easyOpenThresh = SWIPE_ROW_LEFT_OPEN_PX * SWIPE_ROW_SNAP_RATIO;
-    const halfOpen = SWIPE_ROW_LEFT_OPEN_PX / 2;
-    /** ‡∏à‡∏≤‡∏Å‡∏õ‡∏¥‡∏î: ‡∏õ‡∏±‡∏î‡∏ã‡πâ‡∏≤‡∏¢‡∏ô‡∏¥‡∏î‡πÄ‡∏î‡∏µ‡∏¢‡∏ß‡∏Å‡πá‡πÄ‡∏õ‡∏¥‡∏î‡πÑ‡∏î‡πâ ¬∑ ‡∏à‡∏≤‡∏Å‡πÄ‡∏õ‡∏¥‡∏î: ‡∏õ‡∏±‡∏î‡∏Ç‡∏ß‡∏≤‡πÄ‡∏Å‡∏¥‡∏ô‡∏Ñ‡∏£‡∏∂‡πà‡∏á‡πÅ‡∏ñ‡∏ö = ‡∏õ‡∏¥‡∏î (‡πÑ‡∏°‡πà‡∏™‡πÅ‡∏ô‡∏õ‡∏Å‡∏•‡∏±‡∏ö‡πÄ‡∏õ‡∏¥‡∏î‡πÄ‡∏ï‡πá‡∏°‡πÇ‡∏î‡∏¢‡∏ú‡∏¥‡∏î) */
-    let snap: number;
-    if (g.startedOpen) {
-      snap = cur <= -halfOpen ? -SWIPE_ROW_LEFT_OPEN_PX : 0;
-    } else {
-      snap = cur < -easyOpenThresh ? -SWIPE_ROW_LEFT_OPEN_PX : 0;
-    }
-    setRowSwipePx((prev) => {
-      const next = { ...prev };
-      if (snap === 0) delete next[uid];
-      else next[uid] = snap;
-      return next;
-    });
-  };
-
-  const orderPhotoUrl = orderPhotoHttpUrl(order.photo);
-  const renderCarHeadline = (asPhotoLink: boolean) => (
-    <>
-      <span
-        className={cn(
-          "text-[15px] font-semibold leading-snug sm:text-base",
-          asPhotoLink ? "text-blue-700" : "text-slate-900"
-        )}
-      >
-        {order.car}
-      </span>
-      <span
-        className={cn(
-          "mt-1 block break-all font-mono text-xs font-normal leading-normal",
-          asPhotoLink ? "text-blue-600" : "text-slate-500"
-        )}
-      >
-        {order.chassis}
-      </span>
-    </>
-  );
-
-  const renderInlineDraftCard = (row: InlineDraftRow) => (
-    <div key={row.id} className={cn("rounded-2xl px-2.5 py-2", row.duplicate ? "bg-red-50" : "bg-slate-100")}>
-      <input
-        value={row.name}
-        onChange={(e) => updateInlineItem(row.id, { name: e.target.value })}
-        placeholder={uiLang === "en" ? "Task name" : "‡∏ä‡∏∑‡πà‡∏≠‡∏á‡∏≤‡∏ô"}
-        className="mb-2 w-full rounded-xl border-0 bg-white px-2.5 py-2.5 text-sm font-medium text-slate-900 outline-none ring-1 ring-slate-200/80 focus:ring-2 focus:ring-slate-300/80"
-      />
-      <div className="flex min-w-0 flex-nowrap items-center gap-1.5 overflow-x-auto touch-pan-x [-webkit-overflow-scrolling:touch]">
-        <select
-          value={row.status}
-          onChange={(e) => updateInlineItem(row.id, { status: e.target.value as ItemStatusValue })}
-          title={uiLang === "en" ? "Status" : "‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞"}
-          className="h-10 min-h-[40px] w-[5.75rem] shrink-0 touch-manipulation rounded-full border-0 bg-white px-2 py-1.5 text-xs font-medium text-slate-800 shadow-sm outline-none ring-1 ring-slate-200/80"
-        >
-          {statusOptionsForValue(row.status).map((st) => (
-            <option key={st} value={st}>
-              {statusLabelInCard(st)}
-            </option>
-          ))}
-        </select>
-        <select
-          value={row.assignee || ""}
-          onChange={(e) => updateInlineItem(row.id, { assignee: e.target.value })}
-          title={uiLang === "en" ? "Owner" : "‡∏û‡∏ô‡∏±‡∏Å‡∏á‡∏≤‡∏ô"}
-          className={cn(
-            "h-10 min-h-[40px] w-[84px] min-w-[4.75rem] touch-manipulation rounded-full border-0 px-2 py-1.5 text-xs font-semibold shadow-sm outline-none ring-1 focus-visible:ring-2 sm:w-[92px]",
-            assigneeSelectSurfaceClasses(row.assignee || "")
-          )}
-        >
-          <option value="">‚Äî</option>
-          {assigneeSelectOptions(row.assignee).map((staffName) => (
-            <option key={staffName} value={staffName}>
-              {staffName}
-            </option>
-          ))}
-        </select>
-        <button
-          type="button"
-          onClick={() => removeInlineItem(row.id)}
-          className="shrink-0 rounded-full bg-red-100 px-2.5 py-1.5 text-xs font-medium text-red-800 touch-manipulation"
-        >
-          {uiLang === "en" ? "Delete" : "‡∏•‡∏ö"}
-        </button>
-      </div>
-      <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
-        <p className="min-w-0 flex-1 text-xs font-medium">
-          {row.duplicate ? (
-            <span className="text-red-600">{uiLang === "en" ? "Likely duplicate on card" : "‡∏Ñ‡∏≤‡∏î‡∏ß‡πà‡∏≤‡∏ã‡πâ‡∏≥‡∏Å‡∏±‡∏ö‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏ö‡∏ô‡∏Å‡∏≤‡∏£‡πå‡∏î"}</span>
-          ) : (
-            <span className="text-emerald-600">{uiLang === "en" ? "New item" : "‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡πÉ‡∏´‡∏°‡πà"}</span>
-          )}
-        </p>
-        <div className="flex shrink-0 items-center gap-2">
-          <button
-            type="button"
-            onClick={() => void saveSingleInlineDraftRow(row)}
-            disabled={inlineSaving || inlineRowSavingId !== null}
-            className={cn(
-              "rounded-full px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm ring-1 ring-inset touch-manipulation",
-              inlineSaving || (inlineRowSavingId !== null && inlineRowSavingId !== row.id)
-                ? "cursor-not-allowed bg-slate-400 ring-slate-500/20"
-                : inlineRowSavingId === row.id
-                  ? "cursor-wait bg-emerald-500/90 ring-emerald-700/20"
-                  : "bg-emerald-600 ring-emerald-800/25 active:bg-emerald-700"
-            )}
-          >
-            {inlineRowSavingId === row.id
-              ? uiLang === "en"
-                ? "Saving‚Ä¶"
-                : "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‚Ä¶"
-              : uiLang === "en"
-                ? "Save"
-                : "‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å"}
-          </button>
-          <label className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 ring-1 ring-slate-200/80">
-            <input
-              type="checkbox"
-              checked={row.selected}
-              onChange={(e) => updateInlineItem(row.id, { selected: e.target.checked })}
-              className="h-3.5 w-3.5 accent-slate-900"
-            />
-            {row.duplicate ? (uiLang === "en" ? "Confirm add" : "‡∏¢‡∏∑‡∏ô‡∏¢‡∏±‡∏ô‡πÄ‡∏û‡∏¥‡πà‡∏°") : (uiLang === "en" ? "Add item" : "‡πÄ‡∏û‡∏¥‡πà‡∏°‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£")}
-          </label>
-        </div>
-      </div>
-    </div>
-  );
-
-  return (
-    <article
-      id={`order-card-${order.id}`}
-      className={cn(
-        "rounded-none bg-white px-2 py-2.5 shadow-sm ring-1 ring-slate-200/60 sm:rounded-2xl sm:px-3 sm:py-3",
-        lineInboxActive && "ring-2 ring-violet-400"
-      )}
-    >
-      <div className="mb-2 flex items-start justify-between gap-2">
-        <div className="min-w-0 flex-1">
-          {orderPhotoUrl ? (
-            <a
-              href={orderPhotoUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block rounded-sm decoration-blue-600/70 underline-offset-2 hover:underline"
-            >
-              {renderCarHeadline(true)}
-            </a>
-          ) : (
-            <div className="block text-slate-900">{renderCarHeadline(false)}</div>
-          )}
-          <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs font-medium leading-snug text-slate-600">
-            <span className="rounded-full bg-slate-100 px-2.5 py-1">{order.sale}</span>
-            <span className="min-w-0 max-w-full truncate rounded-full bg-slate-100 px-2.5 py-1">{order.buyer} ¬∑ {formatUsd(order.salePrice)}</span>
-            <button
-              type="button"
-              onClick={() => {
-                setShowCost((wasOpen) => {
-                  const opening = !wasOpen;
-                  if (opening && uiLang === "en" && !carSummaryEnRef.current && orderCarSummaryFieldsHaveThai(order)) {
-                    void translateCarSummaryViaApi({ panelLoading: true });
-                  }
-                  return opening;
-                });
-              }}
-              className="rounded-full bg-slate-200/80 px-2.5 py-1 text-xs font-semibold text-slate-800 touch-manipulation"
-            >
-              COST {formatUsd(order.cost)}{" "}
-              {carSummaryTranslating && uiLang === "en" ? "‚Ä¶" : showCost ? "‚åÉ" : "‚åÑ"}
-            </button>
-          </div>
-          {showCost ? (
-            <div className="mt-2 overflow-hidden rounded-2xl bg-slate-50 text-sm font-medium leading-relaxed text-slate-700">
-              <div className="flex items-center justify-between gap-2 bg-slate-950 px-3 py-2.5 text-white">
-                <span className="text-sm font-semibold tracking-tight">{uiLang === "en" ? "Cost Summary" : "‡∏™‡∏£‡∏∏‡∏õ‡∏ï‡πâ‡∏ô‡∏ó‡∏∏‡∏ô"}</span>
-                {order.expensePdf ? (
-                  <a
-                    href={order.expensePdf}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="shrink-0 rounded-full bg-white/15 px-2.5 py-1 text-xs font-medium text-white hover:bg-white/25"
-                  >
-                    {uiLang === "en" ? "Parts/Accessories" : "‡∏Ñ‡πà‡∏≤‡∏≠‡∏∞‡πÑ‡∏´‡∏•‡πà/‡∏Ç‡∏≠‡∏á‡πÅ‡∏ï‡πà‡∏á"}
-                  </a>
-                ) : (
-                  <span
-                    className="shrink-0 rounded-full bg-white/10 px-2.5 py-1 text-xs font-medium text-white/50"
-                    title={uiLang === "en" ? "No parts/accessories link yet (part_accessories)" : "‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏•‡∏¥‡∏á‡∏Å‡πå‡∏Ñ‡πà‡∏≤‡∏≠‡∏∞‡πÑ‡∏´‡∏•‡πà/‡∏Ç‡∏≠‡∏á‡πÅ‡∏ï‡πà‡∏á (part_accessories)"}
-                  >
-                    {uiLang === "en" ? "Parts/Accessories" : "‡∏Ñ‡πà‡∏≤‡∏≠‡∏∞‡πÑ‡∏´‡∏•‡πà/‡∏Ç‡∏≠‡∏á‡πÅ‡∏ï‡πà‡∏á"}
-                  </span>
-                )}
-              </div>
-              <div className="space-y-2 p-3">
-                <div className="rounded-2xl bg-white p-2.5">
-                  <div className="mb-1 text-xs font-semibold tracking-wide text-slate-500">{uiLang === "en" ? "Total Cost" : "‡∏ï‡πâ‡∏ô‡∏ó‡∏∏‡∏ô‡∏£‡∏ß‡∏°"}</div>
-                  <p className="whitespace-pre-wrap break-words leading-relaxed text-slate-800">
-                    {uiLang === "en" && carSummaryTranslating && !carSummaryEn
-                      ? "Translating‚Ä¶"
-                      : uiLang === "en" && carSummaryEn
-                        ? stripEnglishPhotoRefMarkers(
-                            String(carSummaryEn.cost || order.costDetail || order.costBreakdown || order.cost || "-")
-                          )
-                        : order.costDetail || order.costBreakdown || order.cost || "-"}
-                  </p>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="rounded-2xl bg-white p-2.5">
-                    <div className="mb-1 text-xs font-semibold tracking-wide text-slate-500">{uiLang === "en" ? "Repair" : "‡∏ã‡πà‡∏≠‡∏°"}</div>
-                    <p className="whitespace-pre-wrap break-words leading-relaxed text-slate-700">
-                      {uiLang === "en" && carSummaryTranslating && !carSummaryEn
-                        ? "Translating‚Ä¶"
-                        : uiLang === "en" && carSummaryEn
-                          ? stripEnglishPhotoRefMarkers(
-                              String(carSummaryEn.repair || order.repairDetail || order.repairDetails || "-")
-                            )
-                          : order.repairDetail || order.repairDetails || "-"}
-                    </p>
-                  </div>
-                  <div className="rounded-2xl bg-white p-2.5">
-                    <div className="mb-1 text-xs font-semibold tracking-wide text-slate-500">{uiLang === "en" ? "Document" : "‡πÄ‡∏≠‡∏Å‡∏™‡∏≤‡∏£"}</div>
-                    <p className="whitespace-pre-wrap break-words leading-relaxed text-slate-700">
-                      {uiLang === "en" && carSummaryTranslating && !carSummaryEn
-                        ? "Translating‚Ä¶"
-                        : uiLang === "en" && carSummaryEn
-                          ? stripEnglishPhotoRefMarkers(String(carSummaryEn.document || order.documentDetail || "-"))
-                          : order.documentDetail || "-"}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </div>
-          ) : null}
-        </div>
-        {order.ship && order.ship !== "‡∏ß‡πà‡∏≤‡∏á" ? (
-          <span className="shrink-0 whitespace-nowrap rounded-full bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-800">{order.ship}</span>
-        ) : null}
-      </div>
-
-      <div className="mb-2 flex w-full min-w-0 flex-nowrap items-center gap-2 overflow-x-auto rounded-full bg-slate-100/90 px-2 py-2 ring-1 ring-slate-200/50">
-        <button
-          type="button"
-          onClick={() => {
-            setShowInlineIntake((prev) => {
-              const opening = !prev;
-              if (opening) setShowAllItems(true);
-              else setShowAllItems(false);
-              return !prev;
-            });
-          }}
-          className="shrink-0 rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-800 touch-manipulation"
-        >
-          {uiLang === "en" ? "Add task" : "‡πÄ‡∏û‡∏¥‡πà‡∏°‡∏á‡∏≤‡∏ô"}
-        </button>
-        <button
-          type="button"
-          onClick={() => void translateCardItemsToEnglish()}
-          disabled={translateCardBusy || orderTaskIdsForCard.length === 0}
-          className={cn(
-            "shrink-0 rounded-full px-3 py-1.5 text-xs font-medium touch-manipulation",
-            translateCardBusy || orderTaskIdsForCard.length === 0
-              ? "cursor-not-allowed bg-slate-200 text-slate-500"
-              : "bg-blue-50 text-blue-800"
-          )}
-          title={
-            uiLang === "en"
-              ? "Translate item names, item notes, and Cost Summary (cost/repair/document) on this card"
-              : "‡πÅ‡∏õ‡∏•‡∏ä‡∏∑‡πà‡∏≠‡πÅ‡∏•‡∏∞‡∏´‡∏°‡∏≤‡∏¢‡πÄ‡∏´‡∏ï‡∏∏‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ + ‡∏Ç‡πâ‡∏≠‡∏Ñ‡∏ß‡∏≤‡∏°‡∏™‡∏£‡∏∏‡∏õ‡∏ï‡πâ‡∏ô‡∏ó‡∏∏‡∏ô/‡∏ã‡πà‡∏≠‡∏°/‡πÄ‡∏≠‡∏Å‡∏™‡∏≤‡∏£‡πÉ‡∏ô‡∏Å‡∏≤‡∏£‡πå‡∏î‡∏ô‡∏µ‡πâ"
-          }
-        >
-          {translateCardBusy
-            ? (uiLang === "en" ? "Translating..." : "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡πÅ‡∏õ‡∏•...")
-            : (uiLang === "en" ? "Translate EN" : "‡πÅ‡∏õ‡∏• EN")}
-        </button>
-        {items.length === 0 ? (
-          <span className="shrink-0 rounded-full bg-amber-100 px-3 py-1.5 text-xs font-medium text-amber-900">{uiLang === "en" ? "No items yet" : "‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£"}</span>
-        ) : itemsEffective.length === 0 ? (
-          <span className="shrink-0 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-600">
-            {suppressToolbarOthers && itemsOutsideToolbarFilter.length > 0
-              ? (uiLang === "en"
-                  ? `Other items hidden (+${itemsOutsideToolbarFilter.length})`
-                  : `‡∏ã‡πà‡∏≠‡∏ô‡∏á‡∏≤‡∏ô‡∏≠‡∏∑‡πà‡∏ô‡∏≠‡∏¢‡∏π‡πà (+${itemsOutsideToolbarFilter.length})`)
-              : (uiLang === "en" ? "No items match filters" : "‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏ï‡∏≤‡∏°‡∏ï‡∏±‡∏ß‡∏Å‡∏£‡∏≠‡∏á")}
-          </span>
-        ) : (
-          <span
-            className={cn(
-              "shrink-0 rounded-full px-3 py-1.5 text-xs font-medium",
-              allDone ? "bg-emerald-50 text-emerald-800" : "bg-amber-100 text-amber-900"
-            )}
-          >
-            {allDone
-              ? (uiLang === "en" ? `Done ${done.length}/${itemsEffective.length}` : `‡∏à‡∏ö ${done.length}/${itemsEffective.length}`)
-              : (uiLang === "en" ? `Waiting ${waiting.length}/${itemsEffective.length}` : `‡∏£‡∏≠ ${waiting.length}/${itemsEffective.length}`)}
-          </span>
-        )}
-        <a
-          href={lineShareUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="shrink-0 rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-800 touch-manipulation"
-        >
-          {uiLang === "en" ? "Share" : "‡πÅ‡∏ä‡∏£‡πå"}
-        </a>
-        {canAttachPhotos ? (
-          <label
-            className={cn(
-              "shrink-0 rounded-full px-3 py-1.5 text-xs font-semibold touch-manipulation",
-              photoBusy ? "cursor-not-allowed bg-slate-200 text-slate-500" : "bg-slate-900 text-white"
-            )}
-          >
-            {uiLang === "en" ? "Add photo" : "‡πÄ‡∏û‡∏¥‡πà‡∏°‡∏£‡∏π‡∏õ"}
-            <input
-              type="file"
-              accept="image/*"
-              multiple
-              disabled={photoBusy}
-              className="hidden"
-              onChange={(e) => {
-                void uploadPhotos(e.currentTarget.files);
-                e.currentTarget.value = "";
-              }}
-            />
-          </label>
-        ) : null}
-      </div>
-
-      {canAttachPhotos && carPhotos.length > 0 ? (
-        <div className="mb-2 rounded-2xl bg-slate-100/80 px-2.5 py-2">
-          <div className="mb-1 flex items-center gap-2">
-            <span className="text-xs font-semibold tracking-wide text-slate-600">{uiLang === "en" ? "Car Photos" : "‡∏£‡∏π‡∏õ‡∏£‡∏ñ"}</span>
-          </div>
-          <div className="flex gap-2 overflow-x-auto pb-1">
-            {carPhotos.map((p) => (
-              <div key={p.id} className="relative shrink-0">
-                <button
-                  type="button"
-                  onClick={() => openPhotoViewer(carPhotos.findIndex((x) => x.id === p.id))}
-                  className="block"
-                >
-                  <Image
-                    src={p.url}
-                    alt="car"
-                    width={112}
-                    height={80}
-                    sizes="112px"
-                    loading="lazy"
-                    className="h-20 w-28 rounded-lg object-cover ring-1 ring-slate-200/70"
-                  />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void deletePhoto(p.id)}
-                  disabled={photoBusy}
-                  className="absolute right-1 top-1 rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] font-semibold text-white"
-                >
-                  {uiLang === "en" ? "Delete" : "‡∏•‡∏ö"}
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : !canAttachPhotos ? (
-        <p className="mb-2 text-[11px] font-medium text-slate-500">{uiLang === "en" ? "No car_row_id / car_id for photo attachment" : "‡πÑ‡∏°‡πà‡∏û‡∏ö car_row_id / car_id ‡∏™‡∏≥‡∏´‡∏£‡∏±‡∏ö‡πÅ‡∏ô‡∏ö‡∏£‡∏π‡∏õ"}</p>
-      ) : null}
-
-      {photoViewerOpen && carPhotos.length > 0 ? (
-        <div className="fixed inset-0 z-[80] bg-black/90 p-2">
-          <div className="mb-2 flex items-center justify-between">
-            <span className="text-xs font-semibold text-white">
-              {uiLang === "en"
-                ? `Car photos ${photoViewerIndex + 1}/${carPhotos.length} (swipe left/right)`
-                : `‡∏£‡∏π‡∏õ‡∏£‡∏ñ ${photoViewerIndex + 1}/${carPhotos.length} (‡∏õ‡∏±‡∏î‡∏ã‡πâ‡∏≤‡∏¢/‡∏Ç‡∏ß‡∏≤‡πÑ‡∏î‡πâ)`}
-            </span>
-            <button type="button" onClick={closePhotoViewer} className="rounded-full bg-white/15 px-3 py-1 text-xs font-semibold text-white">
-              {uiLang === "en" ? "Close" : "‡∏õ‡∏¥‡∏î"}
-            </button>
-          </div>
-          <div
-            ref={photoViewerStripRef}
-            className="flex h-[86vh] snap-x snap-mandatory overflow-x-auto touch-pan-x gap-2"
-            style={{ scrollBehavior: "smooth" }}
-            onScroll={(e) => {
-              const el = e.currentTarget;
-              const idx = Math.round(el.scrollLeft / Math.max(el.clientWidth, 1));
-              if (idx !== photoViewerIndex && idx >= 0 && idx < carPhotos.length) setPhotoViewerIndex(idx);
-            }}
-          >
-            {carPhotos.map((p) => (
-              <div key={`viewer-${p.id}`} className="relative h-full w-full shrink-0 snap-center">
-                <Image src={p.url} alt="car full" fill sizes="100vw" loading="lazy" className="object-contain" />
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
-
-      <LineInboxCarAiSection
-        orderId={order.id}
-        carRowId={order.carRowId}
-        active={lineInboxActive}
-      />
-
-      <div className="space-y-1">
-        {compareItems.map((item) => {
-          const isWaiting = WAITING_SET.has(item.status);
-          const isSaving = savingItemUid === item.uid;
-          const showNoteRow = noteOpenUid === item.uid || Boolean(item.note?.trim());
-          const swipeX = rowSwipePx[item.uid] ?? 0;
-          const rowPol = itemPoliciesNorm.byStatus[item.status as ItemStatusValue];
-          const storeCap = rowPol.storeDepositClock ? storeDepositEffectiveMaxDays(rowPol) : null;
-          return (
-            <Fragment key={item.uid}>
-            <div className="relative overflow-hidden rounded-2xl">
-              <div
-                className="absolute inset-y-0 right-0 z-0 flex items-stretch overflow-hidden rounded-2xl ring-1 ring-slate-300/50"
-                style={{ width: SWIPE_ROW_LEFT_OPEN_PX }}
-              >
-                <button
-                  type="button"
-                  onPointerDown={(ev) => ev.stopPropagation()}
-                  onClick={() => void handleDeleteItem(item)}
-                  disabled={isSaving}
-                  className="flex min-w-0 flex-1 items-center justify-center border-r border-rose-300/70 bg-rose-100 px-0.5 text-center text-[11px] font-semibold leading-tight text-rose-900 disabled:opacity-50 sm:text-xs"
-                >
-                  {uiLang === "en" ? "Delete" : "‡∏•‡∏ö"}
-                </button>
-                <button
-                  type="button"
-                  onPointerDown={(ev) => ev.stopPropagation()}
-                  onClick={() => {
-                    setShowAllItems(true);
-                    setShowInlineIntake(true);
-                    closeSwipeRows();
-                  }}
-                  className="flex min-w-0 flex-1 items-center justify-center border-r border-emerald-300/70 bg-emerald-100 px-0.5 text-center text-[11px] font-semibold leading-tight text-emerald-950 sm:text-xs"
-                >
-                  {uiLang === "en" ? "Add task" : "‡πÄ‡∏û‡∏¥‡πà‡∏°‡∏á‡∏≤‡∏ô"}
-                </button>
-                <button
-                  type="button"
-                  onPointerDown={(ev) => ev.stopPropagation()}
-                  onClick={() => {
-                    openIntakeAndAddEmptyRow(item.uid);
-                    closeSwipeRows();
-                  }}
-                  className="flex min-w-0 flex-1 items-center justify-center bg-sky-100 px-0.5 text-center text-[11px] font-semibold leading-tight text-sky-950 sm:text-xs"
-                >
-                  {uiLang === "en" ? "Add row" : "‡πÄ‡∏û‡∏¥‡πà‡∏°‡πÅ‡∏ñ‡∏ß"}
-                </button>
-              </div>
-              <div
-                style={{ transform: `translateX(${swipeX}px)` }}
-                onPointerDown={(e) => onRowPointerDown(e, item.uid)}
-                onPointerMove={(e) => onRowPointerMove(e, item.uid)}
-                onPointerUp={(e) => onRowPointerUpOrCancel(e, item.uid)}
-                onPointerCancel={(e) => onRowPointerUpOrCancel(e, item.uid)}
-                className={cn(
-                  "relative z-[1] flex touch-manipulation flex-col rounded-2xl py-1.5 pl-1 pr-2 will-change-transform sm:py-2 sm:pl-1.5 sm:pr-3",
-                  item.overdue ? "bg-red-50" : isWaiting ? "bg-amber-50" : "bg-slate-100"
-                )}
-              >
-              <div className="flex min-h-0 w-full min-w-0 flex-1 flex-row items-stretch gap-1">
-                <div
-                  className="shrink-0 touch-manipulation select-none self-stretch rounded-l-lg bg-slate-200/35 active:bg-slate-300/50 sm:w-4 w-[14px] min-h-[2.75rem]"
-                  aria-hidden
-                  title="‡∏õ‡∏±‡∏î‡∏ã‡πâ‡∏≤‡∏¢‡∏à‡∏≤‡∏Å‡∏Ç‡∏≠‡∏ö‡∏ô‡∏µ‡πâ ‚Äî ‡∏û‡∏∑‡πâ‡∏ô‡∏ó‡∏µ‡πà‡∏ß‡πà‡∏≤‡∏á‡∏™‡∏≥‡∏´‡∏£‡∏±‡∏ö‡∏•‡∏≤‡∏Å‡πÄ‡∏õ‡∏¥‡∏î‡πÄ‡∏°‡∏ô‡∏π"
-                />
-              <div
-                className={cn(
-                  "min-h-0 min-w-0 flex-1",
-                  showNoteRow ? "flex flex-col gap-1.5" : "flex flex-nowrap items-center gap-1 overflow-x-auto touch-pan-x [-webkit-overflow-scrolling:touch]"
-                )}
-              >
-                <div
-                  className={cn(
-                    "flex min-w-0 w-full items-center gap-1",
-                    showNoteRow ? "flex-nowrap overflow-x-auto touch-pan-x [-webkit-overflow-scrolling:touch]" : "contents"
-                  )}
-                >
-                  <OrderItemNameFieldWithTamRoop
-                    item={item}
-                    showNoteRow={showNoteRow}
-                    uiLang={uiLang}
-                    patchItem={patchItem}
-                    flushPendingNamePersist={flushPendingNamePersist}
-                    onTamRoopClick={(row) => {
-                      void flushPendingNamePersist(row.uid);
-                      setTamRoopSheetUid(row.uid);
-                      setTamRoopItemPhotos([]);
-                      setTamRoopPhotosFetchedForDbId(null);
-                      setTamRoopViewerOpen(false);
-                      setSaveError("");
-                    }}
-                    onAfterNameBlur={(uid, next) => {
-                      if (!orderItemLabelContainsTamRoop(next) && tamRoopSheetUid === uid) closeTamRoopSheet();
-                    }}
-                  />
-                  <div className="flex shrink-0 flex-nowrap items-center gap-1.5">
-                    <select
-                      value={item.assignee || ""}
-                      onChange={(e) => updateAssignee(item.uid, e.target.value)}
-                      title={uiLang === "en" ? "Owner" : "‡∏û‡∏ô‡∏±‡∏Å‡∏á‡∏≤‡∏ô"}
-                      className={cn(
-                        "h-10 min-h-[40px] w-[76px] min-w-[4.5rem] shrink-0 touch-manipulation rounded-full border-0 px-2 py-1.5 text-xs font-semibold shadow-sm outline-none ring-1 focus-visible:ring-2 sm:w-[88px]",
-                        assigneeSelectSurfaceClasses(item.assignee || "")
-                      )}
-                    >
-                      <option value="">‚Äî</option>
-                      {assigneeSelectOptions(item.assignee).map((staffName) => (
-                        <option key={staffName} value={staffName}>
-                          {staffName}
-                        </option>
-                      ))}
-                    </select>
-
-                    {rowPol.arrivalDueDate ? (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          void (async () => {
-                            await flushPendingNotePersist(item.uid);
-                            await flushPendingNamePersist(item.uid);
-                            setDatePickerUid(item.uid);
-                          })();
-                        }}
-                        className={cn(
-                          "min-h-[36px] shrink-0 whitespace-nowrap rounded-full px-2.5 py-1.5 text-xs font-medium touch-manipulation ring-1 sm:px-3",
-                          (() => {
-                            const tone = dueDateArrivalButtonTone(item.dueDate);
-                            if (tone === "amber") return "bg-amber-200 text-amber-950 ring-amber-500/60";
-                            if (tone === "red") return "bg-red-100 text-red-900 ring-red-500/60";
-                            return "bg-sky-100 text-sky-800 ring-sky-400/40";
-                          })()
-                        )}
-                      >
-                        {item.dueDate
-                          ? uiLang === "en"
-                            ? `Due ${formatDateInput(item.dueDate)}`
-                            : `‡∏°‡∏≤ ${formatDateInput(item.dueDate)}`
-                          : uiLang === "en"
-                            ? "Select date"
-                            : "‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà"}
-                      </button>
-                    ) : null}
-
-                    {rowPol.storeDepositClock && storeCap !== null ? (
-                      <span
-                        className={cn(
-                          "shrink-0 max-w-[9.5rem] truncate rounded-full px-2 py-1 text-[11px] font-semibold leading-tight ring-1 sm:max-w-[11rem]",
-                          (() => {
-                            const tone = storeDepositTone(item.clockStartYmd, storeCap);
-                            if (tone === "amber") return "bg-amber-100 text-amber-950 ring-amber-400/50";
-                            if (tone === "red") return "bg-red-100 text-red-900 ring-red-400/50";
-                            return "bg-slate-200/90 text-slate-800 ring-slate-400/40";
-                          })()
-                        )}
-                        title={
-                          uiLang === "en"
-                            ? `${storeCap}-day allowance (Bangkok calendar) from clock-start date stored on row`
-                            : `‡∏ô‡∏±‡∏ö ${storeCap} ‡∏ß‡∏±‡∏ô‡∏õ‡∏è‡∏¥‡∏ó‡∏¥‡∏ô (‡πÄ‡∏ß‡∏•‡∏≤‡πÑ‡∏ó‡∏¢) ‡∏à‡∏≤‡∏Å‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏•‡∏á‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡πÉ‡∏ô‡∏£‡∏∞‡∏ö‡∏ö`
-                        }
-                      >
-                        {item.clockStartYmd ? `${formatDateInput(item.clockStartYmd)} ¬∑ ` : ""}
-                        {storeDepositRemainingLabel(item.clockStartYmd, storeCap)}
-                      </span>
-                    ) : null}
-
-                    <div className="flex shrink-0 items-center gap-1">
-                    <select
-                      value={item.status}
-                      onChange={(e) => updateStatus(item.uid, e.target.value)}
-                      title={uiLang === "en" ? "Item status" : "‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£"}
-                      className={cn(
-                        "h-10 min-h-[40px] w-[5.5rem] shrink-0 touch-manipulation rounded-full border-0 bg-white px-2 py-1.5 text-xs font-medium text-slate-800 shadow-sm outline-none ring-1 ring-slate-200/80 sm:w-[6.25rem]",
-                        isWaiting ? "text-amber-900" : "text-emerald-900"
-                      )}
-                    >
-                      {statusOptionsForValue(item.status).map((st) => (
-                        <option key={st} value={st}>
-                          {statusLabelInCard(st)}
-                        </option>
-                      ))}
-                      <option value={STATUS_ACTION_NOTE}>{uiLang === "en" ? "Note" : "‡∏´‡∏°‡∏≤‡∏¢‡πÄ‡∏´‡∏ï‡∏∏"}</option>
-                    </select>
-                    {statusChangedElapsedLabel(item.statusChangedAtYmd) ? (
-                      <span
-                        className="shrink-0 rounded-full bg-slate-200/80 px-1.5 py-1 text-[10px] font-semibold leading-none text-slate-600 tabular-nums"
-                        title={`‡πÄ‡∏õ‡∏•‡∏µ‡πà‡∏¢‡∏ô‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏•‡πà‡∏≤‡∏™‡∏∏‡∏î ${formatDateInput(item.statusChangedAtYmd ?? "")}`}
-                      >
-                        {statusChangedElapsedLabel(item.statusChangedAtYmd)}
-                      </span>
-                    ) : null}
-                    {slaExceededInStatus(item.statusChangedAtYmd, rowPol.slaMaxCalendarDaysInStatus) ? (
-                      <span
-                        className="shrink-0 rounded-full bg-rose-100 px-1.5 py-1 text-[10px] font-bold leading-none text-rose-800 ring-1 ring-rose-300/70"
-                        title={
-                          uiLang === "en"
-                            ? `Over SLA (${rowPol.slaMaxCalendarDaysInStatus ?? "?"} calendar days since last status date)`
-                            : `‡πÄ‡∏Å‡∏¥‡∏ô‡∏Ç‡∏µ‡∏î SLA (${rowPol.slaMaxCalendarDaysInStatus ?? "?"} ‡∏ß‡∏±‡∏ô‡∏õ‡∏è‡∏¥‡∏ó‡∏¥‡∏ô‡∏ô‡∏±‡∏ö‡∏à‡∏≤‡∏Å‡∏ß‡∏±‡∏ô‡πÄ‡∏õ‡∏•‡∏µ‡πà‡∏¢‡∏ô‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞)`
-                        }
-                      >
-                        SLA
-                      </span>
-                    ) : null}
-                    </div>
-                  </div>
-                </div>
-
-                {showNoteRow ? (
-                  <div className="flex min-w-0 w-full flex-wrap items-center gap-1.5 border-t border-slate-200/70 pt-1.5">
-                    <span className="shrink-0 rounded-full bg-white px-2 py-1 text-xs font-medium text-sky-800 ring-1 ring-sky-200/80">
-                      {uiLang === "en" ? "Note" : "‡∏´‡∏°‡∏≤‡∏¢‡πÄ‡∏´‡∏ï‡∏∏"}
-                    </span>
-                    <OrderItemNoteField
-                      item={item}
-                      uiLang={uiLang}
-                      patchItem={patchItem}
-                      flushPendingNotePersist={flushPendingNotePersist}
-                      onTamRoopClick={(row) => {
-                        void flushPendingNotePersist(row.uid);
-                        void flushPendingNamePersist(row.uid);
-                        setTamRoopSheetUid(row.uid);
-                        setTamRoopItemPhotos([]);
-                        setTamRoopPhotosFetchedForDbId(null);
-                        setTamRoopViewerOpen(false);
-                        setSaveError("");
-                      }}
-                      onTranslateCard={() => void translateCardItemsToEnglish()}
-                      translateCardBusy={translateCardBusy}
-                      translateCardDisabled={orderTaskIdsForCard.length === 0}
-                    />
-                    <button
-                      type="button"
-                      onPointerDown={(e) => e.preventDefault()}
-                      onClick={() => {
-                        void (async () => {
-                          await flushPendingNamePersist(item.uid);
-                          await flushPendingNotePersist(item.uid);
-                        })();
-                        setNoteOpenUid(null);
-                      }}
-                      className="shrink-0 rounded-full bg-slate-900 px-2.5 py-1 text-xs font-medium text-white"
-                    >
-                      {uiLang === "en" ? "Done" : "‡πÄ‡∏™‡∏£‡πá‡∏à"}
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-              </div>
-
-              <div className="mt-1 flex flex-wrap items-center justify-end gap-1 text-xs text-slate-500">
-                {isSaving ? <span className="font-medium">{uiLang === "en" ? "Saving..." : "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‚Ä¶"}</span> : null}
-              </div>
-              </div>
-            </div>
-            {showInlineIntake
-              ? inlineItems.filter((r) => r.insertAfterUid === item.uid).map((row) => renderInlineDraftCard(row))
-              : null}
-            </Fragment>
-          );
-        })}
-        {showInlineIntake
-          ? inlineItems.filter((r) => r.insertAfterUid === INLINE_INSERT_AFTER_END).map((row) => renderInlineDraftCard(row))
-          : null}
-        {saveError ? (
-          isUnauthorizedApiError(saveError) ? (
-            <p className="text-xs font-medium leading-snug text-rose-700">
-              ‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡πÑ‡∏î‡πâ‡πÄ‡∏Ç‡πâ‡∏≤‡∏™‡∏π‡πà‡∏£‡∏∞‡∏ö‡∏ö ‚Äî ‡∏ï‡πâ‡∏≠‡∏á‡∏•‡πá‡∏≠‡∏Å‡∏≠‡∏¥‡∏ô‡∏Å‡πà‡∏≠‡∏ô‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å{" "}
-              <Link
-                href={`/login?next=${encodeURIComponent(pathname)}`}
-                className="font-semibold underline underline-offset-2"
-              >
-                ‡πÄ‡∏Ç‡πâ‡∏≤‡∏™‡∏π‡πà‡∏£‡∏∞‡∏ö‡∏ö
-              </Link>
-            </p>
-          ) : (
-            <p className="text-xs font-medium leading-snug text-rose-700">{uiLang === "en" ? "Save failed" : "‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à"}: {saveError}</p>
-          )
-        ) : null}
-        {translationNotice ? (
-          <p className="mt-1 text-xs font-medium leading-snug text-amber-900">{translationNotice}</p>
-        ) : null}
-        {toolbarLineFilterActive && itemsOutsideToolbarFilter.length > 0 ? (
-          <button
-            type="button"
-            onClick={() => setToolbarOthersExpanded((v) => !v)}
-            className={cn(
-              "mt-2 w-full rounded-2xl py-3 text-sm font-medium transition-colors touch-manipulation",
-              toolbarOthersExpanded ? "bg-slate-100 text-slate-700" : "bg-sky-100 text-sky-950 ring-1 ring-sky-300/60"
-            )}
-          >
-            {toolbarOthersExpanded
-              ? "‡πÅ‡∏™‡∏î‡∏á‡πÄ‡∏â‡∏û‡∏≤‡∏∞‡∏á‡∏≤‡∏ô‡∏ï‡∏≤‡∏°‡∏ï‡∏±‡∏ß‡∏Å‡∏£‡∏≠‡∏á"
-              : `‡∏î‡∏π‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î (+${itemsOutsideToolbarFilter.length})`}
-          </button>
-        ) : null}
-        {hiddenDoneItems.length > 0 && !showDoneRowsInMainList ? (
-          <button
-            type="button"
-            onClick={() => setShowAllItems((v) => !v)}
-            className={cn(
-              "mt-2 w-full rounded-2xl py-3 text-sm font-medium transition-colors touch-manipulation",
-              showAllItems ? "bg-slate-100 text-slate-700" : "bg-slate-200/70 text-slate-700"
-            )}
-          >
-            {showAllItems ? "‡∏ã‡πà‡∏≠‡∏ô‡∏á‡∏≤‡∏ô‡∏ó‡∏µ‡πà‡∏à‡∏ö‡πÅ‡∏•‡πâ‡∏ß" : `‡∏î‡∏π‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î +${hiddenDoneItems.length}`}
-          </button>
-        ) : null}
-      </div>
-
-      {showInlineIntake && inlineItems.length > 0 ? (
-        <div className="mt-2 space-y-1.5">
-          {inlineMessage ? (
-            isUnauthorizedApiError(inlineMessage) ? (
-              <p className="text-xs font-medium leading-snug text-rose-700">
-                ‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡πÑ‡∏î‡πâ‡πÄ‡∏Ç‡πâ‡∏≤‡∏™‡∏π‡πà‡∏£‡∏∞‡∏ö‡∏ö ‚Äî ‡∏ï‡πâ‡∏≠‡∏á‡∏•‡πá‡∏≠‡∏Å‡∏≠‡∏¥‡∏ô‡∏Å‡πà‡∏≠‡∏ô‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å{" "}
-                <Link
-                  href={`/login?next=${encodeURIComponent(pathname)}`}
-                  className="font-semibold underline underline-offset-2"
-                >
-                  ‡πÄ‡∏Ç‡πâ‡∏≤‡∏™‡∏π‡πà‡∏£‡∏∞‡∏ö‡∏ö
-                </Link>
-              </p>
-            ) : (
-              <p className="text-xs font-medium leading-snug text-rose-700">{inlineMessage}</p>
-            )
-          ) : null}
-          <button
-            type="button"
-            onClick={() => void addInlineItemsToOrder()}
-            disabled={inlineSaving || inlineRowSavingId !== null}
-            className={cn(
-              "h-10 w-full rounded-2xl text-sm font-semibold text-white touch-manipulation",
-              inlineSaving || inlineRowSavingId !== null ? "bg-slate-400" : "bg-emerald-600"
-            )}
-          >
-            {inlineSaving
-              ? uiLang === "en"
-                ? "Saving‚Ä¶"
-                : "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‚Ä¶"
-              : inlineRowSavingId !== null
-                ? uiLang === "en"
-                  ? "Saving row‚Ä¶"
-                  : "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‡πÅ‡∏ñ‡∏ß‚Ä¶"
-                : uiLang === "en"
-                  ? "Add items to this car"
-                  : "‡πÄ‡∏û‡∏¥‡πà‡∏°‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡πÄ‡∏Ç‡πâ‡∏≤‡∏£‡∏ñ‡∏Ñ‡∏±‡∏ô‡∏ô‡∏µ‡πâ"}
-          </button>
-        </div>
-      ) : null}
-
-      {showInlineIntake ? (
-        <div className="mt-2 rounded-2xl bg-slate-100 p-2">
-          <textarea
-            value={inlineText}
-            onChange={(e) => setInlineText(e.target.value)}
-            className="min-h-28 w-full rounded-2xl bg-white p-3 text-sm font-medium leading-relaxed text-slate-900 outline-none ring-1 ring-slate-200/80"
-            placeholder={
-              uiLang === "en"
-                ? [
-                    "Paste all LINE messages for this car here.",
-                    'Then tap "AI Help" ‚Äî the system strips vehicle headers/name tags and splits tasks automatically.',
-                    "It also flags suspected duplicates (confirm duplicates yourself).",
-                  ].join("\n")
-                : [
-                    "‡∏ß‡∏≤‡∏á‡∏Ç‡πâ‡∏≠‡∏Ñ‡∏ß‡∏≤‡∏°‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î‡∏à‡∏≤‡∏Å LINE ‡∏Ç‡∏≠‡∏á‡∏£‡∏ñ‡∏Ñ‡∏±‡∏ô‡∏ô‡∏µ‡πâ‡πÑ‡∏î‡πâ‡πÄ‡∏•‡∏¢",
-                    "‡πÅ‡∏•‡πâ‡∏ß‡∏Å‡∏î ‚ÄúAI ‡∏ä‡πà‡∏ß‡∏¢‚Äù ‚Äî ‡∏£‡∏∞‡∏ö‡∏ö‡∏à‡∏∞‡∏ï‡∏±‡∏î‡∏´‡∏±‡∏ß‡∏£‡∏ñ/‡πÅ‡∏ó‡πá‡∏Å‡∏ä‡∏∑‡πà‡∏≠, ‡πÅ‡∏¢‡∏Å‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏á‡∏≤‡∏ô‡πÉ‡∏´‡πâ‡∏≠‡∏±‡∏ï‡πÇ‡∏ô‡∏°‡∏±‡∏ï‡∏¥",
-                    "‡πÅ‡∏•‡∏∞‡πÄ‡∏ó‡∏µ‡∏¢‡∏ö‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏ó‡∏µ‡πà‡∏Ñ‡∏≤‡∏î‡∏ß‡πà‡∏≤‡∏ã‡πâ‡∏≥‡πÉ‡∏´‡πâ (‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏ó‡∏µ‡πà‡∏Ñ‡∏≤‡∏î‡∏ß‡πà‡∏≤‡∏ã‡πâ‡∏≥‡∏ï‡πâ‡∏≠‡∏á‡∏ï‡∏¥‡πä‡∏Å‡∏¢‡∏∑‡∏ô‡∏¢‡∏±‡∏ô‡πÄ‡∏û‡∏¥‡πà‡∏°‡πÄ‡∏≠‡∏á)",
-                  ].join("\n")
-            }
-          />
-          <div className="mt-2 flex flex-col gap-2 sm:flex-row">
-            <button
-              type="button"
-              onClick={() => void aiAssistInlineText()}
-              disabled={inlineAiBusy}
-              className={cn(
-                "h-11 flex-1 rounded-2xl text-sm font-semibold text-white touch-manipulation",
-                inlineAiBusy ? "bg-slate-400" : "bg-indigo-600"
-              )}
-              title={
-                uiLang === "en"
-                  ? "Use AI to strip headers/tags and extract task lines"
-                  : "‡πÉ‡∏´‡πâ AI ‡∏ä‡πà‡∏ß‡∏¢‡∏ï‡∏±‡∏î‡∏´‡∏±‡∏ß‡∏£‡∏ñ/‡πÅ‡∏ó‡πá‡∏Å ‡πÅ‡∏•‡∏∞‡∏î‡∏∂‡∏á‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏á‡∏≤‡∏ô"
-              }
-            >
-              {inlineAiBusy
-                ? uiLang === "en"
-                  ? "AI working‚Ä¶"
-                  : "AI ‡∏Å‡∏≥‡∏•‡∏±‡∏á‡∏ä‡πà‡∏ß‡∏¢‚Ä¶"
-                : uiLang === "en"
-                  ? "AI Help"
-                  : "AI ‡∏ä‡πà‡∏ß‡∏¢"}
-            </button>
-            <button type="button" onClick={splitInlineTextRaw} className="h-11 flex-1 rounded-2xl bg-slate-950 text-sm font-semibold text-white touch-manipulation">
-              {uiLang === "en" ? "Split into rows" : "‡πÅ‡∏¢‡∏Å‡πÄ‡∏õ‡πá‡∏ô‡πÅ‡∏ñ‡∏ß"}
-            </button>
-            <button
-              type="button"
-              onClick={() => pushEmptyInlineItem()}
-              className="h-11 flex-1 rounded-2xl border border-slate-300 bg-white text-sm font-semibold text-slate-800 touch-manipulation"
-            >
-              {uiLang === "en" ? "Add empty row" : "‡πÄ‡∏û‡∏¥‡πà‡∏°‡πÅ‡∏ñ‡∏ß‡∏ß‡πà‡∏≤‡∏á"}
-            </button>
-          </div>
-        </div>
-      ) : null}
-
-      {tamRoopSheetUid ? (
-        <div
-          ref={tamRoopOverlayRef}
-          tabIndex={-1}
-          role="presentation"
-          aria-label={
-            uiLang === "en"
-              ? "Item photos ‚Äî drag and drop on the backdrop or paste from clipboard"
-              : "‡∏£‡∏π‡∏õ‡∏ï‡∏≤‡∏°‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ ‚Äî ‡∏•‡∏≤‡∏Å‡∏ß‡∏≤‡∏á‡∏ó‡∏±‡πâ‡∏á‡∏û‡∏∑‡πâ‡∏ô‡∏´‡∏•‡∏±‡∏á‡∏´‡∏£‡∏∑‡∏≠‡∏ß‡∏≤‡∏á‡∏à‡∏≤‡∏Å‡∏Ñ‡∏•‡∏¥‡∏õ‡∏ö‡∏≠‡∏£‡πå‡∏î"
-          }
-          className="fixed inset-0 z-[72] flex items-end justify-center bg-black/45 p-2 sm:p-3 outline-none"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) closeTamRoopSheet();
-          }}
-          onDragOver={onTamRoopSheetDragOver}
-          onDrop={onTamRoopSheetDrop}
-        >
-          <div className="mb-[max(env(safe-area-inset-bottom),0px)] w-full max-w-md rounded-2xl bg-white p-4 shadow-xl ring-1 ring-slate-200/80">
-            <div className="mb-3 flex items-start justify-between gap-2">
-              <div className="min-w-0">
-                <b className="text-sm font-semibold text-slate-950">{uiLang === "en" ? "Item Photos" : "‡∏£‡∏π‡∏õ‡∏ï‡∏≤‡∏°‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£"}</b>
-                <p className="mt-1 line-clamp-2 text-xs font-medium text-slate-600">
-                  {formatTamRoopSheetItemSubtitle(tamRoopSheetItem ?? null, uiLang)}
-                </p>
-              </div>
-              <button
-                type="button"
-                onPointerDown={(e) => e.preventDefault()}
-                onClick={closeTamRoopSheet}
-                className="shrink-0 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-800 touch-manipulation"
-              >
-                {uiLang === "en" ? "Close" : "‡∏õ‡∏¥‡∏î"}
-              </button>
-            </div>
-            {!canAttachPhotos ? (
-              <p className="mb-3 text-xs font-medium text-amber-800">{uiLang === "en" ? "No car_row_id / car_id - cannot attach item photos" : "‡πÑ‡∏°‡πà‡∏û‡∏ö car_row_id / car_id ‚Äî ‡πÅ‡∏ô‡∏ö‡∏£‡∏π‡∏õ‡∏ï‡∏≤‡∏°‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡πÑ‡∏°‡πà‡πÑ‡∏î‡πâ"}</p>
-            ) : null}
-            {canAttachPhotos && !String(tamRoopSheetItem?.id ?? "").trim() ? (
-              <p className="mb-3 text-xs font-medium text-amber-800">
-                {uiLang === "en"
-                  ? "Save this item first to get system ID before attaching or loading item photos."
-                  : "‡∏ö‡∏±‡∏ô‡∏ó‡∏∂‡∏Å‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡πÉ‡∏´‡πâ‡πÑ‡∏î‡πâ‡∏£‡∏´‡∏±‡∏™‡∏à‡∏≤‡∏Å‡∏£‡∏∞‡∏ö‡∏ö‡∏Å‡πà‡∏≠‡∏ô ‡∏à‡∏∂‡∏á‡∏à‡∏∞‡πÅ‡∏ô‡∏ö‡∏´‡∏£‡∏∑‡∏≠‡πÇ‡∏´‡∏•‡∏î‡∏£‡∏π‡∏õ‡∏ï‡∏≤‡∏°‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡πÑ‡∏î‡πâ"}
-              </p>
-            ) : null}
-            <div className="mb-3">
-              <label
-                className={cn(
-                  "inline-flex min-h-10 w-full cursor-pointer items-center justify-center rounded-xl px-3 text-xs font-semibold touch-manipulation",
-                  photoBusy || !String(tamRoopSheetItem?.id ?? "").trim() || !canAttachPhotos
-                    ? "cursor-not-allowed bg-slate-200 text-slate-500"
-                    : "bg-sky-600 text-white"
-                )}
-              >
-                {uiLang === "en" ? "Add photo" : "‡πÄ‡∏û‡∏¥‡πà‡∏°‡∏£‡∏π‡∏õ"}
-                <input
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  disabled={photoBusy || !String(tamRoopSheetItem?.id ?? "").trim() || !canAttachPhotos}
-                  className="hidden"
-                  onChange={(e) => {
-                    void uploadTamRoopItemPhotos(e.currentTarget.files);
-                    e.currentTarget.value = "";
-                  }}
-                />
-              </label>
-            </div>
-            {String(tamRoopSheetItem?.id ?? "").trim() && canAttachPhotos ? (
-              tamRoopLoadingPhotos && !tamRoopPhotosFetchedForDbId ? (
-                <p className="mb-2 text-center text-xs font-medium text-slate-500">{uiLang === "en" ? "Loading photos..." : "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡πÇ‡∏´‡∏•‡∏î‡∏£‡∏π‡∏õ‚Ä¶"}</p>
-              ) : tamRoopPhotosFetchedForDbId ? (
-                tamRoopItemPhotos.length === 0 ? (
-                  <p className="text-center text-xs font-medium text-slate-500">{uiLang === "en" ? "No photos yet - use Add photo" : "‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏£‡∏π‡∏õ ‚Äî ‡∏Å‡∏î‡πÄ‡∏û‡∏¥‡πà‡∏°‡∏£‡∏π‡∏õ‡πÑ‡∏î‡πâ"}</p>
-                ) : (
-                  <div className="flex max-h-48 gap-2 overflow-y-auto overflow-x-auto pb-1">
-                    {tamRoopItemPhotos.map((p) => (
-                      <div key={p.id} className="relative shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const idx = tamRoopItemPhotos.findIndex((x) => x.id === p.id);
-                            if (idx >= 0) {
-                              setTamRoopViewerIndex(idx);
-                              setTamRoopViewerOpen(true);
-                            }
-                          }}
-                          className="block"
-                        >
-                          <Image
-                            src={p.url}
-                            alt={uiLang === "en" ? "Item photo thumbnail" : "‡∏£‡∏π‡∏õ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£"}
-                            width={112}
-                            height={80}
-                            sizes="112px"
-                            loading="lazy"
-                            className="h-20 w-28 rounded-lg object-cover ring-1 ring-slate-200/70"
-                          />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void deleteTamRoopItemPhoto(p.id)}
-                          disabled={photoBusy}
-                          className="absolute right-1 top-1 rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] font-semibold text-white disabled:opacity-50"
-                        >
-                          {uiLang === "en" ? "Delete" : "‡∏•‡∏ö"}
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )
-              ) : null
-            ) : null}
-          </div>
-        </div>
-      ) : null}
-
-      {tamRoopViewerOpen && tamRoopItemPhotos.length > 0 ? (
-        <div className="fixed inset-0 z-[86] bg-black/90 p-2">
-          <div className="mb-2 flex items-center justify-between">
-            <span className="text-xs font-semibold text-white">
-              {uiLang === "en" ? "Item photo" : "‡∏£‡∏π‡∏õ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£"} {tamRoopViewerIndex + 1}/{tamRoopItemPhotos.length}
-            </span>
-            <button
-              type="button"
-              onClick={() => setTamRoopViewerOpen(false)}
-              className="rounded-full bg-white/15 px-3 py-1 text-xs font-semibold text-white"
-            >
-              {uiLang === "en" ? "Close" : "‡∏õ‡∏¥‡∏î"}
-            </button>
-          </div>
-          <div
-            ref={tamRoopViewerStripRef}
-            className="flex h-[86vh] snap-x snap-mandatory overflow-x-auto touch-pan-x gap-2"
-            style={{ scrollBehavior: "smooth" }}
-            onScroll={(e) => {
-              const el = e.currentTarget;
-              const idx = Math.round(el.scrollLeft / Math.max(el.clientWidth, 1));
-              if (idx !== tamRoopViewerIndex && idx >= 0 && idx < tamRoopItemPhotos.length) setTamRoopViewerIndex(idx);
-            }}
-          >
-            {tamRoopItemPhotos.map((p) => (
-              <div key={`tam-view-${p.id}`} className="relative h-full w-full shrink-0 snap-center">
-                <Image
-                  src={p.url}
-                  alt={uiLang === "en" ? "Item photo full screen" : "‡∏£‡∏π‡∏õ‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡πÄ‡∏ï‡πá‡∏°‡∏à‡∏≠"}
-                  fill
-                  sizes="100vw"
-                  loading="lazy"
-                  className="object-contain"
-                />
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
-
-      {datePickerUid ? (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-3">
-          <div className="w-full max-w-md rounded-2xl bg-white p-4">
-            <div className="mb-3 flex items-center justify-between">
-              <b className="text-sm font-semibold text-slate-950">{uiLang === "en" ? "Select arrival date" : "‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏ß‡∏±‡∏ô‡∏ó‡∏µ‡πà‡∏Ç‡∏≠‡∏á‡∏°‡∏≤"}</b>
-              <button
-                type="button"
-                onClick={() => {
-                  const uid = datePickerUid;
-                  const el = uid ? (document.getElementById(`order-due-date-${uid}`) as HTMLInputElement | null) : null;
-                  const v = el?.value?.trim() ?? "";
-                  setDatePickerUid(null);
-                  if (uid && v) handleDueDatePicked(uid, v);
-                }}
-                className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-800"
-              >
-                ‡∏õ‡∏¥‡∏î
-              </button>
-            </div>
-            <input
-              id={`order-due-date-${datePickerUid}`}
-              key={datePickerUid}
-              type="date"
-              autoFocus
-              defaultValue={(() => {
-                const row = items.find((r) => r.uid === datePickerUid);
-                const d = row?.dueDate?.trim();
-                return d && /^\d{4}-\d{2}-\d{2}/.test(d) ? d.slice(0, 10) : "";
-              })()}
-              onInput={(e) => {
-                const v = (e.target as HTMLInputElement).value;
-                if (v) handleDueDatePicked(datePickerUid, v);
-              }}
-              onChange={(e) => {
-                const v = e.target.value;
-                if (v) handleDueDatePicked(datePickerUid, v);
-              }}
-              className="h-12 w-full rounded-2xl bg-slate-100 px-3 text-base font-medium text-slate-900 outline-none"
-            />
-          </div>
-        </div>
-      ) : null}
-    </article>
-  );
-});
-
-export function MobileOrderTrackingHome({
-  carsData = [],
-  orderItemsByCar = {},
-  orderUpdatesByCar = {},
-  orderItemFilterIndexByCar = {},
-  orderChipCacheExperimentEnabled = false,
-  orderChipCacheBadgeLabel = null,
-  experimentInitialHydratedCarKeys = [],
-  saleStatusSummaryAllCars = null,
-  summarySnapshotAllCars = null,
-  disableDemoFallback = false,
-  deferCarsHydration = false,
-  dataWarnings = [],
-  initialFocusedOrderId = null,
-  shareBaseUrl = null,
-  initialSaleStatusFilters = [],
-  initialUiLang = "th",
-}: MobileOrderTrackingHomeProps) {
-  const router = useRouter();
-  const pathname = usePathname() || "/m/orders";
-  const searchParams = useSearchParams();
-  const orderTrackingRootRef = useRef<HTMLDivElement | null>(null);
-  const [ptrPullPx, setPtrPullPx] = useState(0);
-  const [ptrRefreshing, setPtrRefreshing] = useState(false);
-  const ptrArmRef = useRef(false);
-  const ptrStartYRef = useRef(0);
-  const ptrStartXRef = useRef(0);
-  const ptrPullRef = useRef(0);
-  const ptrRefreshingRef = useRef(false);
-  const staffRosterPersistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const staffRosterRef = useRef<string[]>([]);
-  const saleAssigneesRef = useRef<Record<string, string>>({});
-  const liveItemsToolbarSigRef = useRef<Record<string, string>>({});
-  const [liveOrderItemsById, setLiveOrderItemsById] = useState<Record<string, OrderItem[]>>({});
-  const hydratedOnceRef = useRef(false);
-  const experimentInflightKeysRef = useRef<Set<string>>(new Set());
-  const lastStableVisiblePagedRef = useRef<Order[]>([]);
-  const experimentScrollBufferRafRef = useRef<number | null>(null);
-  const [experimentOrderItemsByCar, setExperimentOrderItemsByCar] = useState(orderItemsByCar);
-  const [experimentOrderUpdatesByCar, setExperimentOrderUpdatesByCar] = useState(orderUpdatesByCar);
-  const [experimentHydratedCarKeys, setExperimentHydratedCarKeys] = useState<Set<string>>(
-    () => new Set(experimentInitialHydratedCarKeys)
-  );
-  const [experimentRequestedCount, setExperimentRequestedCount] = useState(ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT);
-  const [experimentLoadingDetails, setExperimentLoadingDetails] = useState(false);
-  const [experimentDetailError, setExperimentDetailError] = useState<string | null>(null);
-  const [lineInboxFocusOrderId, setLineInboxFocusOrderId] = useState<string | null>(null);
-  const deepLinkParams = useMemo(() => {
-    const params = new URLSearchParams(searchParams?.toString() ?? "");
-    return {
-      carRowId: String(
-        params.get("focusCarRowId") ??
-          params.get("aiLineCar") ??
-          params.get("carRowId") ??
-          params.get("focusCar") ??
-          params.get("car_row_id") ??
-          ""
-      ).trim(),
-      search: String(params.get("search") ?? params.get("plate") ?? "").trim(),
-    };
-  }, [searchParams]);
-
-  useEffect(() => {
-    if (orderChipCacheExperimentEnabled) return;
-    if (!deferCarsHydration) return;
-    if (hydratedOnceRef.current) return;
-    const mode = String(searchParams?.get("load") ?? "").trim().toLowerCase();
-    if (mode === "full") {
-      hydratedOnceRef.current = true;
-      return;
-    }
-    hydratedOnceRef.current = true;
-    const p = new URLSearchParams(searchParams?.toString() ?? "");
-    p.set("load", "full");
-    const nextUrl = `${pathname}?${p.toString()}`;
-    router.replace(nextUrl, { scroll: false });
-    const fallbackTimer = window.setTimeout(() => {
-      if (String(new URLSearchParams(window.location.search).get("load") ?? "").trim().toLowerCase() !== "full") {
-        window.location.replace(nextUrl);
-      }
-    }, 1200);
-    return () => {
-      window.clearTimeout(fallbackTimer);
-    };
-  }, [deferCarsHydration, orderChipCacheExperimentEnabled, pathname, router, searchParams]);
-
-  useEffect(() => {
-    if (!orderChipCacheExperimentEnabled) return;
-    setExperimentOrderItemsByCar(orderItemsByCar);
-    setExperimentOrderUpdatesByCar(orderUpdatesByCar);
-    setExperimentHydratedCarKeys(new Set(experimentInitialHydratedCarKeys));
-    experimentInflightKeysRef.current.clear();
-    setExperimentRequestedCount(ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT);
-    setExperimentDetailError(null);
-  }, [orderChipCacheExperimentEnabled, orderItemsByCar, orderUpdatesByCar, experimentInitialHydratedCarKeys]);
-  const suppressDataWarningsDuringDeferredHydration =
-    deferCarsHydration && String(searchParams?.get("load") ?? "").trim().toLowerCase() !== "full";
-  const isDeferredHydrationLoading =
-    deferCarsHydration && String(searchParams?.get("load") ?? "").trim().toLowerCase() !== "full";
-  const [deferredHydrationPercent, setDeferredHydrationPercent] = useState(8);
-
-  useEffect(() => {
-    if (!isDeferredHydrationLoading) {
-      setDeferredHydrationPercent(100);
-      return;
-    }
-    setDeferredHydrationPercent(8);
-    const timer = window.setInterval(() => {
-      setDeferredHydrationPercent((prev) => {
-        if (prev >= 95) return prev;
-        if (prev < 70) return prev + 6;
-        if (prev < 85) return prev + 3;
-        return prev + 1;
-      });
-    }, 140);
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, [isDeferredHydrationLoading]);
-
-  const handleOrderLiveItemsChange = React.useCallback((orderId: string, next: OrderItem[]) => {
-    const sig = orderItemsLiveToolbarSignature(next);
-    if (liveItemsToolbarSigRef.current[orderId] === sig) return;
-    liveItemsToolbarSigRef.current[orderId] = sig;
-    setLiveOrderItemsById((prev) => ({ ...prev, [orderId]: next }));
-  }, []);
-
-  const effectiveOrderItemsByCar = orderChipCacheExperimentEnabled ? experimentOrderItemsByCar : orderItemsByCar;
-  const effectiveOrderUpdatesByCar = orderChipCacheExperimentEnabled ? experimentOrderUpdatesByCar : orderUpdatesByCar;
-
-  useEffect(() => {
-    liveItemsToolbarSigRef.current = {};
-    setLiveOrderItemsById({});
-  }, [carsData, effectiveOrderItemsByCar]);
-
-  const usingDemoFallback = !disableDemoFallback && carsData.length === 0;
-  const mappedOrders = useMemo(() => {
-    const base =
-      !disableDemoFallback && carsData.length === 0
-        ? ORDERS
-        : carsData.map((car, index) => toOrderFromCar(car, index, effectiveOrderItemsByCar, effectiveOrderUpdatesByCar));
-    return base.map((order) => {
-      const live = liveOrderItemsById[order.id];
-      return live ? { ...order, items: live } : order;
-    });
-  }, [carsData, effectiveOrderItemsByCar, effectiveOrderUpdatesByCar, liveOrderItemsById, disableDemoFallback]);
-  const experimentFilterItemsByOrderId = useMemo(() => {
-    const map = new Map<string, Pick<OrderItem, "status" | "good" | "dueDate" | "assignee">[]>();
-    if (!orderChipCacheExperimentEnabled) return map;
-    for (const order of mappedOrders) {
-      map.set(order.id, filterIndexItemsForOrder(order, orderItemFilterIndexByCar));
-    }
-    return map;
-  }, [mappedOrders, orderChipCacheExperimentEnabled, orderItemFilterIndexByCar]);
-  const filterItemsForOrder = React.useCallback(
-    (order: Order): Pick<OrderItem, "status" | "good" | "dueDate" | "assignee">[] =>
-      orderChipCacheExperimentEnabled ? experimentFilterItemsByOrderId.get(order.id) ?? [] : order.items,
-    [experimentFilterItemsByOrderId, orderChipCacheExperimentEnabled]
-  );
-  const [saleFilters, setSaleFilters] = useState<Set<string>>(() => new Set());
-  const [saleStatusFilters, setSaleStatusFilters] = useState<Set<SaleStatusFilterValue>>(
-    () => new Set(initialSaleStatusFilters)
-  );
-  const [vehicleSearch, setVehicleSearch] = useState(() => sanitizeVehicleSearchInput(deepLinkParams.search));
-  useEffect(() => {
-    const querySearch = sanitizeVehicleSearchInput(deepLinkParams.search);
-    if (!querySearch) return;
-    setVehicleSearch((prev) => (prev === querySearch ? prev : querySearch));
-  }, [deepLinkParams.search]);
-  const vehicleSearchForFiltering = useDebouncedValue(vehicleSearch, 120);
-  const [translateAllBusy, setTranslateAllBusy] = useState(false);
-  const [translateAllMessage, setTranslateAllMessage] = useState("");
-  /** ‡∏´‡πâ‡∏≤‡∏°‡∏≠‡πà‡∏≤‡∏ô localStorage ‡πÉ‡∏ô initializer ‚Äî SSR ‡∏à‡∏∞‡πÑ‡∏î‡πâ‡∏†‡∏≤‡∏©‡∏≤‡πÄ‡∏î‡∏µ‡∏¢‡∏ß‡∏Å‡∏±‡∏ö‡πÑ‡∏Ñ‡∏•‡πÄ‡∏≠‡∏ô‡∏ï‡πå‡∏£‡∏≠‡∏ö‡πÅ‡∏£‡∏Å (‡∏Å‡∏±‡∏ô hydration mismatch) */
-  const [uiLang, setUiLang] = useState<UiLang>(initialUiLang);
-
-  useEffect(() => {
-    try {
-      const saved = String(localStorage.getItem(ORDER_TRACKING_UI_LANG_STORAGE_KEY) ?? "").toLowerCase();
-      if (saved === "en" || saved === "th") setUiLang(saved as UiLang);
-    } catch {
-      /* ignore */
-    }
-  }, []);
-  const [itemStatusFilters, setItemStatusFilters] = useState<
-    Set<ItemStatusFilterValue | typeof ITEM_STATUS_DUE_TODAY>
-  >(() => new Set());
-  const [staffFilters, setStaffFilters] = useState<Set<string>>(() => new Set());
-  const [staffRoster, setStaffRoster] = useState<string[]>(() => []);
-  const [saleAssignees, setSaleAssignees] = useState<Record<string, string>>(() =>
-    typeof window !== "undefined" ? readSaleAssigneesFromStorage() : {}
-  );
-  const [staffNameInput, setStaffNameInput] = useState("");
-  const [showStaffManager, setShowStaffManager] = useState(false);
-  /** ‡∏•‡∏π‡∏Å‡∏®‡∏£‡∏ó‡∏µ‡πà‡∏ä‡∏¥‡∏õ„Äå‡∏£‡∏≠‡∏™‡πà‡∏á„Äç‚Äî ‡∏Ç‡∏¢‡∏≤‡∏¢‡πÅ‡∏ñ‡∏ß‡∏£‡∏≠‡∏ö‡∏™‡πà‡∏á (booked shipping) ‡∏•‡∏á‡∏°‡∏≤ */
-  const [bookedShippingPanelExpanded, setBookedShippingPanelExpanded] = useState(false);
-  const [bookedBuyerPanelExpanded, setBookedBuyerPanelExpanded] = useState(false);
-  /** ‡∏•‡∏π‡∏Å‡∏®‡∏£‡∏ó‡∏µ‡πà‡∏ä‡∏¥‡∏õ„Äå‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß„Äç‚Äî ‡∏Ç‡∏¢‡∏≤‡∏¢‡∏Å‡∏£‡∏≠‡∏á‡∏ï‡∏≤‡∏° shipped / model year */
-  const [shippedSoldExtrasPanelExpanded, setShippedSoldExtrasPanelExpanded] = useState(false);
-  const [vacantSaleModelYearPanelExpanded, setVacantSaleModelYearPanelExpanded] = useState(false);
-  const [itemStatusRoster, setItemStatusRoster] = useState<ItemStatusValue[]>(() => []);
-  const [showStatusManager, setShowStatusManager] = useState(false);
-  const [itemStatusLabels, setItemStatusLabels] = useState<ItemStatusLabelMap>({});
-  const [itemStatusPoliciesNormalized, setItemStatusPoliciesNormalized] = useState<ItemStatusPoliciesNormalized>(() =>
-    defaultItemStatusPoliciesNormalized()
-  );
-  const [visibleLimit, setVisibleLimit] = useState(ORDERS_INITIAL_PAGE_SIZE);
-  const loadMoreRef = useRef<HTMLDivElement | null>(null);
-  const pendingScrollYRef = useRef<number | null>(null);
-  /** ‡∏ã‡πà‡∏≠‡∏ô‡∏ä‡∏¥‡∏õ‡∏ó‡∏µ‡πà‡∏ô‡∏±‡∏ö‡πÄ‡∏õ‡πá‡∏ô 0 ‡πÄ‡∏â‡∏û‡∏≤‡∏∞‡∏ï‡∏≠‡∏ô‡πÇ‡∏´‡∏•‡∏î‡∏Ñ‡∏£‡∏±‡πâ‡∏á‡πÅ‡∏£‡∏Å ‚Äî ‡∏´‡∏•‡∏±‡∏á‡∏•‡πá‡∏≠‡∏Å‡πÅ‡∏•‡πâ‡∏ß‡∏ä‡∏¥‡∏õ‡πÑ‡∏°‡πà‡∏´‡∏≤‡∏¢‡πÄ‡∏ß‡∏•‡∏≤‡πÄ‡∏õ‡∏•‡∏µ‡πà‡∏¢‡∏ô‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡πÉ‡∏ô‡∏Å‡∏≤‡∏£‡πå‡∏î */
-  const staffChipsStickyAfterPrimeRef = useRef<Set<string> | null>(null);
-  const itemStatusChipsStickyAfterPrimeRef = useRef<Set<ItemStatusValue> | null>(null);
-  const [filterChipLayoutPrimed, setFilterChipLayoutPrimed] = useState(false);
-  /** true = ‡πÅ‡∏ï‡∏∞‡∏ä‡∏¥‡∏õ‡∏ã‡πâ‡∏≥‡πÄ‡∏û‡∏∑‡πà‡∏≠‡∏™‡∏∞‡∏™‡∏°‡∏´‡∏•‡∏≤‡∏¢‡∏ä‡∏¥‡∏õ‡∏ï‡πà‡∏≠‡πÅ‡∏ñ‡∏ß ¬∑ false = ‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡πÑ‡∏î‡πâ‡∏ó‡∏µ‡∏•‡∏∞‡∏´‡∏ô‡∏∂‡πà‡∏á‡∏ä‡∏¥‡∏õ‡∏ï‡πà‡∏≠‡πÅ‡∏ñ‡∏ß (‡πÅ‡∏ï‡∏∞‡∏ã‡πâ‡∏≥‡∏¢‡∏Å‡πÄ‡∏•‡∏¥‡∏Å) */
-  const [filterChipMultiSelect, setFilterChipMultiSelect] = useState(true);
-  const prevFilterChipMultiSelectRef = useRef(true);
-  const deferredSaleFilters = useDeferredValue(saleFilters);
-  const deferredSaleStatusFilters = useDeferredValue(saleStatusFilters);
-  const deferredStaffFilters = useDeferredValue(staffFilters);
-  const deferredItemStatusFilters = useDeferredValue(itemStatusFilters);
-  const deferredVehicleSearchForFiltering = useDeferredValue(vehicleSearchForFiltering);
-  const filteringSaleFilters = orderChipCacheExperimentEnabled ? deferredSaleFilters : saleFilters;
-  const filteringSaleStatusFilters = orderChipCacheExperimentEnabled ? deferredSaleStatusFilters : saleStatusFilters;
-  const filteringStaffFilters = orderChipCacheExperimentEnabled ? deferredStaffFilters : staffFilters;
-  const filteringItemStatusFilters = orderChipCacheExperimentEnabled ? deferredItemStatusFilters : itemStatusFilters;
-  const filteringVehicleSearchForFiltering = orderChipCacheExperimentEnabled
-    ? deferredVehicleSearchForFiltering
-    : vehicleSearchForFiltering;
-  const filterRenderPending =
-    orderChipCacheExperimentEnabled &&
-    (filteringSaleFilters !== saleFilters ||
-      filteringSaleStatusFilters !== saleStatusFilters ||
-      filteringStaffFilters !== staffFilters ||
-      filteringItemStatusFilters !== itemStatusFilters ||
-      filteringVehicleSearchForFiltering !== vehicleSearchForFiltering);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    try {
-      localStorage.setItem(ORDER_TRACKING_UI_LANG_STORAGE_KEY, uiLang);
-    } catch {
-      /* ignore */
-    }
-    document.documentElement.lang = uiLang;
-    document.body.dataset.uiLang = uiLang;
-    void fetch("/api/ui-locale", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ locale: uiLang }),
-      keepalive: true,
-    }).catch(() => {
-      /* ignore network error */
-    });
-  }, [uiLang]);
-
-  const translateAllLegacyItems = React.useCallback(async () => {
-    if (translateAllBusy) return;
-    setTranslateAllBusy(true);
-    setTranslateAllMessage("");
-    try {
-      const res = await fetch(ORDER_ITEMS_TRANSLATE_ALL_API_PATH, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ limit: 1200, force: true }),
-      });
-      const payload = (await res.json()) as {
-        error?: string;
-        scanned?: number;
-        updated?: number;
-        remainingHint?: boolean;
-      };
-      if (!res.ok) throw new Error(payload.error ?? res.statusText);
-      const scanned = Number(payload.scanned ?? 0);
-      const updated = Number(payload.updated ?? 0);
-      const tail = payload.remainingHint
-        ? (uiLang === "en" ? " (run again for more)" : " (‡∏Å‡∏î‡∏ã‡πâ‡∏≥‡πÄ‡∏û‡∏∑‡πà‡∏≠‡πÅ‡∏õ‡∏•‡∏ï‡πà‡∏≠)")
-        : "";
-      setTranslateAllMessage(
-        uiLang === "en"
-          ? `Re-translated ${updated}/${scanned} rows (names + Thai notes)${tail}`
-          : `‡πÅ‡∏õ‡∏•‡πÉ‡∏´‡∏°‡πà‡πÅ‡∏•‡πâ‡∏ß ${updated}/${scanned} ‡πÅ‡∏ñ‡∏ß (‡∏ä‡∏∑‡πà‡∏≠ + ‡∏´‡∏°‡∏≤‡∏¢‡πÄ‡∏´‡∏ï‡∏∏‡πÑ‡∏ó‡∏¢)${tail}`
-      );
-      router.refresh();
-    } catch (e) {
-      setTranslateAllMessage(
-        `${uiLang === "en" ? "Batch translate failed" : "‡πÅ‡∏õ‡∏•‡πÅ‡∏ö‡∏ö‡∏Å‡∏•‡∏∏‡πà‡∏°‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à"}: ${e instanceof Error ? e.message : String(e)}`
-      );
-    } finally {
-      setTranslateAllBusy(false);
-    }
-  }, [router, translateAllBusy, uiLang]);
-
-  const saleCounts = useMemo(() => {
-    const useSummaryCacheBase =
-      Boolean(summarySnapshotAllCars) &&
-      filteringSaleStatusFilters.size === 0 &&
-      filteringStaffFilters.size === 0 &&
-      filteringItemStatusFilters.size === 0 &&
-      filteringVehicleSearchForFiltering.trim() === "";
-    if (useSummaryCacheBase && summarySnapshotAllCars) {
-      const acc: Record<string, number> = {};
-      let knownSaleTotal = 0;
-      for (const s of ALL_SALES) {
-        if (s === "ALL") acc[s] = Number(summarySnapshotAllCars.totalOrders ?? 0);
-        else {
-          acc[s] = Number(summarySnapshotAllCars.saleCodeCounts?.[s] ?? 0);
-          knownSaleTotal += acc[s] ?? 0;
-        }
-      }
-      acc[SALE_FILTER_UNASSIGNED] = Math.max(0, Number(summarySnapshotAllCars.totalOrders ?? 0) - knownSaleTotal);
-      return acc;
-    }
-    const dtChip = itemStatusPoliciesNormalized.dueToday;
-    const baseOrders = mappedOrders.filter((order) => {
-      const saleStatusOk = orderMatchesSaleStatusFilters(order, filteringSaleStatusFilters);
-      const vehicleOk = matchesVehicleSearch(order, filteringVehicleSearchForFiltering);
-      const toolbarOk = orderMatchesToolbarFilters(
-        order,
-        filteringStaffFilters,
-        filteringItemStatusFilters,
-        dtChip,
-        orderChipCacheExperimentEnabled ? filterItemsForOrder(order) : order.items
-      );
-      return saleStatusOk && vehicleOk && toolbarOk;
-    });
-    const acc: Record<string, number> = { ALL: baseOrders.length, [SALE_FILTER_UNASSIGNED]: 0 };
-    for (const s of ALL_SALES) {
-      if (s !== "ALL") acc[s] = 0;
-    }
-    for (const order of baseOrders) {
-      const sale = String(order.sale).toUpperCase();
-      if (sale !== "ALL" && KNOWN_SALE_CODES.has(sale) && sale in acc) acc[sale] += 1;
-      else acc[SALE_FILTER_UNASSIGNED] += 1;
-    }
-    return acc;
-  }, [
-    mappedOrders,
-    summarySnapshotAllCars,
-    filteringSaleStatusFilters,
-    filteringStaffFilters,
-    filteringItemStatusFilters,
-    filteringVehicleSearchForFiltering,
-    itemStatusPoliciesNormalized,
-    orderChipCacheExperimentEnabled,
-    filterItemsForOrder,
-  ]);
-  /** ‡∏ä‡∏¥‡∏õ‡πÄ‡∏ã‡∏•‡∏•‡πå: ALL ‡∏≠‡∏¢‡∏π‡πà‡πÅ‡∏£‡∏Å‡πÄ‡∏™‡∏°‡∏≠ ‡∏ó‡∏µ‡πà‡πÄ‡∏´‡∏•‡∏∑‡∏≠‡πÄ‡∏£‡∏µ‡∏¢‡∏á‡∏ï‡∏≤‡∏°‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏à‡∏≤‡∏Å‡∏°‡∏≤‡∏Å‡πÑ‡∏õ‡∏ô‡πâ‡∏≠‡∏¢ */
-  const salesChipsOrdered = useMemo(() => {
-    const rest = ALL_SALES.filter((sale) => sale !== "ALL" && (saleCounts[sale] ?? 0) > 0);
-    rest.sort((a, b) => {
-      const diff = (saleCounts[b] ?? 0) - (saleCounts[a] ?? 0);
-      return diff !== 0 ? diff : String(a).localeCompare(String(b), "en", { sensitivity: "base" });
-    });
-    return (saleCounts[SALE_FILTER_UNASSIGNED] ?? 0) > 0
-      ? ["ALL", ...rest, SALE_FILTER_UNASSIGNED]
-      : ["ALL", ...rest];
-  }, [saleCounts]);
-  const saleChipLabel = React.useCallback(
-    (sale: string) => (sale === SALE_FILTER_UNASSIGNED ? (uiLang === "en" ? "No sale" : "‡πÑ‡∏°‡πà‡∏£‡∏∞‡∏ö‡∏∏‡πÄ‡∏ã‡∏•‡∏•‡πå") : sale),
-    [uiLang]
-  );
-  const saleChipModels = useMemo(
-    () =>
-      salesChipsOrdered.map((sale) => ({
-        sale,
-        label: saleChipLabel(sale),
-        count: saleCounts[sale] ?? 0,
-        active: sale === "ALL" ? saleFilters.size === 0 : saleFilters.has(sale),
-      })),
-    [saleChipLabel, saleCounts, saleFilters, salesChipsOrdered]
-  );
-
-  /** ‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏ï‡πà‡∏≠ assignee ‚Äî ‡∏Ç‡∏≠‡∏ö‡πÄ‡∏Ç‡∏ï‡πÄ‡∏´‡∏°‡∏∑‡∏≠‡∏ô‡∏ä‡∏¥‡∏õ‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ (‡πÑ‡∏°‡πà‡∏Å‡∏£‡∏≠‡∏á‡∏ï‡∏≤‡∏°‡∏û‡∏ô‡∏±‡∏Å‡∏á‡∏≤‡∏ô) */
-  const staffAssigneeItemCounts = useMemo(() => {
-    const useSummaryCacheBase =
-      Boolean(summarySnapshotAllCars) &&
-      filteringSaleFilters.size === 0 &&
-      filteringSaleStatusFilters.size === 0 &&
-      filteringStaffFilters.size === 0 &&
-      filteringItemStatusFilters.size === 0 &&
-      filteringVehicleSearchForFiltering.trim() === "";
-    if (useSummaryCacheBase && summarySnapshotAllCars) {
-      const from = summarySnapshotAllCars.staffItemCounts ?? {};
-      const unassigned = Number(from["‡πÑ‡∏°‡πà‡∏£‡∏∞‡∏ö‡∏∏‡∏ä‡∏∑‡πà‡∏≠"] ?? 0);
-      const byAssignee: Record<string, number> = {};
-      for (const [k, v] of Object.entries(from)) {
-        if (k === "‡πÑ‡∏°‡πà‡∏£‡∏∞‡∏ö‡∏∏‡∏ä‡∏∑‡πà‡∏≠") continue;
-        byAssignee[k] = Number(v ?? 0);
-      }
-      return {
-        grandTotal: Number(summarySnapshotAllCars.totalItems ?? 0),
-        byAssignee,
-        unassigned,
-      };
-    }
-    if (orderChipCacheExperimentEnabled) {
-      const byAssignee: Record<string, number> = {};
-      let grandTotal = 0;
-      let unassigned = 0;
-      const dtChip = itemStatusPoliciesNormalized.dueToday;
-      const baseFiltered = mappedOrders.filter((order) => {
-        const saleOk = orderMatchesSaleFilters(order, filteringSaleFilters);
-        const saleStatusOk = orderMatchesSaleStatusFilters(order, filteringSaleStatusFilters);
-        const vehicleOk = matchesVehicleSearch(order, filteringVehicleSearchForFiltering);
-        return saleOk && saleStatusOk && vehicleOk;
-      });
-      for (const order of baseFiltered) {
-        for (const item of filterItemsForOrder(order)) {
-          if (!itemMatchesToolbarStatusFilters(item, filteringItemStatusFilters, dtChip)) continue;
-          grandTotal += 1;
-          const a = String(item.assignee ?? "").trim();
-          if (a) byAssignee[a] = (byAssignee[a] ?? 0) + 1;
-          else unassigned += 1;
-        }
-      }
-      return { grandTotal, byAssignee, unassigned };
-    }
-    const baseFiltered = mappedOrders.filter((order) => {
-      const saleOk = orderMatchesSaleFilters(order, filteringSaleFilters);
-      const saleStatusOk = orderMatchesSaleStatusFilters(order, filteringSaleStatusFilters);
-      const vehicleOk = matchesVehicleSearch(order, filteringVehicleSearchForFiltering);
-      return saleOk && saleStatusOk && vehicleOk;
-    });
-    const byAssignee: Record<string, number> = {};
-    let grandTotal = 0;
-    let unassigned = 0;
-    for (const order of baseFiltered) {
-      for (const item of order.items) {
-        grandTotal += 1;
-        const a = String(item.assignee ?? "").trim();
-        if (a) byAssignee[a] = (byAssignee[a] ?? 0) + 1;
-        else unassigned += 1;
-      }
-    }
-    return { grandTotal, byAssignee, unassigned };
-  }, [
-    mappedOrders,
-    filteringSaleFilters,
-    filteringSaleStatusFilters,
-    filteringVehicleSearchForFiltering,
-    filteringStaffFilters,
-    filteringItemStatusFilters,
-    summarySnapshotAllCars,
-    orderChipCacheExperimentEnabled,
-    itemStatusPoliciesNormalized,
-    filterItemsForOrder,
-  ]);
-
-  /** ‡∏£‡∏≠‡∏ö‡∏™‡πà‡∏á (‡∏Ñ‡πà‡∏≤ booked_shipping) ‡∏ï‡πà‡∏≠‡∏Å‡∏•‡∏∏‡πà‡∏° ‚Äî ‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏Ç‡∏≤‡∏¢ ‡∏£‡∏≠‡∏™‡πà‡∏á ‡πÄ‡∏ó‡πà‡∏≤‡∏ô‡∏±‡πâ‡∏ô */
-  const bookedShippingRounds = useMemo(() => {
-    const baseFiltered = mappedOrders.filter((order) => {
-      const saleOk = orderMatchesSaleFilters(order, filteringSaleFilters);
-      const saleStatusOk = orderMatchesSaleStatusFilters(order, filteringSaleStatusFilters);
-      const vehicleOk = matchesVehicleSearch(order, filteringVehicleSearchForFiltering);
-      return saleOk && saleStatusOk && vehicleOk;
-    });
-    const byKey = new Map<string, { label: string; count: number }>();
-    for (const order of baseFiltered) {
-      if (order.saleStatus !== "‡∏£‡∏≠‡∏™‡πà‡∏á") continue;
-      const raw = String(order.ship ?? "").trim();
-      if (!raw) continue;
-      const key = shipGroupKey(raw);
-      const prev = byKey.get(key);
-      if (!prev) byKey.set(key, { label: raw, count: 1 });
-      else prev.count += 1;
-    }
-    const rounds: { key: string; label: string; token: string; count: number }[] = [];
-    byKey.forEach((v, key) => {
-      rounds.push({ key, label: v.label, token: bookedShipFilterTokenFromKey(key), count: v.count });
-    });
-    rounds.sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, "th", { sensitivity: "base" }));
-    return rounds;
-  }, [mappedOrders, filteringSaleFilters, filteringSaleStatusFilters, filteringVehicleSearchForFiltering]);
-
-  /** ‡∏ä‡∏∑‡πà‡∏≠‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤ (buyer) ‡∏ï‡πà‡∏≠‡∏Å‡∏•‡∏∏‡πà‡∏° ‚Äî ‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏Ç‡∏≤‡∏¢ ‡∏à‡∏≠‡∏á ‡πÄ‡∏ó‡πà‡∏≤‡∏ô‡∏±‡πâ‡∏ô */
-  const bookedBuyerRounds = useMemo(() => {
-    const baseFiltered = mappedOrders.filter((order) => {
-      const saleOk = orderMatchesSaleFilters(order, filteringSaleFilters);
-      const saleStatusOk = orderMatchesSaleStatusFilters(order, filteringSaleStatusFilters);
-      const vehicleOk = matchesVehicleSearch(order, filteringVehicleSearchForFiltering);
-      return saleOk && saleStatusOk && vehicleOk;
-    });
-    const byKey = new Map<string, { label: string; count: number }>();
-    for (const order of baseFiltered) {
-      if (order.saleStatus !== "‡∏à‡∏≠‡∏á") continue;
-      const raw = String(order.buyer ?? "").trim();
-      if (!raw || raw === "-") continue;
-      const key = buyerGroupKey(raw);
-      const prev = byKey.get(key);
-      if (!prev) byKey.set(key, { label: raw, count: 1 });
-      else prev.count += 1;
-    }
-    const rounds: { key: string; label: string; token: string; count: number }[] = [];
-    byKey.forEach((v, key) => {
-      rounds.push({ key, label: v.label, token: bookedBuyerFilterTokenFromKey(key), count: v.count });
-    });
-    rounds.sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, "th", { sensitivity: "base" }));
-    return rounds;
-  }, [mappedOrders, filteringSaleFilters, filteringSaleStatusFilters, filteringVehicleSearchForFiltering]);
-
-  /** ‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß: ‡∏ô‡∏±‡∏ö‡∏ï‡∏≤‡∏° shipped (cars.shipped) ‡πÅ‡∏•‡∏∞ model year ‚Äî ‡πÑ‡∏°‡πà‡∏Å‡∏£‡∏≠‡∏á‡∏ï‡∏≤‡∏° staff */
-  const shippedSoldToolbarStats = useMemo(() => {
-    const baseFiltered = mappedOrders.filter((order) => {
-      const saleOk = orderMatchesSaleFilters(order, filteringSaleFilters);
-      const saleStatusOk = orderMatchesSaleStatusFilters(order, filteringSaleStatusFilters);
-      const vehicleOk = matchesVehicleSearch(order, filteringVehicleSearchForFiltering);
-      return saleOk && saleStatusOk && vehicleOk;
-    });
-    let soldCount = 0;
-    let shippedEmpty = 0;
-    const shippedMap = new Map<string, { label: string; count: number }>();
-    let modelYearEmpty = 0;
-    const modelYearMap = new Map<string, { label: string; count: number }>();
-    for (const order of baseFiltered) {
-      if (order.saleStatus !== "‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß") continue;
-      soldCount += 1;
-      const sh = String(order.shipped ?? "").trim();
-      if (!sh) shippedEmpty += 1;
-      else {
-        const k = soldShippedLineGroupKey(sh);
-        const prev = shippedMap.get(k);
-        if (!prev) shippedMap.set(k, { label: sh, count: 1 });
-        else prev.count += 1;
-      }
-      const my = String(order.modelYear ?? "").trim();
-      if (!my) modelYearEmpty += 1;
-      else {
-        const k = soldModelYearGroupKey(my);
-        const prev = modelYearMap.get(k);
-        if (!prev) modelYearMap.set(k, { label: my, count: 1 });
-        else prev.count += 1;
-      }
-    }
-    const shippedRounds: { key: string; label: string; token: string; count: number }[] = [];
-    shippedMap.forEach((v, key) => {
-      shippedRounds.push({ key, label: v.label, token: soldShippedLineTokenFromKey(key), count: v.count });
-    });
-    shippedRounds.sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, "th", { sensitivity: "base" }));
-    const modelYearRounds: { key: string; label: string; token: string; count: number }[] = [];
-    modelYearMap.forEach((v, key) => {
-      modelYearRounds.push({ key, label: v.label, token: soldModelYearTokenFromKey(key), count: v.count });
-    });
-    modelYearRounds.sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, "th", { sensitivity: "base" }));
-    return { soldCount, shippedEmpty, shippedRounds, modelYearEmpty, modelYearRounds };
-  }, [mappedOrders, filteringSaleFilters, filteringSaleStatusFilters, filteringVehicleSearchForFiltering]);
-
-  /** ‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏Ç‡∏≤‡∏¢ ‡∏ß‡πà‡∏≤‡∏á: ‡∏ô‡∏±‡∏ö‡∏ï‡∏≤‡∏° model year */
-  const vacantSaleToolbarStats = useMemo(() => {
-    const baseFiltered = mappedOrders.filter((order) => {
-      const saleOk = orderMatchesSaleFilters(order, filteringSaleFilters);
-      const saleStatusOk = orderMatchesSaleStatusFilters(order, filteringSaleStatusFilters);
-      const vehicleOk = matchesVehicleSearch(order, filteringVehicleSearchForFiltering);
-      return saleOk && saleStatusOk && vehicleOk;
-    });
-    let vacantCount = 0;
-    let modelYearEmpty = 0;
-    const modelYearMap = new Map<string, { label: string; count: number }>();
-    for (const order of baseFiltered) {
-      if (order.saleStatus !== "‡∏ß‡πà‡∏≤‡∏á") continue;
-      vacantCount += 1;
-      const my = String(order.modelYear ?? "").trim();
-      if (!my) modelYearEmpty += 1;
-      else {
-        const k = soldModelYearGroupKey(my);
-        const prev = modelYearMap.get(k);
-        if (!prev) modelYearMap.set(k, { label: my, count: 1 });
-        else prev.count += 1;
-      }
-    }
-    const modelYearRounds: { key: string; label: string; token: string; count: number }[] = [];
-    modelYearMap.forEach((v, key) => {
-      modelYearRounds.push({ key, label: v.label, token: vacantSaleModelYearTokenFromKey(key), count: v.count });
-    });
-    modelYearRounds.sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, "th", { sensitivity: "base" }));
-    return { vacantCount, modelYearEmpty, modelYearRounds };
-  }, [mappedOrders, filteringSaleFilters, filteringSaleStatusFilters, filteringVehicleSearchForFiltering]);
-
-  const soldShippedDimActive = useMemo(() => {
-    for (const f of Array.from(staffFilters)) if (isSoldShippedStaffFilter(f)) return true;
-    return false;
-  }, [staffFilters]);
-  const soldModelYearDimActive = useMemo(() => {
-    for (const f of Array.from(staffFilters)) if (isSoldModelYearStaffFilter(f)) return true;
-    return false;
-  }, [staffFilters]);
-  const vacantSaleModelYearDimActive = useMemo(() => {
-    for (const f of Array.from(staffFilters)) if (isVacantSaleModelYearStaffFilter(f)) return true;
-    return false;
-  }, [staffFilters]);
-
-  /** ‡∏ä‡∏¥‡∏õ‡∏Å‡∏£‡∏≠‡∏á: roster ‡∏à‡∏≤‡∏Å‡πÄ‡∏ã‡∏¥‡∏£‡πå‡∏ü‡πÄ‡∏ß‡∏≠‡∏£‡πå + assignee ‡∏à‡∏≤‡∏Å‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡∏ó‡∏µ‡πà‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏≠‡∏¢‡∏π‡πà‡πÉ‡∏ô roster ‚Äî ‡πÑ‡∏°‡πà‡πÉ‡∏´‡πâ‡∏´‡∏ô‡πâ‡∏≤‡πÄ‡∏ß‡πá‡∏ö‡∏ß‡πà‡∏≤‡∏á‡πÄ‡∏°‡∏∑‡πà‡∏≠‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡πÄ‡∏Ñ‡∏¢‡πÄ‡∏õ‡∏¥‡∏î‡∏à‡∏±‡∏î‡∏Å‡∏≤‡∏£‡∏û‡∏ô‡∏±‡∏Å‡∏á‡∏≤‡∏ô */
-  const staffFilterChipNames = useMemo(() => {
-    const seen = new Set<string>();
-    const out: string[] = [];
-    const push = (raw: string) => {
-      const t = raw.trim();
-      if (!t || seen.has(t) || isStaffRosterNameExcluded(t)) return;
-      seen.add(t);
-      out.push(t);
-    };
-    for (const n of staffRoster) push(n);
-    const fromData = Object.keys(staffAssigneeItemCounts.byAssignee);
-    fromData.sort((a, b) => {
-      const ca = staffAssigneeItemCounts.byAssignee[a] ?? 0;
-      const cb = staffAssigneeItemCounts.byAssignee[b] ?? 0;
-      if (cb !== ca) return cb - ca;
-      return a.localeCompare(b, "en", { sensitivity: "base" });
-    });
-    for (const n of fromData) push(n);
-    return out;
-  }, [staffRoster, staffAssigneeItemCounts]);
-
-  /** ‡∏ä‡∏¥‡∏õ‡∏û‡∏ô‡∏±‡∏Å‡∏á‡∏≤‡∏ô‡∏ó‡∏µ‡πà‡πÅ‡∏™‡∏î‡∏á ‚Äî ‡∏ã‡πà‡∏≠‡∏ô‡πÄ‡∏°‡∏∑‡πà‡∏≠‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ = 0 */
-  const staffFilterChipNamesVisible = useMemo(
-    () => staffFilterChipNames.filter((s) => (staffAssigneeItemCounts.byAssignee[s] ?? 0) > 0),
-    [staffFilterChipNames, staffAssigneeItemCounts]
-  );
-
-  const flushItemStatusPrefsToServer = React.useCallback(
-    async (roster: ItemStatusValue[], labels: ItemStatusLabelMap, policiesSparse: Record<string, unknown>) => {
-      try {
-        const res = await fetch(ITEM_STATUS_PREFS_API_PATH, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ roster, labels, policies: policiesSparse }),
-          cache: "no-store",
-        });
-        return res.ok;
-      } catch {
-        return false;
-      }
-    },
-    []
-  );
-
-  const persistItemStatusPrefs = React.useCallback(
-    (roster: ItemStatusValue[], labels: ItemStatusLabelMap, policiesNorm: ItemStatusPoliciesNormalized) => {
-      const policiesSparse = normalizedItemPoliciesToStoredJson(policiesNorm);
-      writeItemStatusRosterToStorage(roster);
-      writeItemStatusLabelsToStorage(labels);
-      writeItemStatusPoliciesSparseToStorage(policiesSparse);
-      void flushItemStatusPrefsToServer(roster, labels, policiesSparse);
-    },
-    [flushItemStatusPrefsToServer]
-  );
-
-  const flushStaffRosterToServer = React.useCallback(
-    async (names: string[], sale_assignees: Record<string, string>) => {
-      try {
-        const res = await fetch(STAFF_ROSTER_API_PATH, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ names, sale_assignees }),
-          cache: "no-store",
-        });
-        return res.ok;
-      } catch {
-        return false;
-      }
-    },
-    []
-  );
-
-  const scheduleStaffRosterPersist = React.useCallback(
-    (names: string[], sale_assignees: Record<string, string>) => {
-      writeStaffRosterToStorage(names);
-      writeSaleAssigneesToStorage(sale_assignees);
-      if (staffRosterPersistTimerRef.current) clearTimeout(staffRosterPersistTimerRef.current);
-      staffRosterPersistTimerRef.current = setTimeout(() => {
-        staffRosterPersistTimerRef.current = null;
-        void flushStaffRosterToServer(names, sale_assignees);
-      }, 450);
-    },
-    [flushStaffRosterToServer]
-  );
-
-  useLayoutEffect(() => {
-    staffRosterRef.current = staffRoster;
-  }, [staffRoster]);
-
-  useLayoutEffect(() => {
-    saleAssigneesRef.current = saleAssignees;
-  }, [saleAssignees]);
-
-  useEffect(() => {
-    const ac = new AbortController();
-    let cancelled = false;
-
-    (async () => {
-      const local = readStaffRosterFromStorage();
-      const localAssignees = readSaleAssigneesFromStorage();
-      try {
-        const res = await fetch(STAFF_ROSTER_API_PATH, { cache: "no-store", signal: ac.signal });
-        const json = (await res.json()) as {
-          names?: unknown;
-          sale_assignees?: unknown;
-          error?: string;
-        };
-        if (cancelled) return;
-        const serverNames = normalizeStaffRosterNames(json.names);
-        const serverAssigneesMap = normalizeSaleAssigneesMap(json.sale_assignees);
-        const serverHasAssignees = Object.keys(serverAssigneesMap).length > 0;
-        const mergedAssignees = (
-          serverHasAssignees ? serverAssigneesMap : normalizeSaleAssigneesMap(localAssignees)
-        ) as Record<string, string>;
-
-        if (!res.ok) {
-          if (res.status === 503) {
-            setStaffRoster(local);
-            setSaleAssignees(normalizeSaleAssigneesMap(localAssignees) as Record<string, string>);
-            return;
-          }
-          setStaffRoster(local.length ? local : serverNames);
-          setSaleAssignees(
-            (Object.keys(localAssignees).length > 0
-              ? normalizeSaleAssigneesMap(localAssignees)
-              : serverHasAssignees
-                ? serverAssigneesMap
-                : {}) as Record<string, string>
-          );
-          return;
-        }
-
-        if (serverNames.length === 0 && local.length > 0) {
-          const seedAssignees = normalizeSaleAssigneesMap(localAssignees) as Record<string, string>;
-          try {
-            await fetch(STAFF_ROSTER_API_PATH, {
-              method: "PUT",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ names: local, sale_assignees: seedAssignees }),
-              cache: "no-store",
-              signal: ac.signal,
-            });
-          } catch {
-            /* ignore */
-          }
-          if (!cancelled) {
-            setStaffRoster(local);
-            setSaleAssignees(seedAssignees);
-            writeStaffRosterToStorage(local);
-            writeSaleAssigneesToStorage(seedAssignees);
-          }
-          return;
-        }
-
-        if (!cancelled) {
-          setStaffRoster(serverNames);
-          setSaleAssignees(mergedAssignees);
-          writeStaffRosterToStorage(serverNames);
-          writeSaleAssigneesToStorage(mergedAssignees);
-
-          if (
-            serverNames.length > 0 &&
-            !serverHasAssignees &&
-            Object.keys(normalizeSaleAssigneesMap(localAssignees)).length > 0
-          ) {
-            try {
-              await fetch(STAFF_ROSTER_API_PATH, {
-                method: "PUT",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ names: serverNames, sale_assignees: mergedAssignees }),
-                cache: "no-store",
-                signal: ac.signal,
-              });
-            } catch {
-              /* ignore */
-            }
-          }
-        }
-      } catch {
-        if (!cancelled) {
-          setStaffRoster(readStaffRosterFromStorage());
-          setSaleAssignees(readSaleAssigneesFromStorage());
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-      ac.abort();
-    };
-  }, []);
-
-  useEffect(() => {
-    const ac = new AbortController();
-    let cancelled = false;
-
-    (async () => {
-      const localRoster = readItemStatusRosterFromStorage();
-      const localLabels = readItemStatusLabelsFromStorage();
-      const localPn = readItemStatusPoliciesFromStorageNormalized() ?? defaultItemStatusPoliciesNormalized();
-      const localPnSparse = normalizedItemPoliciesToStoredJson(localPn);
-      try {
-        const res = await fetch(ITEM_STATUS_PREFS_API_PATH, { cache: "no-store", signal: ac.signal });
-        const json = (await res.json()) as { roster?: unknown; labels?: unknown; policies?: unknown };
-        if (cancelled) return;
-
-        const serverRoster = normalizeItemStatusRoster(json.roster);
-        const mergedRoster = serverRoster;
-        const serverLabels = normalizeItemStatusLabels(json.labels);
-        const serverPn = normalizeItemStatusPoliciesRaw(json.policies);
-        const serverPnSparse = normalizedItemPoliciesToStoredJson(serverPn);
-        const defaultPnSparse = "{}";
-
-        if (!res.ok) {
-          if (res.status === 503) {
-            setItemStatusRoster(localRoster);
-            setItemStatusLabels(localLabels);
-            setItemStatusPoliciesNormalized(localPn);
-            return;
-          }
-          setItemStatusRoster(localRoster.length ? localRoster : mergedRoster);
-          setItemStatusLabels(Object.keys(localLabels).length ? localLabels : serverLabels);
-          setItemStatusPoliciesNormalized(localPn);
-          return;
-        }
-
-        const serverHasCustom =
-          serverRoster.length > 0 || Object.keys(serverLabels).length > 0 || JSON.stringify(serverPnSparse) !== defaultPnSparse;
-        const localHasCustom =
-          (localRoster.length > 0 && localRoster.join("|") !== ITEM_STATUS_ORDER.join("|")) ||
-          Object.keys(localLabels).length > 0 ||
-          JSON.stringify(localPnSparse) !== defaultPnSparse;
-        if (!serverHasCustom && localHasCustom) {
-          try {
-            await fetch(ITEM_STATUS_PREFS_API_PATH, {
-              method: "PUT",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                roster: localRoster,
-                labels: localLabels,
-                policies: localPnSparse,
-              }),
-              cache: "no-store",
-              signal: ac.signal,
-            });
-          } catch {
-            /* ignore */
-          }
-          if (!cancelled) {
-            setItemStatusRoster(localRoster);
-            setItemStatusLabels(localLabels);
-            setItemStatusPoliciesNormalized(localPn);
-            writeItemStatusRosterToStorage(localRoster);
-            writeItemStatusLabelsToStorage(localLabels);
-            writeItemStatusPoliciesSparseToStorage(localPnSparse);
-          }
-          return;
-        }
-
-        if (!cancelled) {
-          setItemStatusRoster(mergedRoster);
-          setItemStatusLabels(serverLabels);
-          setItemStatusPoliciesNormalized(serverPn);
-          writeItemStatusRosterToStorage(mergedRoster);
-          writeItemStatusLabelsToStorage(serverLabels);
-          writeItemStatusPoliciesSparseToStorage(serverPnSparse);
-        }
-      } catch {
-        if (!cancelled) {
-          setItemStatusRoster(localRoster);
-          setItemStatusLabels(localLabels);
-          setItemStatusPoliciesNormalized(localPn);
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-      ac.abort();
-    };
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (staffRosterPersistTimerRef.current) clearTimeout(staffRosterPersistTimerRef.current);
-    };
-  }, []);
-
-  const addStaffToRoster = React.useCallback(
-    (name: string) => {
-      const t = name.trim();
-      if (!t || isStaffRosterNameExcluded(t)) return;
-      setStaffRoster((prev) => {
-        if (prev.includes(t)) return prev;
-        const next = [...prev, t];
-        scheduleStaffRosterPersist(next, saleAssigneesRef.current);
-        return next;
-      });
-    },
-    [scheduleStaffRosterPersist]
-  );
-
-  const removeStaffFromRoster = React.useCallback(
-    (name: string) => {
-      setStaffRoster((prev) => {
-        const nextNames = prev.filter((n) => n !== name);
-        setSaleAssignees((prevMap) => {
-          const cleaned = { ...prevMap };
-          for (const k of Object.keys(cleaned)) {
-            if (cleaned[k] === name) delete cleaned[k];
-          }
-          const nextAssignees = normalizeSaleAssigneesMap(cleaned) as Record<string, string>;
-          scheduleStaffRosterPersist(nextNames, nextAssignees);
-          return nextAssignees;
-        });
-        return nextNames;
-      });
-    },
-    [scheduleStaffRosterPersist]
-  );
-
-  const setSaleAssigneeForCode = React.useCallback(
-    (saleCode: string, assigneeName: string) => {
-      setSaleAssignees((prev) => {
-        const next = { ...prev };
-        const t = assigneeName.trim();
-        if (!t) delete next[saleCode];
-        else next[saleCode] = t;
-        const normalized = normalizeSaleAssigneesMap(next) as Record<string, string>;
-        scheduleStaffRosterPersist(staffRosterRef.current, normalized);
-        return normalized;
-      });
-    },
-    [scheduleStaffRosterPersist]
-  );
-
-  const addableItemStatuses = useMemo(() => {
-    if (itemStatusRoster.length === 0) return [...ITEM_STATUSES];
-    return ITEM_STATUSES.filter((s) => !itemStatusRoster.includes(s));
-  }, [itemStatusRoster]);
-
-  const itemStatusRosterEffective = useMemo(
-    () => effectiveItemStatusRoster(itemStatusRoster),
-    [itemStatusRoster]
-  );
-
-  const addItemStatusToRoster = React.useCallback(
-    (st: ItemStatusValue) => {
-      setItemStatusRoster((prev) => {
-        if (prev.includes(st)) return prev;
-        const next = [...prev, st];
-        persistItemStatusPrefs(next, itemStatusLabels, itemStatusPoliciesNormalized);
-        return next;
-      });
-    },
-    [itemStatusLabels, itemStatusPoliciesNormalized, persistItemStatusPrefs]
-  );
-
-  const removeItemStatusFromRoster = React.useCallback(
-    (st: ItemStatusValue) => {
-      setItemStatusRoster((prev) => {
-        const next = prev.filter((x) => x !== st);
-        const fallback = next.length ? next : [];
-        persistItemStatusPrefs(fallback, itemStatusLabels, itemStatusPoliciesNormalized);
-        return fallback;
-      });
-    },
-    [itemStatusLabels, itemStatusPoliciesNormalized, persistItemStatusPrefs]
-  );
-
-  const moveItemStatusInRoster = React.useCallback(
-    (st: ItemStatusValue, direction: -1 | 1) => {
-      setItemStatusRoster((prev) => {
-        const idx = prev.indexOf(st);
-        if (idx < 0) return prev;
-        const to = idx + direction;
-        if (to < 0 || to >= prev.length) return prev;
-        const next = [...prev];
-        const [taken] = next.splice(idx, 1);
-        next.splice(to, 0, taken);
-        persistItemStatusPrefs(next, itemStatusLabels, itemStatusPoliciesNormalized);
-        return next;
-      });
-    },
-    [itemStatusLabels, itemStatusPoliciesNormalized, persistItemStatusPrefs]
-  );
-
-  const updateItemStatusLabel = React.useCallback(
-    (st: ItemStatusValue, nextLabel: string) => {
-      setItemStatusLabels((prev) => {
-        const trimmed = nextLabel.trim();
-        const next = { ...prev };
-        if (!trimmed || trimmed === st) delete next[st];
-        else next[st] = trimmed;
-        persistItemStatusPrefs(itemStatusRoster, next, itemStatusPoliciesNormalized);
-        return next;
-      });
-    },
-    [itemStatusRoster, itemStatusPoliciesNormalized, persistItemStatusPrefs]
-  );
-
-  const patchItemStatusPolicy = React.useCallback(
-    (code: ItemStatusValue, patch: Partial<ResolvedItemRowStatusPolicy>) => {
-      setItemStatusPoliciesNormalized((prev) => {
-        const row = prev.byStatus[code];
-        const next: ItemStatusPoliciesNormalized = {
-          ...prev,
-          byStatus: {
-            ...prev.byStatus,
-            [code]: { ...row, ...patch },
-          },
-        };
-        persistItemStatusPrefs(itemStatusRoster, itemStatusLabels, next);
-        return next;
-      });
-    },
-    [itemStatusLabels, itemStatusRoster, persistItemStatusPrefs]
-  );
-
-  const toggleDueTodayPolicyStatus = React.useCallback(
-    (st: ItemStatusValue) => {
-      setItemStatusPoliciesNormalized((prev) => {
-        const cur = new Set(prev.dueToday.statuses);
-        if (cur.has(st)) cur.delete(st);
-        else cur.add(st);
-        const next: ItemStatusPoliciesNormalized = {
-          ...prev,
-          dueToday: { ...prev.dueToday, statuses: Array.from(cur) },
-        };
-        persistItemStatusPrefs(itemStatusRoster, itemStatusLabels, next);
-        return next;
-      });
-    },
-    [itemStatusLabels, itemStatusRoster, persistItemStatusPrefs]
-  );
-
-  const setDueTodayPolicyMatchDays = React.useCallback(
-    (raw: string) => {
-      const parsed = Number(String(raw).trim());
-      setItemStatusPoliciesNormalized((prev) => {
-        const matchDaysUntilDueBangkok = Number.isFinite(parsed)
-          ? Math.min(730, Math.max(-730, Math.round(parsed)))
-          : prev.dueToday.matchDaysUntilDueBangkok;
-        const next: ItemStatusPoliciesNormalized = {
-          ...prev,
-          dueToday: { ...prev.dueToday, matchDaysUntilDueBangkok },
-        };
-        persistItemStatusPrefs(itemStatusRoster, itemStatusLabels, next);
-        return next;
-      });
-    },
-    [itemStatusLabels, itemStatusRoster, persistItemStatusPrefs]
-  );
-
-  const statusLabel = React.useCallback(
-    (st: ItemStatusFilterValue): string => {
-      if (st === ITEM_STATUS_DUE_TODAY) return uiLang === "en" ? "Due today" : ITEM_STATUS_DUE_TODAY;
-      if (uiLang === "en") {
-        return displayItemStatusLabel(st, uiLang);
-      }
-      const custom = itemStatusLabels[st];
-      if (custom && custom !== st) return custom;
-      return displayItemStatusLabel(st, uiLang);
-    },
-    [itemStatusLabels, uiLang]
-  );
-
-  const staffFilterChipNamesForToolbar = useMemo(() => {
-    const sticky = staffChipsStickyAfterPrimeRef.current;
-    if (!filterChipLayoutPrimed || !sticky) {
-      return staffFilterChipNamesVisible;
-    }
-    return staffFilterChipNames.filter(
-      (s) => sticky.has(s) || (staffAssigneeItemCounts.byAssignee[s] ?? 0) > 0
-    );
-  }, [filterChipLayoutPrimed, staffFilterChipNames, staffFilterChipNamesVisible, staffAssigneeItemCounts]);
-
-  /** ‡∏™‡∏µ‡∏ä‡∏¥‡∏õ‡∏û‡∏ô‡∏±‡∏Å‡∏á‡∏≤‡∏ô‡πÉ‡∏ô‡πÅ‡∏ñ‡∏ö ‚Äî ‡πÑ‡∏°‡πà‡πÉ‡∏´‡πâ‡∏ã‡πâ‡∏≥‡πÉ‡∏ô‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏ó‡∏µ‡πà‡∏Ç‡∏∂‡πâ‡∏ô‡∏û‡∏£‡πâ‡∏≠‡∏°‡∏Å‡∏±‡∏ô (‡∏¢‡∏±‡∏á‡πÉ‡∏ä‡πâ‡πÅ‡∏Æ‡∏ä‡∏ä‡∏∑‡πà‡∏≠‡πÄ‡∏°‡∏∑‡πà‡∏≠‡∏ä‡∏¥‡∏õ‡∏ö‡∏ô‡∏Å‡∏≤‡∏£‡πå‡∏î) */
-  const staffToolbarAssigneePaletteIndexByName = useMemo(
-    () => buildStaffToolbarAssigneePaletteIndexMap(staffFilterChipNamesForToolbar),
-    [staffFilterChipNamesForToolbar]
-  );
-
-  /** ‡πÅ‡∏™‡∏î‡∏á‡∏ä‡∏¥‡∏õ "‡πÑ‡∏°‡πà‡∏£‡∏∞‡∏ö‡∏∏‡∏ä‡∏∑‡πà‡∏≠" ‚Äî ‡∏ã‡πà‡∏≠‡∏ô‡πÄ‡∏°‡∏∑‡πà‡∏≠‡∏ô‡∏±‡∏ö 0 ‡∏¢‡∏Å‡πÄ‡∏ß‡πâ‡∏ô‡∏´‡∏•‡∏±‡∏á‡∏•‡πá‡∏≠‡∏Å sticky ‡∏´‡∏£‡∏∑‡∏≠‡∏Å‡∏≥‡∏•‡∏±‡∏á‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏ä‡∏¥‡∏õ‡∏ô‡∏µ‡πâ */
-  const staffUnassignedChipInToolbar = useMemo(() => {
-    if (staffFilters.has(STAFF_FILTER_UNASSIGNED)) return true;
-    const sticky = staffChipsStickyAfterPrimeRef.current;
-    if (!filterChipLayoutPrimed || !sticky) {
-      return (staffAssigneeItemCounts.unassigned ?? 0) > 0;
-    }
-    return sticky.has(STAFF_FILTER_UNASSIGNED) || (staffAssigneeItemCounts.unassigned ?? 0) > 0;
-  }, [filterChipLayoutPrimed, staffFilters, staffAssigneeItemCounts.unassigned]);
-
-  useEffect(() => {
-    setStaffFilters((prev) => {
-      const validShip = new Set(bookedShippingRounds.map((r) => r.token));
-      const validBuyer = new Set(bookedBuyerRounds.map((r) => r.token));
-      const validSoldShip = new Set(shippedSoldToolbarStats.shippedRounds.map((r) => r.token));
-      const validSoldMy = new Set(shippedSoldToolbarStats.modelYearRounds.map((r) => r.token));
-      const validVacMy = new Set(vacantSaleToolbarStats.modelYearRounds.map((r) => r.token));
-      const next = new Set<string>();
-      for (const f of Array.from(prev)) {
-        if (f === STAFF_FILTER_UNASSIGNED) next.add(f);
-        else if (f === STAFF_FILTER_BOOKED_SHIPPING) {
-          /* ‡πÑ‡∏°‡πà‡πÄ‡∏Å‡πá‡∏ö legacy ‚Äî ‡∏ú‡∏π‡πâ‡πÉ‡∏ä‡πâ‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏ä‡∏¥‡∏õ‡∏ï‡πà‡∏≠‡∏£‡∏≠‡∏ö‡πÅ‡∏ó‡∏ô */
-        } else if (f.startsWith(STAFF_FILTER_BOOKED_SHIP_PREFIX)) {
-          if (validShip.has(f)) next.add(f);
-        } else if (f.startsWith(STAFF_FILTER_BOOKED_BUYER_PREFIX)) {
-          if (validBuyer.has(f)) next.add(f);
-        } else if (f === STAFF_FILTER_SOLD_SHIPPED_EMPTY) {
-          if (shippedSoldToolbarStats.shippedEmpty > 0) next.add(f);
-        } else if (f.startsWith(STAFF_FILTER_SOLD_SHIPPED_PREFIX)) {
-          if (validSoldShip.has(f)) next.add(f);
-        } else if (f === STAFF_FILTER_SOLD_MODEL_YEAR_EMPTY) {
-          if (shippedSoldToolbarStats.modelYearEmpty > 0) next.add(f);
-        } else if (f.startsWith(STAFF_FILTER_SOLD_MODEL_YEAR_PREFIX)) {
-          if (validSoldMy.has(f)) next.add(f);
-        } else if (f === STAFF_FILTER_VACANT_MODEL_YEAR_EMPTY) {
-          if (vacantSaleToolbarStats.modelYearEmpty > 0) next.add(f);
-        } else if (f.startsWith(STAFF_FILTER_VACANT_MODEL_YEAR_PREFIX)) {
-          if (validVacMy.has(f)) next.add(f);
-        } else if (staffFilterChipNamesForToolbar.includes(f)) next.add(f);
-      }
-      if (next.size === prev.size && Array.from(prev).every((x) => next.has(x))) return prev;
-      return next;
-    });
-  }, [staffFilterChipNamesForToolbar, bookedShippingRounds, bookedBuyerRounds, shippedSoldToolbarStats, vacantSaleToolbarStats]);
-
-  useEffect(() => {
-    if (bookedShippingRounds.length === 0) setBookedShippingPanelExpanded(false);
-    if (bookedBuyerRounds.length === 0) setBookedBuyerPanelExpanded(false);
-    if (shippedSoldToolbarStats.soldCount === 0) setShippedSoldExtrasPanelExpanded(false);
-    if (vacantSaleToolbarStats.vacantCount === 0) setVacantSaleModelYearPanelExpanded(false);
-  }, [bookedShippingRounds.length, bookedBuyerRounds.length, shippedSoldToolbarStats.soldCount, vacantSaleToolbarStats.vacantCount]);
-
-  useEffect(() => {
-    let ship = false;
-    let buyer = false;
-    let soldEx = false;
-    let vacantMy = false;
-    for (const f of Array.from(staffFilters)) {
-      if (isBookedShipStaffFilter(f)) ship = true;
-      if (isBookedBuyerStaffFilter(f)) buyer = true;
-      if (isSoldShippedStaffFilter(f) || isSoldModelYearStaffFilter(f)) soldEx = true;
-      if (isVacantSaleModelYearStaffFilter(f)) vacantMy = true;
-    }
-    if (ship) setBookedShippingPanelExpanded(true);
-    if (buyer) setBookedBuyerPanelExpanded(true);
-    if (soldEx) setShippedSoldExtrasPanelExpanded(true);
-    if (vacantMy) setVacantSaleModelYearPanelExpanded(true);
-  }, [staffFilters]);
-
-  useEffect(() => {
-    setItemStatusFilters((prev) => {
-      const next = new Set<ItemStatusFilterValue | typeof ITEM_STATUS_DUE_TODAY>();
-      for (const f of Array.from(prev)) {
-        if (f === ITEM_STATUS_DUE_TODAY) next.add(f);
-        else if (itemStatusRosterEffective.includes(f as ItemStatusValue)) next.add(f);
-      }
-      if (next.size === prev.size && Array.from(prev).every((x) => next.has(x))) return prev;
-      return next;
-    });
-  }, [itemStatusRosterEffective]);
-
-  const saleStatusCounts = useMemo(() => {
-    const noExtraFilters =
-      filteringSaleFilters.size === 0 &&
-      filteringStaffFilters.size === 0 &&
-      filteringItemStatusFilters.size === 0 &&
-      (!orderChipCacheExperimentEnabled || filteringVehicleSearchForFiltering.trim() === "");
-    if (noExtraFilters && saleStatusSummaryAllCars) {
-      return {
-        ‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î: Number(saleStatusSummaryAllCars["‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î"] ?? 0),
-        ‡∏à‡∏≠‡∏á: Number(saleStatusSummaryAllCars["‡∏à‡∏≠‡∏á"] ?? 0),
-        ‡∏£‡∏≠‡∏™‡πà‡∏á: Number(saleStatusSummaryAllCars["‡∏£‡∏≠‡∏™‡πà‡∏á"] ?? 0),
-        ‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß: Number(saleStatusSummaryAllCars["‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß"] ?? 0),
-        ‡∏ß‡πà‡∏≤‡∏á: Number(saleStatusSummaryAllCars["‡∏ß‡πà‡∏≤‡∏á"] ?? 0),
-      } as Partial<Record<SaleStatusFilterValue, number>>;
-    }
-    const dueTodayChip = itemStatusPoliciesNormalized.dueToday;
-    const baseOrders = mappedOrders.filter((order) => {
-      const saleOk = orderMatchesSaleFilters(order, filteringSaleFilters);
-      const vehicleOk = orderChipCacheExperimentEnabled ? matchesVehicleSearch(order, filteringVehicleSearchForFiltering) : true;
-      const staffOk = orderMatchesToolbarFilters(
-        order,
-        filteringStaffFilters,
-        filteringItemStatusFilters,
-        dueTodayChip,
-        orderChipCacheExperimentEnabled ? filterItemsForOrder(order) : order.items
-      );
-      return saleOk && vehicleOk && staffOk;
-    });
-    const acc: Partial<Record<SaleStatusFilterValue, number>> = {};
-    for (const saleStatus of SALE_STATUSES) {
-      acc[saleStatus] =
-        saleStatus === "‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î"
-          ? baseOrders.length
-          : baseOrders.filter((order) => order.saleStatus === saleStatus).length;
-    }
-    return acc;
-  }, [
-    mappedOrders,
-    filteringSaleFilters,
-    filteringStaffFilters,
-    filteringItemStatusFilters,
-    saleStatusSummaryAllCars,
-    itemStatusPoliciesNormalized,
-    orderChipCacheExperimentEnabled,
-    filteringVehicleSearchForFiltering,
-    filterItemsForOrder,
-  ]);
-  const saleStatusChipModels = useMemo(
-    () =>
-      SALE_STATUSES.map((saleStatus) => ({
-        saleStatus,
-        count: saleStatusCounts[saleStatus] ?? 0,
-        active: saleStatus === SALE_STATUSES[0] ? saleStatusFilters.size === 0 : saleStatusFilters.has(saleStatus),
-      })),
-    [saleStatusCounts, saleStatusFilters]
-  );
-  const visible = useMemo(
-    () =>
-      mappedOrders
-        .filter((order) => {
-          const saleOk = orderMatchesSaleFilters(order, filteringSaleFilters);
-          const saleStatusOk = orderMatchesSaleStatusFilters(order, filteringSaleStatusFilters);
-          const vehicleOk = matchesVehicleSearch(order, filteringVehicleSearchForFiltering);
-          if (!saleOk || !saleStatusOk || !vehicleOk) return false;
-          return orderMatchesToolbarFilters(
-            order,
-            filteringStaffFilters,
-            filteringItemStatusFilters,
-            itemStatusPoliciesNormalized.dueToday,
-            orderChipCacheExperimentEnabled ? filterItemsForOrder(order) : order.items
-          );
-        })
-        .sort((a, b) => {
-          const workRank = orderCardWorkPresenceRank(a) - orderCardWorkPresenceRank(b);
-          if (workRank !== 0) return workRank;
-          const onlyEmptySelected =
-            filteringSaleStatusFilters.size === 1 && filteringSaleStatusFilters.has(SALE_STATUSES[4]);
-          if (onlyEmptySelected) {
-            const yearDelta = modelYearSortValue(b.modelYear) - modelYearSortValue(a.modelYear);
-            if (yearDelta !== 0) return yearDelta;
-          }
-          const byStatus = (SALE_STATUS_PRIORITY[a.saleStatus] ?? 99) - (SALE_STATUS_PRIORITY[b.saleStatus] ?? 99);
-          if (byStatus !== 0) return byStatus;
-          const shipA = shipGroupKey(a.ship);
-          const shipB = shipGroupKey(b.ship);
-          if (shipA !== shipB) return shipA.localeCompare(shipB, "en", { numeric: true, sensitivity: "base" });
-          return a.id.localeCompare(b.id);
-        }),
-    [
-      filteringSaleStatusFilters,
-      filteringVehicleSearchForFiltering,
-      filteringStaffFilters,
-      filteringItemStatusFilters,
-      mappedOrders,
-      filteringSaleFilters,
-      itemStatusPoliciesNormalized,
-      orderChipCacheExperimentEnabled,
-      filterItemsForOrder,
-    ]
-  );
-  /** AI ¬∑ LINE car picker uses full loaded orders, not toolbar-filtered `visible`. */
-  const lineInboxAiOrderPicks = useMemo(() => {
-    const sorted = [...mappedOrders].sort((a, b) => {
-      const plateCmp = String(a.fullPlate ?? "")
-        .trim()
-        .localeCompare(String(b.fullPlate ?? "").trim(), "th", { numeric: true, sensitivity: "base" });
-      if (plateCmp !== 0) return plateCmp;
-      return a.id.localeCompare(b.id);
-    });
-    return sorted.map((o) => ({
-      id: o.id,
-      fullPlate: o.fullPlate,
-      car: o.car,
-      chassis: o.chassis,
-      sale: o.sale,
-      carRowId: o.carRowId,
-      carId: o.carId,
-    }));
-  }, [mappedOrders]);
-  /** Per-status item counts from current `mappedOrders` (Supabase-backed or in-file `ORDERS` demo) with same filters as the list. */
-  const itemStatusCounts = useMemo(() => {
-    const useSummaryCacheBase =
-      Boolean(summarySnapshotAllCars) &&
-      filteringSaleFilters.size === 0 &&
-      filteringSaleStatusFilters.size === 0 &&
-      filteringStaffFilters.size === 0 &&
-      filteringItemStatusFilters.size === 0 &&
-      filteringVehicleSearchForFiltering.trim() === "";
-    if (useSummaryCacheBase && summarySnapshotAllCars) {
-      const counts = new Map<ItemStatusValue, number>();
-      for (const s of ITEM_STATUSES) {
-        counts.set(s, Number(summarySnapshotAllCars.itemStatusCounts?.[s] ?? 0));
-      }
-      return counts;
-    }
-    const counts = new Map<ItemStatusValue, number>();
-    for (const s of ITEM_STATUSES) counts.set(s, 0);
-    const { itemStaffFilters } = splitStaffFilters(filteringStaffFilters);
-    const dtChip = itemStatusPoliciesNormalized.dueToday;
-    const baseFiltered = mappedOrders.filter((order) => {
-      const saleOk = orderMatchesSaleFilters(order, filteringSaleFilters);
-      const saleStatusOk = orderMatchesSaleStatusFilters(order, filteringSaleStatusFilters);
-      const vehicleOk = matchesVehicleSearch(order, filteringVehicleSearchForFiltering);
-      return (
-        saleOk &&
-        saleStatusOk &&
-        vehicleOk &&
-        orderMatchesToolbarFilters(
-          order,
-          filteringStaffFilters,
-          new Set(),
-          dtChip,
-          orderChipCacheExperimentEnabled ? filterItemsForOrder(order) : order.items
-        )
-      );
-    });
-    for (const order of baseFiltered) {
-      for (const item of orderChipCacheExperimentEnabled ? filterItemsForOrder(order) : order.items) {
-        if (!itemMatchesStaffFilters(item.assignee, itemStaffFilters)) continue;
-        counts.set(item.status, (counts.get(item.status) ?? 0) + 1);
-      }
-    }
-    return counts;
-  }, [
-    mappedOrders,
-    filteringSaleStatusFilters,
-    filteringVehicleSearchForFiltering,
-    filteringStaffFilters,
-    filteringSaleFilters,
-    filteringItemStatusFilters,
-    summarySnapshotAllCars,
-    itemStatusPoliciesNormalized,
-    orderChipCacheExperimentEnabled,
-    filterItemsForOrder,
-  ]);
-
-  /** ‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏ï‡∏≤‡∏°‡∏Å‡∏≤‡∏£‡∏ï‡∏±‡πâ‡∏á‡∏Ñ‡πà‡∏≤‡∏ä‡∏¥‡∏õ "‡∏°‡∏≤‡∏ß‡∏±‡∏ô‡∏ô‡∏µ‡πâ" (due date + ‡πÄ‡∏ó‡∏µ‡∏¢‡∏ö daysUntilBangkok ‡∏ï‡∏±‡πâ‡∏á‡πÑ‡∏î‡πâ) */
-  const dueTodayItemCount = useMemo(() => {
-    const dtChip = itemStatusPoliciesNormalized.dueToday;
-    const { itemStaffFilters } = splitStaffFilters(filteringStaffFilters);
-    const baseFiltered = mappedOrders.filter((order) => {
-      const saleOk = orderMatchesSaleFilters(order, filteringSaleFilters);
-      const saleStatusOk = orderMatchesSaleStatusFilters(order, filteringSaleStatusFilters);
-      const vehicleOk = matchesVehicleSearch(order, filteringVehicleSearchForFiltering);
-      return (
-        saleOk &&
-        saleStatusOk &&
-        vehicleOk &&
-        orderMatchesToolbarFilters(
-          order,
-          filteringStaffFilters,
-          new Set(),
-          dtChip,
-          orderChipCacheExperimentEnabled ? filterItemsForOrder(order) : order.items
-        )
-      );
-    });
-    let count = 0;
-    for (const order of baseFiltered) {
-      for (const item of orderChipCacheExperimentEnabled ? filterItemsForOrder(order) : order.items) {
-        if (!itemMatchesStaffFilters(item.assignee, itemStaffFilters)) continue;
-        if (matchesDueTodayChip(item, dtChip)) count += 1;
-      }
-    }
-    return count;
-  }, [
-    mappedOrders,
-    filteringSaleFilters,
-    filteringSaleStatusFilters,
-    filteringVehicleSearchForFiltering,
-    filteringStaffFilters,
-    itemStatusPoliciesNormalized,
-    orderChipCacheExperimentEnabled,
-    filterItemsForOrder,
-  ]);
-
-  /** ‡∏ä‡∏¥‡∏õ‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏ó‡∏µ‡πà‡πÅ‡∏™‡∏î‡∏á ‚Äî ‡∏ã‡πà‡∏≠‡∏ô‡πÄ‡∏°‡∏∑‡πà‡∏≠‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ = 0 (‡πÄ‡∏â‡∏û‡∏≤‡∏∞‡∏Å‡πà‡∏≠‡∏ô‡∏•‡πá‡∏≠‡∏Å‡∏Ñ‡∏£‡∏±‡πâ‡∏á‡πÅ‡∏£‡∏Å; ‡∏´‡∏•‡∏±‡∏á‡∏•‡πá‡∏≠‡∏Å‡πÉ‡∏ä‡πâ itemStatusRosterForToolbar) */
-  const itemStatusRosterVisible = useMemo(
-    () => itemStatusRosterEffective.filter((s) => (itemStatusCounts.get(s) ?? 0) > 0),
-    [itemStatusRosterEffective, itemStatusCounts]
-  );
-
-  const itemStatusRosterForToolbar = useMemo(() => {
-    const sticky = itemStatusChipsStickyAfterPrimeRef.current;
-    if (!filterChipLayoutPrimed || !sticky) {
-      return itemStatusRosterVisible;
-    }
-    return itemStatusRosterEffective.filter((s) => sticky.has(s) || (itemStatusCounts.get(s) ?? 0) > 0);
-  }, [filterChipLayoutPrimed, itemStatusRosterEffective, itemStatusRosterVisible, itemStatusCounts]);
-
-  const itemStatusFilterOptionsForToolbar = useMemo(() => {
-    const ordered = sortItemStatusesForFilterToolbar([...itemStatusRosterForToolbar]);
-    const withDueToday =
-      dueTodayItemCount > 0 || itemStatusFilters.has(ITEM_STATUS_DUE_TODAY)
-        ? [ITEM_STATUS_DUE_TODAY, ...ordered]
-        : ordered;
-    return withDueToday;
-  }, [dueTodayItemCount, itemStatusRosterForToolbar, itemStatusFilters]);
-
-  /** ‡∏™‡∏•‡∏±‡∏ö‡∏à‡∏≤‡∏Å‡πÇ‡∏´‡∏°‡∏î‡∏´‡∏•‡∏≤‡∏¢‡∏ä‡∏¥‡∏õ ‚Üí ‡∏ó‡∏µ‡∏•‡∏∞‡∏´‡∏ô‡∏∂‡πà‡∏á: ‡∏¢‡πà‡∏≠‡πÉ‡∏´‡πâ‡πÄ‡∏´‡∏•‡∏∑‡∏≠‡∏ä‡∏¥‡∏õ‡πÄ‡∏î‡∏µ‡∏¢‡∏ß‡∏ï‡πà‡∏≠‡πÅ‡∏ñ‡∏ß (‡∏ï‡∏≤‡∏°‡∏•‡∏≥‡∏î‡∏±‡∏ö‡πÅ‡∏™‡∏î‡∏á‡∏ú‡∏•) */
-  useEffect(() => {
-    const wasMulti = prevFilterChipMultiSelectRef.current;
-    prevFilterChipMultiSelectRef.current = filterChipMultiSelect;
-    if (filterChipMultiSelect || !wasMulti) return;
-
-    setSaleFilters((prev) => {
-      if (prev.size <= 1) return prev;
-      const pick = salesChipsOrdered.find((x) => x !== "ALL" && prev.has(x));
-      return pick ? new Set([pick]) : new Set();
-    });
-    setSaleStatusFilters((prev) => {
-      if (prev.size <= 1) return prev;
-      const pick = SALE_STATUSES.find((x) => x !== "‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î" && prev.has(x));
-      return pick ? new Set([pick]) : new Set();
-    });
-    setStaffFilters((prev) => {
-      if (prev.size <= 1) return prev;
-      if (prev.has(STAFF_FILTER_UNASSIGNED)) return new Set([STAFF_FILTER_UNASSIGNED]);
-      for (const name of staffFilterChipNamesForToolbar) {
-        if (prev.has(name)) return new Set([name]);
-      }
-      for (const r of bookedShippingRounds) {
-        if (prev.has(r.token)) return new Set([r.token]);
-      }
-      for (const r of bookedBuyerRounds) {
-        if (prev.has(r.token)) return new Set([r.token]);
-      }
-      for (const r of shippedSoldToolbarStats.shippedRounds) {
-        if (prev.has(r.token)) return new Set([r.token]);
-      }
-      if (prev.has(STAFF_FILTER_SOLD_SHIPPED_EMPTY)) return new Set([STAFF_FILTER_SOLD_SHIPPED_EMPTY]);
-      for (const r of shippedSoldToolbarStats.modelYearRounds) {
-        if (prev.has(r.token)) return new Set([r.token]);
-      }
-      if (prev.has(STAFF_FILTER_SOLD_MODEL_YEAR_EMPTY)) return new Set([STAFF_FILTER_SOLD_MODEL_YEAR_EMPTY]);
-      for (const r of vacantSaleToolbarStats.modelYearRounds) {
-        if (prev.has(r.token)) return new Set([r.token]);
-      }
-      if (prev.has(STAFF_FILTER_VACANT_MODEL_YEAR_EMPTY)) return new Set([STAFF_FILTER_VACANT_MODEL_YEAR_EMPTY]);
-      const fallback = Array.from(prev)[0];
-      return fallback ? new Set([fallback]) : new Set();
-    });
-    setItemStatusFilters((prev) => {
-      if (prev.size <= 1) return prev;
-      const pick = itemStatusFilterOptionsForToolbar.find((x) => prev.has(x));
-      return pick ? new Set([pick]) : new Set();
-    });
-  }, [
-    filterChipMultiSelect,
-    salesChipsOrdered,
-    staffFilterChipNamesForToolbar,
-    bookedShippingRounds,
-    bookedBuyerRounds,
-    shippedSoldToolbarStats,
-    vacantSaleToolbarStats,
-    itemStatusFilterOptionsForToolbar,
-  ]);
-
-  useLayoutEffect(() => {
-    if (filterChipLayoutPrimed) return;
-    if (mappedOrders.length === 0 && staffAssigneeItemCounts.grandTotal === 0) return;
-    const staffSticky = new Set(staffFilterChipNamesVisible);
-    if ((staffAssigneeItemCounts.unassigned ?? 0) > 0) staffSticky.add(STAFF_FILTER_UNASSIGNED);
-    for (const r of bookedShippingRounds) {
-      if (r.count > 0) staffSticky.add(r.token);
-    }
-    for (const r of bookedBuyerRounds) {
-      if (r.count > 0) staffSticky.add(r.token);
-    }
-    if (shippedSoldToolbarStats.shippedEmpty > 0) staffSticky.add(STAFF_FILTER_SOLD_SHIPPED_EMPTY);
-    for (const r of shippedSoldToolbarStats.shippedRounds) {
-      if (r.count > 0) staffSticky.add(r.token);
-    }
-    if (shippedSoldToolbarStats.modelYearEmpty > 0) staffSticky.add(STAFF_FILTER_SOLD_MODEL_YEAR_EMPTY);
-    for (const r of shippedSoldToolbarStats.modelYearRounds) {
-      if (r.count > 0) staffSticky.add(r.token);
-    }
-    if (vacantSaleToolbarStats.modelYearEmpty > 0) staffSticky.add(STAFF_FILTER_VACANT_MODEL_YEAR_EMPTY);
-    for (const r of vacantSaleToolbarStats.modelYearRounds) {
-      if (r.count > 0) staffSticky.add(r.token);
-    }
-    staffChipsStickyAfterPrimeRef.current = staffSticky;
-    itemStatusChipsStickyAfterPrimeRef.current = new Set(itemStatusRosterVisible);
-    setFilterChipLayoutPrimed(true);
-  }, [
-    filterChipLayoutPrimed,
-    mappedOrders.length,
-    staffAssigneeItemCounts.grandTotal,
-    staffAssigneeItemCounts.unassigned,
-    bookedShippingRounds,
-    bookedBuyerRounds,
-    shippedSoldToolbarStats,
-    vacantSaleToolbarStats,
-    staffFilterChipNamesVisible,
-    itemStatusRosterVisible,
-  ]);
-
-  /** ‡∏ú‡∏•‡∏£‡∏ß‡∏°‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏ó‡∏∏‡∏Å‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞ (‡∏Ç‡∏≠‡∏ö‡πÄ‡∏Ç‡∏ï‡πÄ‡∏î‡∏µ‡∏¢‡∏ß‡∏Å‡∏±‡∏ö‡∏ä‡∏¥‡∏õ‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£) ‚Äî ‡∏ä‡∏¥‡∏õ "‡πÅ‡∏™‡∏î‡∏á‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î" */
-  const itemStatusTotalCount = useMemo(
-    () => ITEM_STATUSES.reduce((sum, s) => sum + (itemStatusCounts.get(s) ?? 0), 0),
-    [itemStatusCounts]
-  );
-  const visibleIndexByOrderId = useMemo(() => {
-    const map = new Map<string, number>();
-    visible.forEach((order, index) => {
-      map.set(order.id, index);
-    });
-    return map;
-  }, [visible]);
-  const experimentWantedOrders = useMemo(
-    () =>
-      orderChipCacheExperimentEnabled
-        ? visible.slice(0, Math.min(visible.length, experimentRequestedCount))
-        : [],
-    [experimentRequestedCount, orderChipCacheExperimentEnabled, visible]
-  );
-  const experimentVisiblePaged = useMemo(
-    () =>
-      experimentWantedOrders.filter((order) =>
-        orderCarKeys(order).some((key) => experimentHydratedCarKeys.has(key))
-      ),
-    [experimentHydratedCarKeys, experimentWantedOrders]
-  );
-  const experimentMissingWantedCount = useMemo(
-    () =>
-      experimentWantedOrders.filter(
-        (order) => !orderCarKeys(order).some((key) => experimentHydratedCarKeys.has(key))
-      ).length,
-    [experimentHydratedCarKeys, experimentWantedOrders]
-  );
-  const visiblePaged = useMemo(
-    () => (orderChipCacheExperimentEnabled ? experimentVisiblePaged : visible.slice(0, visibleLimit)),
-    [experimentVisiblePaged, orderChipCacheExperimentEnabled, visible, visibleLimit]
-  );
-  useEffect(() => {
-    if (visiblePaged.length > 0) lastStableVisiblePagedRef.current = visiblePaged;
-  }, [visiblePaged]);
-  const visiblePagedForRender = useMemo(() => {
-    if (
-      orderChipCacheExperimentEnabled &&
-      visiblePaged.length === 0 &&
-      experimentWantedOrders.length > 0 &&
-      experimentMissingWantedCount > 0 &&
-      lastStableVisiblePagedRef.current.length > 0
-    ) {
-      return lastStableVisiblePagedRef.current;
-    }
-    return visiblePaged;
-  }, [experimentMissingWantedCount, experimentWantedOrders.length, orderChipCacheExperimentEnabled, visiblePaged]);
-  const hasMoreVisible = orderChipCacheExperimentEnabled
-    ? visible.length > experimentVisiblePaged.length
-    : visible.length > visibleLimit;
-
-  const hydrateExperimentDetails = React.useCallback(
-    async (orders: Order[]) => {
-      if (!orderChipCacheExperimentEnabled) return;
-      const batch: Order[] = [];
-      const claimedKeys: string[] = [];
-      const detailBatchLimit =
-        orders.length <= ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT
-          ? ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT
-          : ORDER_TRACKING_EXPERIMENT_INCREMENT;
-      for (const order of orders) {
-        const keys = orderCarKeys(order);
-        if (keys.length === 0) continue;
-        const alreadyKnown = keys.some(
-          (key) => experimentHydratedCarKeys.has(key) || experimentInflightKeysRef.current.has(key)
-        );
-        if (alreadyKnown) continue;
-        batch.push(order);
-        claimedKeys.push(...keys);
-        for (const key of keys) experimentInflightKeysRef.current.add(key);
-        if (batch.length >= detailBatchLimit) break;
-      }
-      if (batch.length === 0) return;
-      setExperimentLoadingDetails(true);
-      setExperimentDetailError(null);
-      try {
-        const res = await fetch(ORDER_TRACKING_CARD_DETAILS_API_PATH, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          cache: "no-store",
-          body: JSON.stringify({ cars: batch.map(orderCarRequest) }),
-        });
-        const payload = (await res.json()) as {
-          orderItemsByCar?: NonNullable<MobileOrderTrackingHomeProps["orderItemsByCar"]>;
-          orderUpdatesByCar?: NonNullable<MobileOrderTrackingHomeProps["orderUpdatesByCar"]>;
-          hydratedCarKeys?: string[];
-          itemsError?: string | null;
-          updatesError?: string | null;
-          error?: string;
-        };
-        if (!res.ok) throw new Error(payload.error ?? res.statusText);
-        setExperimentOrderItemsByCar((prev) => ({ ...prev, ...(payload.orderItemsByCar ?? {}) }));
-        setExperimentOrderUpdatesByCar((prev) => ({ ...prev, ...(payload.orderUpdatesByCar ?? {}) }));
-        setExperimentHydratedCarKeys((prev) => {
-          const next = new Set(prev);
-          for (const key of payload.hydratedCarKeys ?? []) next.add(key);
-          for (const key of claimedKeys) next.add(key);
-          return next;
-        });
-        const detailError = payload.itemsError || payload.updatesError || null;
-        setExperimentDetailError(detailError);
-      } catch (e) {
-        setExperimentDetailError(e instanceof Error ? e.message : String(e));
-      } finally {
-        for (const key of claimedKeys) experimentInflightKeysRef.current.delete(key);
-        setExperimentLoadingDetails(false);
-      }
-    },
-    [experimentHydratedCarKeys, orderChipCacheExperimentEnabled]
-  );
-
-  useEffect(() => {
-    if (!orderChipCacheExperimentEnabled) return;
-    void hydrateExperimentDetails(experimentWantedOrders);
-  }, [experimentWantedOrders, hydrateExperimentDetails, orderChipCacheExperimentEnabled]);
-
-  const focusLineInboxCar = useCallback(
-    async (payload: LineInboxPickCarPayload) => {
-      const plateQ = String(payload.plate ?? "").trim();
-      if (plateQ && plateQ !== "-") setVehicleSearch(sanitizeVehicleSearchInput(plateQ));
-
-      let orderId = String(payload.orderId ?? "").trim() || null;
-      const carRowId = String(payload.carRowId ?? "").trim();
-      if (!orderId && carRowId) {
-        orderId = mappedOrders.find((o) => String(o.carRowId ?? "").trim() === carRowId)?.id ?? null;
-      }
-      if (!orderId && plateQ && plateQ !== "-") {
-        orderId = mappedOrders.find((o) => matchesVehicleSearch(o, plateQ))?.id ?? null;
-      }
-      if (!orderId) return;
-
-      setLineInboxFocusOrderId(orderId);
-      setSaleFilters(new Set());
-      setSaleStatusFilters(new Set());
-      setStaffFilters(new Set());
-      setItemStatusFilters(new Set());
-
-      const order = mappedOrders.find((o) => o.id === orderId);
-      if (order && orderChipCacheExperimentEnabled) {
-        await hydrateExperimentDetails([order]);
-      }
-
-      const idx = visible.findIndex((o) => o.id === orderId);
-      if (idx >= 0) {
-        setVisibleLimit((prev) => Math.max(prev, idx + 1));
-        setExperimentRequestedCount((prev) =>
-          Math.max(prev, idx + 1 + ORDER_TRACKING_EXPERIMENT_AHEAD_BUFFER)
-        );
-      }
-
-      const tryScroll = (attempt = 0) => {
-        const el = document.getElementById(`order-card-${orderId}`);
-        if (el) {
-          el.scrollIntoView({ behavior: "smooth", block: "start" });
-          window.requestAnimationFrame(() => {
-            document.getElementById("line-inbox-car-ai-section")?.scrollIntoView({
-              behavior: "smooth",
-              block: "nearest",
-            });
-          });
-          return;
-        }
-        if (attempt < 16) window.requestAnimationFrame(() => tryScroll(attempt + 1));
-      };
-      window.requestAnimationFrame(() => tryScroll());
-    },
-    [hydrateExperimentDetails, mappedOrders, orderChipCacheExperimentEnabled, visible]
-  );
-
-  const deepLinkSetupRef = useRef(false);
-  const deepLinkScrollDoneRef = useRef(false);
-  const deepLinkKey = `${String(initialFocusedOrderId ?? "").trim()}\u0000${deepLinkParams.carRowId}\u0000${deepLinkParams.search}`;
-  const lastDeepLinkKeyRef = useRef("");
-  useEffect(() => {
-    if (lastDeepLinkKeyRef.current === deepLinkKey) return;
-    lastDeepLinkKeyRef.current = deepLinkKey;
-    deepLinkSetupRef.current = false;
-    deepLinkScrollDoneRef.current = false;
-  }, [deepLinkKey]);
-  const findDeepLinkOrder = useCallback((): Order | null => {
-    const orderId = String(initialFocusedOrderId ?? "").trim();
-    const carRowId = deepLinkParams.carRowId;
-    const search = deepLinkParams.search;
-    if (!orderId && !carRowId && !search) return null;
-    if (orderId) {
-      const byOrderId = mappedOrders.find((o) => o.id === orderId);
-      if (byOrderId) return byOrderId;
-    }
-    if (carRowId) {
-      const byCarRowId = mappedOrders.find((o) => String(o.carRowId ?? "").trim() === carRowId);
-      if (byCarRowId) return byCarRowId;
-    }
-    if (search) {
-      return mappedOrders.find((o) => matchesVehicleSearch(o, search)) ?? null;
-    }
-    return null;
-  }, [deepLinkParams.carRowId, deepLinkParams.search, initialFocusedOrderId, mappedOrders]);
-
-  useEffect(() => {
-    const rawOrderId = String(initialFocusedOrderId ?? "").trim();
-    const rawSearch = deepLinkParams.search;
-    const hasDeepLink = Boolean(rawOrderId || deepLinkParams.carRowId || rawSearch);
-    if (!hasDeepLink || deepLinkSetupRef.current || mappedOrders.length === 0) return;
-    const order = findDeepLinkOrder();
-    if (!order) {
-      if (rawSearch) {
-        const querySearch = sanitizeVehicleSearchInput(rawSearch);
-        setVehicleSearch((prev) => (prev === querySearch ? prev : querySearch));
-      }
-      if (!rawOrderId && !deepLinkParams.carRowId) {
-        deepLinkSetupRef.current = true;
-        deepLinkScrollDoneRef.current = true;
-      }
-      return;
-    }
-    const q = rawSearch || String(order.fullPlate ?? "").trim() || String(order.plate ?? "").trim();
-    deepLinkSetupRef.current = true;
-    void focusLineInboxCar({
-      orderId: order.id,
-      carRowId: String(order.carRowId ?? deepLinkParams.carRowId ?? "").trim() || null,
-      plate: q && q !== "-" ? q : "-",
-    });
-  }, [
-    deepLinkParams.carRowId,
-    deepLinkParams.search,
-    findDeepLinkOrder,
-    focusLineInboxCar,
-    initialFocusedOrderId,
-    mappedOrders.length,
-  ]);
-
-  useLayoutEffect(() => {
-    const rawOrderId = String(initialFocusedOrderId ?? "").trim();
-    if (
-      !rawOrderId &&
-      !deepLinkParams.carRowId &&
-      !deepLinkParams.search
-    ) {
-      return;
-    }
-    if (deepLinkScrollDoneRef.current || !deepLinkSetupRef.current) return;
-    const order = findDeepLinkOrder();
-    if (!order) {
-      deepLinkScrollDoneRef.current = true;
-      return;
-    }
-    const idx = visible.findIndex((o) => o.id === order.id);
-    if (idx < 0) return;
-    setVisibleLimit((prev) => Math.max(prev, idx + 1));
-    setExperimentRequestedCount((prev) =>
-      Math.max(prev, idx + 1 + ORDER_TRACKING_EXPERIMENT_AHEAD_BUFFER)
-    );
-    const el = document.getElementById(`order-card-${order.id}`);
-    if (!el) return;
-    window.requestAnimationFrame(() => {
-      el.scrollIntoView({ behavior: "smooth", block: "nearest" });
-      deepLinkScrollDoneRef.current = true;
-    });
-  }, [deepLinkParams.carRowId, deepLinkParams.search, findDeepLinkOrder, initialFocusedOrderId, visible]);
-
-  useEffect(() => {
-    startTransition(() => {
-      setVisibleLimit(ORDERS_INITIAL_PAGE_SIZE);
-      setExperimentRequestedCount(ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT);
-    });
-  }, [
-    filteringSaleStatusFilters,
-    filteringStaffFilters,
-    filteringItemStatusFilters,
-    filteringSaleFilters,
-    filteringVehicleSearchForFiltering,
-  ]);
-
-  useEffect(() => {
-    if (!orderChipCacheExperimentEnabled) return;
-    if (typeof window === "undefined") return;
-    if (visible.length <= ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT) return;
-
-    const requestAheadFromViewport = () => {
-      experimentScrollBufferRafRef.current = null;
-      let furthestVisibleIndex = -1;
-      const viewportTop = 0;
-      const viewportBottom = window.innerHeight || document.documentElement.clientHeight || 0;
-
-      for (const order of visiblePagedForRender) {
-        const el = document.getElementById(`order-card-${order.id}`);
-        if (!el) continue;
-        const rect = el.getBoundingClientRect();
-        if (rect.bottom <= viewportTop || rect.top >= viewportBottom) continue;
-        const idx = visibleIndexByOrderId.get(order.id);
-        if (idx == null) continue;
-        furthestVisibleIndex = Math.max(furthestVisibleIndex, idx);
-      }
-
-      if (furthestVisibleIndex < 0) return;
-      const nextRequested = Math.min(
-        visible.length,
-        Math.max(
-          ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT,
-          furthestVisibleIndex + 1 + ORDER_TRACKING_EXPERIMENT_AHEAD_BUFFER
-        )
-      );
-      setExperimentRequestedCount((prev) => (nextRequested > prev ? nextRequested : prev));
-    };
-
-    const scheduleAheadBuffer = () => {
-      if (experimentScrollBufferRafRef.current != null) return;
-      experimentScrollBufferRafRef.current = window.requestAnimationFrame(requestAheadFromViewport);
-    };
-
-    window.addEventListener("scroll", scheduleAheadBuffer, { passive: true });
-    window.addEventListener("resize", scheduleAheadBuffer);
-    return () => {
-      window.removeEventListener("scroll", scheduleAheadBuffer);
-      window.removeEventListener("resize", scheduleAheadBuffer);
-      if (experimentScrollBufferRafRef.current != null) {
-        window.cancelAnimationFrame(experimentScrollBufferRafRef.current);
-        experimentScrollBufferRafRef.current = null;
-      }
-    };
-  }, [
-    orderChipCacheExperimentEnabled,
-    visible.length,
-    visibleIndexByOrderId,
-    visiblePagedForRender,
-  ]);
-
-  useEffect(() => {
-    if (!hasMoreVisible) return;
-    if (orderChipCacheExperimentEnabled && experimentLoadingDetails) return;
-    const target = loadMoreRef.current;
-    if (!target) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const entry = entries[0];
-        if (!entry?.isIntersecting) return;
-        if (orderChipCacheExperimentEnabled) {
-          setExperimentRequestedCount((prev) =>
-            Math.min(visible.length, prev + ORDER_TRACKING_EXPERIMENT_INCREMENT)
-          );
-          return;
-        }
-        setVisibleLimit((prev) => prev + ORDERS_PAGE_INCREMENT);
-      },
-      { rootMargin: "200px 0px 200px 0px", threshold: 0.01 }
-    );
-    observer.observe(target);
-    return () => observer.disconnect();
-  }, [experimentLoadingDetails, hasMoreVisible, orderChipCacheExperimentEnabled, visible.length]);
-
-  const deleteVehicleChar = () => setVehicleSearch((prev) => prev.slice(0, -1));
-  const runWithStableScroll = (action: () => void) => {
-    pendingScrollYRef.current = window.scrollY;
-    action();
-  };
-  const loadAllSaleStatusScope = (saleStatus?: SaleStatusValue) => {
-    const p = new URLSearchParams(searchParams?.toString() ?? "");
-    p.set("load", "full");
-    p.set("scope", "all");
-    if (saleStatus) p.set("saleStatus", saleStatus);
-    else p.delete("saleStatus");
-    const nextUrl = `${pathname}?${p.toString()}`;
-    router.replace(nextUrl, { scroll: false });
-    window.setTimeout(() => {
-      if (String(new URLSearchParams(window.location.search).get("scope") ?? "").trim().toLowerCase() !== "all") {
-        window.location.replace(nextUrl);
-      }
-    }, 1200);
-  };
-  const toggleSaleChipStable = (sale: string) =>
-    runWithStableScroll(() => {
-      if (sale === "ALL") {
-        setSaleFilters(new Set());
-        return;
-      }
-      setSaleFilters(new Set([sale]));
-    });
-  const toggleSaleStatusChipStable = (value: SaleStatusFilterValue) =>
-    runWithStableScroll(() => {
-      const currentScope = String(searchParams?.get("scope") ?? "").trim().toLowerCase();
-      if (currentScope !== "all" && (value === "‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î" || value === "‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß")) {
-        setSaleStatusFilters(value === "‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß" ? new Set(["‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß"]) : new Set());
-        loadAllSaleStatusScope(value === "‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß" ? "‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß" : undefined);
-        return;
-      }
-      if (value === "‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î") {
-        setSaleStatusFilters(new Set());
-        return;
-      }
-      if (!filterChipMultiSelect) {
-        setSaleStatusFilters((prev) => {
-          if (prev.size === 1 && prev.has(value)) return new Set();
-          return new Set([value]);
-        });
-        return;
-      }
-      setSaleStatusFilters((prev) => toggleSetMember(prev, value));
-    });
-  const toggleStaffChipStable = (value: string) =>
-    runWithStableScroll(() => {
-      if (value === "‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î") {
-        setStaffFilters(new Set());
-        return;
-      }
-      if (!filterChipMultiSelect) {
-        setStaffFilters((prev) => {
-          if (prev.size === 1 && prev.has(value)) return new Set();
-          return new Set([value]);
-        });
-        return;
-      }
-      setStaffFilters((prev) => toggleSetMember(prev, value));
-    });
-  const clearSoldShippedDimStable = () =>
-    runWithStableScroll(() => setStaffFilters((prev) => stripSoldShippedStaffFilters(prev)));
-  const clearSoldModelYearDimStable = () =>
-    runWithStableScroll(() => setStaffFilters((prev) => stripSoldModelYearStaffFilters(prev)));
-  const clearVacantSaleModelYearDimStable = () =>
-    runWithStableScroll(() => setStaffFilters((prev) => stripVacantSaleModelYearStaffFilters(prev)));
-  const toggleItemStatusChipStable = (value: ItemStatusFilterValue | typeof ITEM_STATUS_DUE_TODAY) =>
-    runWithStableScroll(() => {
-      if (!filterChipMultiSelect) {
-        setItemStatusFilters((prev) => {
-          if (prev.size === 1 && prev.has(value)) return new Set();
-          return new Set([value]);
-        });
-        return;
-      }
-      setItemStatusFilters((prev) => toggleSetMember(prev, value));
-    });
-  const toggleFilterChipModeStable = () =>
-    runWithStableScroll(() => setFilterChipMultiSelect((v) => !v));
-  const clearItemStatusFiltersStable = () =>
-    runWithStableScroll(() => setItemStatusFilters(new Set()));
-  const clearVehicleStable = () =>
-    runWithStableScroll(() => {
-      setVehicleSearch("");
-      setVisibleLimit(ORDERS_INITIAL_PAGE_SIZE);
-      setExperimentRequestedCount(ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT);
-    });
-  const deleteVehicleStable = () => runWithStableScroll(() => deleteVehicleChar());
-  const clearFiltersStable = () =>
-    runWithStableScroll(() => {
-      setSaleFilters(new Set());
-      setSaleStatusFilters(new Set());
-      setVehicleSearch("");
-      setStaffFilters(new Set());
-      setItemStatusFilters(new Set());
-      setVisibleLimit(ORDERS_INITIAL_PAGE_SIZE);
-      setExperimentRequestedCount(ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT);
-    });
-  const hasActiveFilters =
-    saleFilters.size > 0 ||
-    saleStatusFilters.size > 0 ||
-    staffFilters.size > 0 ||
-    itemStatusFilters.size > 0 ||
-    vehicleSearch.trim().length > 0;
-
-  useLayoutEffect(() => {
-    if (pendingScrollYRef.current == null) return;
-    const y = pendingScrollYRef.current;
-    pendingScrollYRef.current = null;
-    window.requestAnimationFrame(() => {
-      window.scrollTo({ top: y, left: 0, behavior: "auto" });
-      window.setTimeout(() => {
-        window.scrollTo({ top: y, left: 0, behavior: "auto" });
-      }, 0);
-    });
-  }, [saleStatusFilters, vehicleSearch, itemStatusFilters, staffFilters, visibleLimit, saleFilters, experimentRequestedCount]);
-
-  /** ‡∏ã‡∏¥‡∏á‡∏Å‡πå‡∏Ç‡πâ‡∏≤‡∏°‡πÄ‡∏Ñ‡∏£‡∏∑‡πà‡∏≠‡∏á: ‡πÄ‡∏°‡∏∑‡πà‡∏≠‡∏°‡∏µ‡∏Ñ‡∏ô‡πÅ‡∏Å‡πâ order_items / order_task_updates ‡πÉ‡∏´‡πâ‡∏î‡∏∂‡∏á‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡∏´‡∏ô‡πâ‡∏≤‡πÉ‡∏´‡∏°‡πà (‡∏ï‡πâ‡∏≠‡∏á‡πÄ‡∏õ‡∏¥‡∏î Realtime ‡πÉ‡∏ô‡∏Ñ‡∏≠‡∏ô‡πÇ‡∏ã‡∏• Supabase) */
-  useEffect(() => {
-    if (usingDemoFallback) return;
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
-    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim();
-    if (!url || !key) return;
-
-    let cancelled = false;
-    let debounce: ReturnType<typeof setTimeout> | undefined;
-    const scheduleRefresh = () => {
-      if (cancelled) return;
-      if (debounce) clearTimeout(debounce);
-      debounce = setTimeout(() => {
-        debounce = undefined;
-        router.refresh();
-      }, 500);
-    };
-
-    const supabase = createClient(url, key, {
-      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-    });
-
-    const channel = supabase
-      .channel("mobile-order-tracking-sync")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: ORDER_ITEMS_TABLE_NAME },
-        scheduleRefresh
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: ORDER_TASK_UPDATES_TABLE_NAME },
-        scheduleRefresh
-      )
-      .subscribe();
-
-    return () => {
-      cancelled = true;
-      if (debounce) clearTimeout(debounce);
-      void supabase.removeChannel(channel);
-    };
-  }, [router, usingDemoFallback]);
-
-  /** ‡∏î‡∏∂‡∏á‡∏•‡∏á‡πÄ‡∏°‡∏∑‡πà‡∏≠‡∏≠‡∏¢‡∏π‡πà‡∏ö‡∏ô‡∏™‡∏∏‡∏î‡∏Ç‡∏≠‡∏á‡∏´‡∏ô‡πâ‡∏≤ ‚Üí router.refresh() (‡∏ä‡∏î‡πÄ‡∏ä‡∏¢‡∏Å‡∏£‡∏ì‡∏µ Realtime ‡πÑ‡∏°‡πà‡∏ó‡∏≥‡∏á‡∏≤‡∏ô‡∏´‡∏£‡∏∑‡∏≠‡∏´‡∏ô‡πâ‡∏≤‡∏≠‡∏∑‡πà‡∏ô‡πÑ‡∏°‡πà‡πÑ‡∏î‡πâ subscribe) */
-  useEffect(() => {
-    const el = orderTrackingRootRef.current;
-    if (typeof window === "undefined" || !el) return;
-
-    const scrollAtTop = () => window.scrollY <= 2;
-
-    const clearPullVisual = () => {
-      ptrArmRef.current = false;
-      ptrPullRef.current = 0;
-      setPtrPullPx(0);
-    };
-
-    const onTouchStart = (e: TouchEvent) => {
-      if (!scrollAtTop() || ptrRefreshingRef.current) return;
-      ptrArmRef.current = true;
-      ptrStartYRef.current = e.touches[0].clientY;
-      ptrStartXRef.current = e.touches[0].clientX;
-    };
-
-    const onTouchMove = (e: TouchEvent) => {
-      if (!ptrArmRef.current || ptrRefreshingRef.current) return;
-      if (!scrollAtTop()) {
-        clearPullVisual();
-        return;
-      }
-      const dy = e.touches[0].clientY - ptrStartYRef.current;
-      const dx = e.touches[0].clientX - ptrStartXRef.current;
-      if (dy < 6) return;
-      if (Math.abs(dx) > Math.abs(dy) * 0.75) return;
-      const damped = Math.min(dy * 0.35, 72);
-      ptrPullRef.current = damped;
-      setPtrPullPx(damped);
-      if (damped > 4) e.preventDefault();
-    };
-
-    const endPull = () => {
-      if (!ptrArmRef.current) return;
-      ptrArmRef.current = false;
-      const shouldRefresh = ptrPullRef.current >= PTR_RELEASE_DAMPED_PX && !ptrRefreshingRef.current;
-      ptrPullRef.current = 0;
-      setPtrPullPx(0);
-      if (shouldRefresh) {
-        ptrRefreshingRef.current = true;
-        setPtrRefreshing(true);
-        startTransition(() => {
-          router.refresh();
-        });
-        window.setTimeout(() => {
-          ptrRefreshingRef.current = false;
-          setPtrRefreshing(false);
-        }, 900);
-      }
-    };
-
-    el.addEventListener("touchstart", onTouchStart, { passive: true });
-    el.addEventListener("touchmove", onTouchMove, { passive: false });
-    el.addEventListener("touchend", endPull);
-    el.addEventListener("touchcancel", clearPullVisual);
-    return () => {
-      el.removeEventListener("touchstart", onTouchStart);
-      el.removeEventListener("touchmove", onTouchMove);
-      el.removeEventListener("touchend", endPull);
-      el.removeEventListener("touchcancel", clearPullVisual);
-    };
-  }, [router]);
-
-  return (
-    <>
-      {ptrPullPx > 2 || ptrRefreshing ? (
-        <div
-          className="pointer-events-none fixed inset-x-0 z-[60] flex justify-center px-3"
-          style={{
-            top: 0,
-            paddingTop: "max(env(safe-area-inset-top, 0px), 6px)",
-            transform: `translateY(${ptrRefreshing ? 0 : Math.max(0, ptrPullPx - 10)}px)`,
-          }}
-          aria-live="polite"
-        >
-          <div className="flex max-w-[min(100%,20rem)] items-center gap-2 rounded-full bg-slate-900/92 px-3.5 py-2 text-center text-[11px] font-semibold leading-snug text-white shadow-lg ring-1 ring-white/10">
-            {ptrRefreshing ? (
-              <>
-                <span
-                  className="inline-block h-3.5 w-3.5 shrink-0 rounded-full border-2 border-white/35 border-t-white animate-spin"
-                  aria-hidden
-                />
-                <span>{uiLang === "en" ? "Loading data..." : "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡πÇ‡∏´‡∏•‡∏î‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‚Ä¶"}</span>
-              </>
-            ) : ptrPullPx >= PTR_RELEASE_DAMPED_PX ? (
-              <span>{uiLang === "en" ? "Release to refresh" : "‡∏õ‡∏•‡πà‡∏≠‡∏¢‡πÄ‡∏û‡∏∑‡πà‡∏≠‡∏£‡∏µ‡πÄ‡∏ü‡∏£‡∏ä"}</span>
-            ) : (
-              <span>{uiLang === "en" ? "Pull to refresh" : "‡∏î‡∏∂‡∏á‡∏•‡∏á‡πÄ‡∏û‡∏∑‡πà‡∏≠‡∏£‡∏µ‡πÄ‡∏ü‡∏£‡∏ä"}</span>
-            )}
-          </div>
-        </div>
-      ) : null}
-      <LineInboxBridgeProvider
-        orders={lineInboxAiOrderPicks}
-        uiLang={uiLang}
-        preferredOrderId={initialFocusedOrderId}
-        staffOptions={staffRoster}
-        saleAssigneesBySale={saleAssignees}
-        statusOptions={itemStatusRoster}
-        focusedOrderId={lineInboxFocusOrderId}
-        onPickCar={(payload) => void focusLineInboxCar(payload)}
-        onSaved={() => router.refresh()}
-      >
-      <div
-        ref={orderTrackingRootRef}
-        className="flex min-h-0 min-h-full w-full flex-1 flex-col bg-slate-100 antialiased text-[15px] leading-normal text-slate-800"
-      >
-      <div className="mx-auto flex min-h-0 min-h-full w-full max-w-none flex-1 flex-col overflow-x-clip bg-slate-100">
-        <div className="sticky top-0 z-40 bg-slate-100/95 px-0 pb-2 pt-2 backdrop-blur sm:px-3">
-          <div className="mb-2 rounded-2xl bg-white p-2 shadow-sm ring-1 ring-slate-200/60">
-            <div className="flex w-full flex-nowrap items-center gap-2 overflow-x-auto pb-0.5 [-webkit-overflow-scrolling:touch]">
-              <button
-                type="button"
-                onPointerDown={(e) => e.preventDefault()}
-                onClick={() => {
-                  window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
-                }}
-                title={uiLang === "en" ? "Scroll to top" : "‡πÄ‡∏•‡∏∑‡πà‡∏≠‡∏ô‡∏´‡∏ô‡πâ‡∏≤‡∏à‡∏≠‡πÑ‡∏õ‡∏ö‡∏ô‡∏™‡∏∏‡∏î"}
-                aria-label={uiLang === "en" ? "Scroll to top" : "‡πÄ‡∏•‡∏∑‡πà‡∏≠‡∏ô‡∏´‡∏ô‡πâ‡∏≤‡∏à‡∏≠‡πÑ‡∏õ‡∏ö‡∏ô‡∏™‡∏∏‡∏î"}
-                className="inline-flex h-10 shrink-0 items-center justify-center rounded-2xl bg-slate-100 px-3 text-xs font-semibold text-slate-700 ring-1 ring-slate-200 touch-manipulation active:bg-slate-200/90"
-              >
-                {uiLang === "en" ? "Top" : "‡∏ö‡∏ô‡∏™‡∏∏‡∏î"}
-              </button>
-              <button
-                type="button"
-                onPointerDown={(e) => e.preventDefault()}
-                onClick={() => setUiLang((prev) => (prev === "th" ? "en" : "th"))}
-                className="inline-flex h-10 min-w-10 shrink-0 items-center justify-center rounded-2xl bg-slate-100 px-2.5 text-xs font-semibold text-slate-700 ring-1 ring-slate-200 touch-manipulation active:bg-slate-200/90"
-                title={uiLang === "en" ? "Switch language" : "‡∏™‡∏•‡∏±‡∏ö‡∏†‡∏≤‡∏©‡∏≤"}
-                aria-label={uiLang === "en" ? "Switch language" : "‡∏™‡∏•‡∏±‡∏ö‡∏†‡∏≤‡∏©‡∏≤"}
-              >
-                {uiLang === "th" ? <OrderTrackingToolbarFlagTh /> : <OrderTrackingToolbarFlagGb />}
-              </button>
-              <span className="shrink-0 text-sm font-semibold text-slate-900">{uiLang === "en" ? "Search" : "‡∏Ñ‡πâ‡∏ô‡∏´‡∏≤"}</span>
-              <input
-                type="text"
-                inputMode="text"
-                enterKeyHint="search"
-                autoCapitalize="characters"
-                autoCorrect="off"
-                spellCheck={false}
-                autoComplete="off"
-                value={vehicleSearch}
-                onChange={(e) => setVehicleSearch(sanitizeVehicleSearchInput(e.target.value))}
-                onPaste={(e) => {
-                  e.preventDefault();
-                  const raw = e.clipboardData.getData("text/plain");
-                  const cleaned = sanitizeVehicleSearchPaste(raw);
-                  if (cleaned) setVehicleSearch(cleaned);
-                }}
-                placeholder={uiLang === "en" ? "Plate / Chassis‚Ä¶" : "‡∏ó‡∏∞‡πÄ‡∏ö‡∏µ‡∏¢‡∏ô / ‡πÄ‡∏•‡∏Ç‡∏ñ‡∏±‡∏á‚Ä¶"}
-                title={uiLang === "en" ? "Type or long-press to paste from clipboard" : "‡πÅ‡∏ï‡∏∞‡πÅ‡∏•‡πâ‡∏ß‡∏û‡∏¥‡∏°‡∏û‡πå ‡∏´‡∏£‡∏∑‡∏≠‡∏Å‡∏î‡∏Ñ‡πâ‡∏≤‡∏á‡πÄ‡∏û‡∏∑‡πà‡∏≠‡∏ß‡∏≤‡∏á‡∏à‡∏≤‡∏Å‡∏Ñ‡∏•‡∏¥‡∏õ‡∏ö‡∏≠‡∏£‡πå‡∏î"}
-                aria-label={uiLang === "en" ? "Search plate or chassis, type or paste from clipboard" : "‡∏Ñ‡πâ‡∏ô‡∏´‡∏≤‡∏ó‡∏∞‡πÄ‡∏ö‡∏µ‡∏¢‡∏ô‡∏´‡∏£‡∏∑‡∏≠‡πÄ‡∏•‡∏Ç‡∏ï‡∏±‡∏ß‡∏ñ‡∏±‡∏á ‡∏û‡∏¥‡∏°‡∏û‡πå‡∏´‡∏£‡∏∑‡∏≠‡∏ß‡∏≤‡∏á‡∏à‡∏≤‡∏Å‡∏Ñ‡∏•‡∏¥‡∏õ‡∏ö‡∏≠‡∏£‡πå‡∏î"}
-                className={cn(
-                  "min-h-11 min-w-0 flex-1 rounded-2xl bg-slate-950 px-3 py-2.5 text-center text-base font-semibold tabular-nums tracking-normal text-white",
-                  "outline-none ring-0 placeholder:text-white/45",
-                  "focus-visible:ring-2 focus-visible:ring-white/35"
-                )}
-              />
-              <button
-                type="button"
-                onPointerDown={(e) => e.preventDefault()}
-                onClick={deleteVehicleStable}
-                className="h-10 shrink-0 rounded-2xl bg-slate-950 px-3 text-xs font-semibold text-white touch-manipulation"
-              >
-                {uiLang === "en" ? "Del" : "‡∏•‡∏ö"}
-              </button>
-              <button
-                type="button"
-                onPointerDown={(e) => e.preventDefault()}
-                onClick={clearVehicleStable}
-                className="h-10 shrink-0 rounded-2xl bg-slate-100 px-3 text-xs font-semibold text-slate-700 ring-1 ring-slate-200 touch-manipulation"
-              >
-                {uiLang === "en" ? "Clear" : "‡∏•‡πâ‡∏≤‡∏á"}
-              </button>
-            </div>
-          </div>
-        </div>
-        <header className="bg-slate-100/95 px-0 py-2 sm:px-3 sm:py-3">
-          <div className="mb-2 flex flex-wrap items-center gap-2 px-2 sm:px-0">
-            <h1 className="text-[1.35rem] font-bold tracking-tight text-slate-900">Order Tracking</h1>
-            <button
-              type="button"
-              onPointerDown={(e) => e.preventDefault()}
-              onClick={() => void translateAllLegacyItems()}
-              disabled={translateAllBusy}
-              className={cn(
-                "shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold leading-snug ring-1 touch-manipulation",
-                translateAllBusy
-                  ? "cursor-not-allowed bg-slate-200 text-slate-500 ring-slate-300/80"
-                  : "bg-blue-50 text-blue-900 ring-blue-200/90"
-              )}
-              title={
-                uiLang === "en"
-                  ? "Re-translate item names and Thai notes (latest rows; API limit applies)"
-                  : "‡πÅ‡∏õ‡∏•‡πÉ‡∏´‡∏°‡πà‡∏ó‡∏±‡πâ‡∏á‡∏ä‡∏∑‡πà‡∏≠‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡πÅ‡∏•‡∏∞‡∏´‡∏°‡∏≤‡∏¢‡πÄ‡∏´‡∏ï‡∏∏‡πÑ‡∏ó‡∏¢‡πÅ‡∏ö‡∏ö‡∏Å‡∏•‡∏∏‡πà‡∏° (‡πÄ‡∏£‡∏µ‡∏¢‡∏á‡∏à‡∏≤‡∏Å‡πÅ‡∏ñ‡∏ß‡∏•‡πà‡∏≤‡∏™‡∏∏‡∏î ‡∏à‡∏≥‡∏Å‡∏±‡∏î‡∏à‡∏≥‡∏ô‡∏ß‡∏ô‡∏ï‡∏≤‡∏°‡πÄ‡∏ã‡∏¥‡∏£‡πå‡∏ü‡πÄ‡∏ß‡∏≠‡∏£‡πå)"
-              }
-            >
-              {translateAllBusy
-                ? (uiLang === "en" ? "Translating..." : "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡πÅ‡∏õ‡∏•...")
-                : (uiLang === "en" ? "Re-translate all" : "‡πÅ‡∏õ‡∏•‡πÉ‡∏´‡∏°‡πà‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î")}
-            </button>
-            <button
-              type="button"
-              onPointerDown={(e) => e.preventDefault()}
-              onClick={toggleFilterChipModeStable}
-              title={
-                filterChipMultiSelect
-                  ? (uiLang === "en"
-                      ? "Current mode: multi-select chips per row. Tap to switch to single-select."
-                      : "‡πÇ‡∏´‡∏°‡∏î‡∏õ‡∏±‡∏à‡∏à‡∏∏‡∏ö‡∏±‡∏ô: ‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏´‡∏•‡∏≤‡∏¢‡∏ä‡∏¥‡∏õ‡∏ï‡πà‡∏≠‡πÅ‡∏ñ‡∏ß ¬∑ ‡πÅ‡∏ï‡∏∞‡πÄ‡∏û‡∏∑‡πà‡∏≠‡∏™‡∏•‡∏±‡∏ö‡πÄ‡∏õ‡πá‡∏ô‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏ó‡∏µ‡∏•‡∏∞‡∏´‡∏ô‡∏∂‡πà‡∏á")
-                  : (uiLang === "en"
-                      ? "Current mode: single-select per row. Tap to switch to multi-select."
-                      : "‡πÇ‡∏´‡∏°‡∏î‡∏õ‡∏±‡∏à‡∏à‡∏∏‡∏ö‡∏±‡∏ô: ‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏ó‡∏µ‡∏•‡∏∞‡∏´‡∏ô‡∏∂‡πà‡∏á‡∏ï‡πà‡∏≠‡πÅ‡∏ñ‡∏ß ¬∑ ‡πÅ‡∏ï‡∏∞‡πÄ‡∏û‡∏∑‡πà‡∏≠‡∏™‡∏•‡∏±‡∏ö‡πÄ‡∏õ‡πá‡∏ô‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏´‡∏•‡∏≤‡∏¢‡∏ä‡∏¥‡∏õ")
-              }
-              aria-pressed={filterChipMultiSelect}
-              className={cn(
-                "shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold leading-snug ring-1 touch-manipulation",
-                filterChipMultiSelect
-                  ? "bg-slate-950 text-white ring-slate-800"
-                  : "bg-amber-100 text-amber-950 ring-amber-300/90"
-              )}
-            >
-              {filterChipMultiSelect
-                ? (uiLang === "en" ? "Multi Select" : "‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏´‡∏•‡∏≤‡∏¢‡∏ä‡∏¥‡∏õ")
-                : (uiLang === "en" ? "Single Select" : "‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏ó‡∏µ‡∏•‡∏∞‡∏´‡∏ô‡∏∂‡πà‡∏á")}
-            </button>
-            {orderChipCacheExperimentEnabled && orderChipCacheBadgeLabel ? (
-              <span className="shrink-0 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold leading-snug text-emerald-900 ring-1 ring-emerald-200/90">
-                {filterRenderPending ? (uiLang === "en" ? "Updating" : "Updating") : orderChipCacheBadgeLabel}
-              </span>
-            ) : null}
-            {orderChipCacheExperimentEnabled && hasActiveFilters ? (
-              <button
-                type="button"
-                onPointerDown={(e) => e.preventDefault()}
-                onClick={clearFiltersStable}
-                className="shrink-0 rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold leading-snug text-slate-800 ring-1 ring-slate-200 touch-manipulation active:bg-slate-100"
-              >
-                {uiLang === "en" ? "Clear filters" : "‡∏•‡πâ‡∏≤‡∏á filter"}
-              </button>
-            ) : null}
-          </div>
-          {translateAllMessage ? (
-            <div className="mb-2 rounded-2xl bg-sky-50 px-3 py-2 text-xs font-medium leading-snug text-sky-900">
-              {translateAllMessage}
-            </div>
-          ) : null}
-          {usingDemoFallback ? (
-            <div className="mb-2 rounded-2xl bg-amber-50 px-3 py-2.5 text-sm font-medium leading-snug text-amber-900">
-              {uiLang === "en"
-                ? "Demo fallback mode: live cars data not found from Supabase"
-                : "Demo fallback mode: ‡πÑ‡∏°‡πà‡∏û‡∏ö‡∏Ç‡πâ‡∏≠‡∏°‡∏π‡∏•‡∏£‡∏ñ‡∏à‡∏£‡∏¥‡∏á‡∏à‡∏≤‡∏Å Supabase"}
-            </div>
-          ) : null}
-          {isDeferredHydrationLoading ? (
-            <div className="mb-2 rounded-2xl bg-sky-50 px-3 py-2.5 text-sm font-medium leading-snug text-sky-900">
-              {uiLang === "en"
-                ? `Loading car list in the background... ${deferredHydrationPercent}%`
-                : `‡∏Å‡∏≥‡∏•‡∏±‡∏á‡πÇ‡∏´‡∏•‡∏î‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏£‡∏ñ‡πÉ‡∏ô‡∏û‡∏∑‡πâ‡∏ô‡∏´‡∏•‡∏±‡∏á... ${deferredHydrationPercent}%`}
-            </div>
-          ) : null}
-          {dataWarnings.length > 0 && !suppressDataWarningsDuringDeferredHydration ? (
-            <div className="mb-2 rounded-2xl bg-rose-50 px-3 py-2.5 text-sm font-medium leading-snug text-rose-800">
-              Data warning: {dataWarnings[0]}
-            </div>
-          ) : null}
-          {experimentDetailError && orderChipCacheExperimentEnabled ? (
-            <div className="mb-2 rounded-2xl bg-amber-50 px-3 py-2 text-xs font-semibold leading-snug text-amber-900 ring-1 ring-amber-100">
-              {uiLang === "en" ? "Detail loading warning: " : "‡πÇ‡∏´‡∏•‡∏î‡∏£‡∏≤‡∏¢‡∏•‡∏∞‡πÄ‡∏≠‡∏µ‡∏¢‡∏î‡∏ö‡∏≤‡∏á‡∏™‡πà‡∏ß‡∏ô‡πÑ‡∏°‡πà‡∏™‡∏≥‡πÄ‡∏£‡πá‡∏à: "}
-              {experimentDetailError}
-            </div>
-          ) : null}
-          <>
-              <div className="mb-2 rounded-2xl bg-white p-2">
-                <div className="mb-2 rounded-2xl bg-slate-100/80 p-2">
-                  <div className="mb-1.5">
-                    <span className="text-xs font-semibold tracking-wide text-slate-600">{uiLang === "en" ? "Sale Status" : "‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏Ç‡∏≤‡∏¢"}</span>
-                  </div>
-                  <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(72px, 1fr))" }}>
-                    {saleStatusChipModels.map(({ saleStatus: s, active, count }) => {
-                      const showShipExpand = s === "‡∏£‡∏≠‡∏™‡πà‡∏á" && bookedShippingRounds.length > 0;
-                      const showBuyerExpand = s === "‡∏à‡∏≠‡∏á" && bookedBuyerRounds.length > 0;
-                      const showShippedSoldExpand = s === "‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß" && shippedSoldToolbarStats.soldCount > 0;
-                      const showVacantModelYearExpand = s === "‡∏ß‡πà‡∏≤‡∏á" && vacantSaleToolbarStats.vacantCount > 0;
-                      if (showShipExpand) {
-                        return (
-                          <div
-                            key={s}
-                            className={cn(
-                              "flex min-h-[48px] min-w-0 overflow-hidden rounded-2xl ring-1 transition-colors",
-                              active ? "bg-slate-950 text-white ring-slate-800" : "bg-slate-100 text-slate-700 ring-slate-200/80"
-                            )}
-                          >
-                            <button
-                              type="button"
-                              onPointerDown={(e) => e.preventDefault()}
-                              onClick={() => toggleSaleStatusChipStable(s)}
-                              className={cn(
-                                "flex min-h-[48px] min-w-0 flex-1 flex-col items-center justify-center px-1.5 py-2 text-center transition-colors touch-manipulation",
-                                active ? "text-white" : "hover:bg-slate-200/70"
-                              )}
-                            >
-                              <div className="truncate text-xs font-medium leading-snug">{displaySaleStatusLabel(s, uiLang)}</div>
-                              <div className="text-base font-semibold tabular-nums leading-none">
-                                {count}
-                              </div>
-                            </button>
-                            <button
-                              type="button"
-                              onPointerDown={(e) => e.preventDefault()}
-                              onClick={() => setBookedShippingPanelExpanded((open) => !open)}
-                              aria-expanded={bookedShippingPanelExpanded}
-                              aria-label={
-                                bookedShippingPanelExpanded
-                                  ? "‡∏¢‡πà‡∏≠‡∏£‡∏≠‡∏ö‡∏™‡πà‡∏á booked shipping"
-                                  : "‡∏Ç‡∏¢‡∏≤‡∏¢‡∏£‡∏≠‡∏ö‡∏™‡πà‡∏á booked shipping"
-                              }
-                              title="‡∏£‡∏≠‡∏ö‡∏™‡πà‡∏á (booked shipping)"
-                              className={cn(
-                                "flex w-9 shrink-0 flex-col items-center justify-center text-base font-semibold leading-none touch-manipulation",
-                                active
-                                  ? "border-l border-white/25 text-white hover:bg-white/10"
-                                  : "border-l border-slate-200/90 text-slate-600 hover:bg-slate-200/60"
-                              )}
-                            >
-                              {bookedShippingPanelExpanded ? "‚åÉ" : "‚åÑ"}
-                            </button>
-                          </div>
-                        );
-                      }
-                      if (showBuyerExpand) {
-                        return (
-                          <div
-                            key={s}
-                            className={cn(
-                              "flex min-h-[48px] min-w-0 overflow-hidden rounded-2xl ring-1 transition-colors",
-                              active ? "bg-slate-950 text-white ring-slate-800" : "bg-slate-100 text-slate-700 ring-slate-200/80"
-                            )}
-                          >
-                            <button
-                              type="button"
-                              onPointerDown={(e) => e.preventDefault()}
-                              onClick={() => toggleSaleStatusChipStable(s)}
-                              className={cn(
-                                "flex min-h-[48px] min-w-0 flex-1 flex-col items-center justify-center px-1.5 py-2 text-center transition-colors touch-manipulation",
-                                active ? "text-white" : "hover:bg-slate-200/70"
-                              )}
-                            >
-                              <div className="truncate text-xs font-medium leading-snug">{displaySaleStatusLabel(s, uiLang)}</div>
-                              <div className="text-base font-semibold tabular-nums leading-none">
-                                {count}
-                              </div>
-                            </button>
-                            <button
-                              type="button"
-                              onPointerDown={(e) => e.preventDefault()}
-                              onClick={() => setBookedBuyerPanelExpanded((open) => !open)}
-                              aria-expanded={bookedBuyerPanelExpanded}
-                              aria-label={
-                                bookedBuyerPanelExpanded
-                                  ? "‡∏¢‡πà‡∏≠‡∏Å‡∏•‡∏∏‡πà‡∏°‡∏ï‡∏≤‡∏°‡∏ä‡∏∑‡πà‡∏≠‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤ (‡∏à‡∏≠‡∏á)"
-                                  : "‡∏Ç‡∏¢‡∏≤‡∏¢‡∏Å‡∏•‡∏∏‡πà‡∏°‡∏ï‡∏≤‡∏°‡∏ä‡∏∑‡πà‡∏≠‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤ (‡∏à‡∏≠‡∏á)"
-                              }
-                              title="‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤ (‡∏à‡∏≠‡∏á)"
-                              className={cn(
-                                "flex w-9 shrink-0 flex-col items-center justify-center text-base font-semibold leading-none touch-manipulation",
-                                active
-                                  ? "border-l border-white/25 text-white hover:bg-white/10"
-                                  : "border-l border-slate-200/90 text-slate-600 hover:bg-slate-200/60"
-                              )}
-                            >
-                              {bookedBuyerPanelExpanded ? "‚åÉ" : "‚åÑ"}
-                            </button>
-                          </div>
-                        );
-                      }
-                      if (showShippedSoldExpand) {
-                        return (
-                          <div
-                            key={s}
-                            className={cn(
-                              "flex min-h-[48px] min-w-0 overflow-hidden rounded-2xl ring-1 transition-colors",
-                              active ? "bg-slate-950 text-white ring-slate-800" : "bg-slate-100 text-slate-700 ring-slate-200/80"
-                            )}
-                          >
-                            <button
-                              type="button"
-                              onPointerDown={(e) => e.preventDefault()}
-                              onClick={() => toggleSaleStatusChipStable(s)}
-                              className={cn(
-                                "flex min-h-[48px] min-w-0 flex-1 flex-col items-center justify-center px-1.5 py-2 text-center transition-colors touch-manipulation",
-                                active ? "text-white" : "hover:bg-slate-200/70"
-                              )}
-                            >
-                              <div className="truncate text-xs font-medium leading-snug">{displaySaleStatusLabel(s, uiLang)}</div>
-                              <div className="text-base font-semibold tabular-nums leading-none">
-                                {count}
-                              </div>
-                            </button>
-                            <button
-                              type="button"
-                              onPointerDown={(e) => e.preventDefault()}
-                              onClick={() => setShippedSoldExtrasPanelExpanded((open) => !open)}
-                              aria-expanded={shippedSoldExtrasPanelExpanded}
-                              aria-label={
-                                shippedSoldExtrasPanelExpanded
-                                  ? "‡∏¢‡πà‡∏≠‡∏Å‡∏£‡∏≠‡∏á shipped / model year (‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß)"
-                                  : "‡∏Ç‡∏¢‡∏≤‡∏¢‡∏Å‡∏£‡∏≠‡∏á shipped / model year (‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß)"
-                              }
-                              title="shipped ¬∑ model year"
-                              className={cn(
-                                "flex w-9 shrink-0 flex-col items-center justify-center text-base font-semibold leading-none touch-manipulation",
-                                active
-                                  ? "border-l border-white/25 text-white hover:bg-white/10"
-                                  : "border-l border-slate-200/90 text-slate-600 hover:bg-slate-200/60"
-                              )}
-                            >
-                              {shippedSoldExtrasPanelExpanded ? "‚åÉ" : "‚åÑ"}
-                            </button>
-                          </div>
-                        );
-                      }
-                      if (showVacantModelYearExpand) {
-                        return (
-                          <div
-                            key={s}
-                            className={cn(
-                              "flex min-h-[48px] min-w-0 overflow-hidden rounded-2xl ring-1 transition-colors",
-                              active ? "bg-slate-950 text-white ring-slate-800" : "bg-slate-100 text-slate-700 ring-slate-200/80"
-                            )}
-                          >
-                            <button
-                              type="button"
-                              onPointerDown={(e) => e.preventDefault()}
-                              onClick={() => toggleSaleStatusChipStable(s)}
-                              className={cn(
-                                "flex min-h-[48px] min-w-0 flex-1 flex-col items-center justify-center px-1.5 py-2 text-center transition-colors touch-manipulation",
-                                active ? "text-white" : "hover:bg-slate-200/70"
-                              )}
-                            >
-                              <div className="truncate text-xs font-medium leading-snug">{displaySaleStatusLabel(s, uiLang)}</div>
-                              <div className="text-base font-semibold tabular-nums leading-none">
-                                {count}
-                              </div>
-                            </button>
-                            <button
-                              type="button"
-                              onPointerDown={(e) => e.preventDefault()}
-                              onClick={() => setVacantSaleModelYearPanelExpanded((open) => !open)}
-                              aria-expanded={vacantSaleModelYearPanelExpanded}
-                              aria-label={
-                                vacantSaleModelYearPanelExpanded
-                                  ? "‡∏¢‡πà‡∏≠‡∏Å‡∏£‡∏≠‡∏á model year (‡∏ß‡πà‡∏≤‡∏á)"
-                                  : "‡∏Ç‡∏¢‡∏≤‡∏¢‡∏Å‡∏£‡∏≠‡∏á model year (‡∏ß‡πà‡∏≤‡∏á)"
-                              }
-                              title="Model year (‡∏ß‡πà‡∏≤‡∏á)"
-                              className={cn(
-                                "flex w-9 shrink-0 flex-col items-center justify-center text-base font-semibold leading-none touch-manipulation",
-                                active
-                                  ? "border-l border-white/25 text-white hover:bg-white/10"
-                                  : "border-l border-slate-200/90 text-slate-600 hover:bg-slate-200/60"
-                              )}
-                            >
-                              {vacantSaleModelYearPanelExpanded ? "‚åÉ" : "‚åÑ"}
-                            </button>
-                          </div>
-                        );
-                      }
-                      return (
-                        <button
-                          key={s}
-                          type="button"
-                          onPointerDown={(e) => e.preventDefault()}
-                          onClick={() => toggleSaleStatusChipStable(s)}
-                          className={cn(
-                            "min-h-[48px] rounded-2xl px-1.5 py-2 text-center transition-colors touch-manipulation",
-                            active ? "bg-slate-950 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200/70"
-                          )}
-                        >
-                          <div className="truncate text-xs font-medium leading-snug">{displaySaleStatusLabel(s, uiLang)}</div>
-                          <div className="text-base font-semibold tabular-nums leading-none">{count}</div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {bookedShippingPanelExpanded && bookedShippingRounds.length > 0 ? (
-                    <div className="mt-2 rounded-2xl border border-indigo-200/80 bg-indigo-50/90 p-2 ring-1 ring-indigo-100/80">
-                      <div className="mb-1.5">
-                        <span className="text-xs font-semibold tracking-wide text-indigo-950">{uiLang === "en" ? "Shipping Round - booked shipping" : "‡∏£‡∏≠‡∏ö‡∏™‡πà‡∏á ‚Äî booked shipping"}</span>
-                        <p className="mt-0.5 text-[10px] font-normal leading-snug text-indigo-900/75">
-                          {uiLang === "en"
-                            ? "Grouped by shipping value on car (one chip per round). Only for sale status \"Waiting Ship\". Multi-select enabled."
-                            : "‡πÅ‡∏¢‡∏Å‡∏ï‡∏≤‡∏°‡∏Ñ‡πà‡∏≤‡πÉ‡∏ô‡∏£‡∏ñ (‡∏£‡∏≠‡∏ö‡∏•‡∏∞‡∏ä‡∏¥‡∏õ) ¬∑ ‡πÄ‡∏â‡∏û‡∏≤‡∏∞‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏Ç‡∏≤‡∏¢ \"‡∏£‡∏≠‡∏™‡πà‡∏á\" ¬∑ ‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏´‡∏•‡∏≤‡∏¢‡∏£‡∏≠‡∏ö‡πÑ‡∏î‡πâ"}
-                        </p>
-                      </div>
-                      <div className="flex flex-wrap items-end gap-2 overflow-x-auto pb-1">
-                        {bookedShippingRounds.map((r) => (
-                          <button
-                            key={r.token}
-                            type="button"
-                            onPointerDown={(e) => e.preventDefault()}
-                            onClick={() => toggleStaffChipStable(r.token)}
-                            className={cn(
-                              "flex min-h-[52px] min-w-[4.5rem] max-w-[10rem] shrink-0 flex-col items-center justify-center gap-1 rounded-full px-2.5 py-2 text-center font-semibold ring-1 transition-[filter,box-shadow] touch-manipulation",
-                              staffFilters.has(r.token)
-                                ? "bg-indigo-600 text-white ring-indigo-500/50"
-                                : "bg-white text-indigo-900 ring-indigo-200/90 hover:bg-indigo-100/90"
-                            )}
-                          >
-                            <span className="line-clamp-3 max-w-full text-xs font-medium leading-snug">{r.label}</span>
-                            <span className="text-base font-semibold leading-none tabular-nums">{r.count}</span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-                  {bookedBuyerPanelExpanded && bookedBuyerRounds.length > 0 ? (
-                    <div className="mt-2 rounded-2xl border border-emerald-200/80 bg-emerald-50/90 p-2 ring-1 ring-emerald-100/80">
-                      <div className="mb-1.5">
-                        <span className="text-xs font-semibold tracking-wide text-emerald-950">{uiLang === "en" ? "Buyer - Booked" : "‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤ ‚Äî ‡∏à‡∏≠‡∏á"}</span>
-                        <p className="mt-0.5 text-[10px] font-normal leading-snug text-emerald-900/75">
-                          {uiLang === "en"
-                            ? "Grouped by buyer name (one chip per buyer). Only for sale status \"Booked\". Multi-select enabled."
-                            : "‡πÅ‡∏¢‡∏Å‡∏ï‡∏≤‡∏°‡∏ä‡∏∑‡πà‡∏≠‡∏•‡∏π‡∏Å‡∏Ñ‡πâ‡∏≤ (‡∏ä‡∏¥‡∏õ‡∏•‡∏∞‡∏ä‡∏∑‡πà‡∏≠) ¬∑ ‡πÄ‡∏â‡∏û‡∏≤‡∏∞‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏Ç‡∏≤‡∏¢ \"‡∏à‡∏≠‡∏á\" ¬∑ ‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏´‡∏•‡∏≤‡∏¢‡∏ä‡∏∑‡πà‡∏≠‡πÑ‡∏î‡πâ"}
-                        </p>
-                      </div>
-                      <div className="flex flex-wrap items-end gap-2 overflow-x-auto pb-1">
-                        {bookedBuyerRounds.map((r) => (
-                          <button
-                            key={r.token}
-                            type="button"
-                            onPointerDown={(e) => e.preventDefault()}
-                            onClick={() => toggleStaffChipStable(r.token)}
-                            className={cn(
-                              "flex min-h-[52px] min-w-[4.5rem] max-w-[10rem] shrink-0 flex-col items-center justify-center gap-1 rounded-full px-2.5 py-2 text-center font-semibold ring-1 transition-[filter,box-shadow] touch-manipulation",
-                              staffFilters.has(r.token)
-                                ? "bg-emerald-600 text-white ring-emerald-500/50"
-                                : "bg-white text-emerald-900 ring-emerald-200/90 hover:bg-emerald-100/90"
-                            )}
-                          >
-                            <span className="line-clamp-3 max-w-full text-xs font-medium leading-snug">{r.label}</span>
-                            <span className="text-base font-semibold leading-none tabular-nums">{r.count}</span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-                  {shippedSoldExtrasPanelExpanded && shippedSoldToolbarStats.soldCount > 0 ? (
-                    <div className="mt-2 space-y-2 rounded-2xl border border-violet-200/85 bg-violet-50/90 p-2 ring-1 ring-violet-100/80">
-                      <div className="mb-0.5">
-                        <span className="text-xs font-semibold tracking-wide text-violet-950">{uiLang === "en" ? "Shipped - Advanced Filters" : "‡∏™‡πà‡∏á‡πÅ‡∏•‡πâ‡∏ß ‚Äî ‡∏Å‡∏£‡∏≠‡∏á‡πÄ‡∏û‡∏¥‡πà‡∏°"}</span>
-                        <p className="mt-0.5 text-[10px] font-normal leading-snug text-violet-900/75">
-                          {uiLang === "en"
-                            ? "cars.shipped and model year filters. Multi-select in each row (OR); rows are combined with AND."
-                            : "cars.shipped ‡πÅ‡∏•‡∏∞ model year ¬∑ ‡πÅ‡∏ñ‡∏ß‡πÄ‡∏î‡∏µ‡∏¢‡∏ß‡∏Å‡∏±‡∏ô‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡πÑ‡∏î‡πâ‡∏´‡∏•‡∏≤‡∏¢‡∏ä‡∏¥‡∏õ (OR) ¬∑ ‡∏™‡∏≠‡∏á‡πÅ‡∏ñ‡∏ß AND ‡∏Å‡∏±‡∏ô"}
-                        </p>
-                      </div>
-                      <div className="rounded-xl border border-sky-200/80 bg-sky-50/95 p-2">
-                        <div className="mb-1.5">
-                          <span className="text-[11px] font-semibold text-sky-950">Shipped</span>
-                          <p className="text-[10px] text-sky-900/75">{uiLang === "en" ? "All = any shipped value, Empty = cars.shipped is blank" : "‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î = ‡πÑ‡∏°‡πà‡∏à‡∏≥‡∏Å‡∏±‡∏î‡∏Ç‡πâ‡∏≠‡∏Ñ‡∏ß‡∏≤‡∏° shipped ¬∑ ‡∏ß‡πà‡∏≤‡∏á = ‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏Ç‡πâ‡∏≠‡∏Ñ‡∏ß‡∏≤‡∏°‡πÉ‡∏ô cars.shipped"}</p>
-                        </div>
-                        <div className="flex flex-wrap items-end gap-2 overflow-x-auto pb-0.5">
-                          <button
-                            type="button"
-                            onPointerDown={(e) => e.preventDefault()}
-                            onClick={clearSoldShippedDimStable}
-                            className={cn(
-                              "flex min-h-[52px] min-w-[4.5rem] max-w-[9rem] shrink-0 flex-col items-center justify-center gap-1 rounded-full px-2.5 py-2 text-center font-semibold ring-1 transition-[filter,box-shadow] touch-manipulation",
-                              !soldShippedDimActive
-                                ? "bg-sky-600 text-white ring-sky-500/50"
-                                : "bg-white text-sky-900 ring-sky-200/90 hover:bg-sky-100/90"
-                            )}
-                          >
-                            <span className="line-clamp-2 max-w-full text-xs font-medium leading-snug">{uiLang === "en" ? "All" : "‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î"}</span>
-                            <span className="text-base font-semibold leading-none tabular-nums">
-                              {shippedSoldToolbarStats.soldCount}
-                            </span>
-                          </button>
-                          {shippedSoldToolbarStats.shippedEmpty > 0 ? (
-                            <button
-                              type="button"
-                              onPointerDown={(e) => e.preventDefault()}
-                              onClick={() => toggleStaffChipStable(STAFF_FILTER_SOLD_SHIPPED_EMPTY)}
-                              className={cn(
-                                "flex min-h-[52px] min-w-[4.5rem] max-w-[9rem] shrink-0 flex-col items-center justify-center gap-1 rounded-full px-2.5 py-2 text-center font-semibold ring-1 transition-[filter,box-shadow] touch-manipulation",
-                                staffFilters.has(STAFF_FILTER_SOLD_SHIPPED_EMPTY)
-                                  ? "bg-sky-600 text-white ring-sky-500/50"
-                                  : "bg-white text-sky-900 ring-sky-200/90 hover:bg-sky-100/90"
-                              )}
-                            >
-                              <span className="line-clamp-2 max-w-full text-xs font-medium leading-snug">{uiLang === "en" ? "Empty" : "‡∏ß‡πà‡∏≤‡∏á"}</span>
-                              <span className="text-base font-semibold leading-none tabular-nums">
-                                {shippedSoldToolbarStats.shippedEmpty}
-                              </span>
-                            </button>
-                          ) : null}
-                          {shippedSoldToolbarStats.shippedRounds.map((r) => (
-                            <button
-                              key={r.token}
-                              type="button"
-                              onPointerDown={(e) => e.preventDefault()}
-                              onClick={() => toggleStaffChipStable(r.token)}
-                              className={cn(
-                                "flex min-h-[52px] min-w-[4.5rem] max-w-[10rem] shrink-0 flex-col items-center justify-center gap-1 rounded-full px-2.5 py-2 text-center font-semibold ring-1 transition-[filter,box-shadow] touch-manipulation",
-                                staffFilters.has(r.token)
-                                  ? "bg-sky-600 text-white ring-sky-500/50"
-                                  : "bg-white text-sky-900 ring-sky-200/90 hover:bg-sky-100/90"
-                              )}
-                            >
-                              <span className="line-clamp-3 max-w-full text-xs font-medium leading-snug">{r.label}</span>
-                              <span className="text-base font-semibold leading-none tabular-nums">{r.count}</span>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                      <div className="rounded-xl border border-amber-200/80 bg-amber-50/95 p-2">
-                        <div className="mb-1.5">
-                          <span className="text-[11px] font-semibold text-amber-950">Model year</span>
-                          <p className="text-[10px] text-amber-900/75">{uiLang === "en" ? "All = any year, Empty = no model_year / c_year" : "‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î = ‡πÑ‡∏°‡πà‡∏à‡∏≥‡∏Å‡∏±‡∏î‡∏õ‡∏µ ¬∑ ‡∏ß‡πà‡∏≤‡∏á = ‡πÑ‡∏°‡πà‡∏°‡∏µ model_year / c_year"}</p>
-                        </div>
-                        <div className="flex flex-wrap items-end gap-2 overflow-x-auto pb-0.5">
-                          <button
-                            type="button"
-                            onPointerDown={(e) => e.preventDefault()}
-                            onClick={clearSoldModelYearDimStable}
-                            className={cn(
-                              "flex min-h-[52px] min-w-[4.5rem] max-w-[9rem] shrink-0 flex-col items-center justify-center gap-1 rounded-full px-2.5 py-2 text-center font-semibold ring-1 transition-[filter,box-shadow] touch-manipulation",
-                              !soldModelYearDimActive
-                                ? "bg-amber-600 text-white ring-amber-500/50"
-                                : "bg-white text-amber-900 ring-amber-200/90 hover:bg-amber-100/90"
-                            )}
-                          >
-                            <span className="line-clamp-2 max-w-full text-xs font-medium leading-snug">{uiLang === "en" ? "All" : "‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î"}</span>
-                            <span className="text-base font-semibold leading-none tabular-nums">
-                              {shippedSoldToolbarStats.soldCount}
-                            </span>
-                          </button>
-                          {shippedSoldToolbarStats.modelYearEmpty > 0 ? (
-                            <button
-                              type="button"
-                              onPointerDown={(e) => e.preventDefault()}
-                              onClick={() => toggleStaffChipStable(STAFF_FILTER_SOLD_MODEL_YEAR_EMPTY)}
-                              className={cn(
-                                "flex min-h-[52px] min-w-[4.5rem] max-w-[9rem] shrink-0 flex-col items-center justify-center gap-1 rounded-full px-2.5 py-2 text-center font-semibold ring-1 transition-[filter,box-shadow] touch-manipulation",
-                                staffFilters.has(STAFF_FILTER_SOLD_MODEL_YEAR_EMPTY)
-                                  ? "bg-amber-600 text-white ring-amber-500/50"
-                                  : "bg-white text-amber-900 ring-amber-200/90 hover:bg-amber-100/90"
-                              )}
-                            >
-                              <span className="line-clamp-2 max-w-full text-xs font-medium leading-snug">{uiLang === "en" ? "Empty" : "‡∏ß‡πà‡∏≤‡∏á"}</span>
-                              <span className="text-base font-semibold leading-none tabular-nums">
-                                {shippedSoldToolbarStats.modelYearEmpty}
-                              </span>
-                            </button>
-                          ) : null}
-                          {shippedSoldToolbarStats.modelYearRounds.map((r) => (
-                            <button
-                              key={r.token}
-                              type="button"
-                              onPointerDown={(e) => e.preventDefault()}
-                              onClick={() => toggleStaffChipStable(r.token)}
-                              className={cn(
-                                "flex min-h-[52px] min-w-[4.5rem] max-w-[10rem] shrink-0 flex-col items-center justify-center gap-1 rounded-full px-2.5 py-2 text-center font-semibold ring-1 transition-[filter,box-shadow] touch-manipulation",
-                                staffFilters.has(r.token)
-                                  ? "bg-amber-600 text-white ring-amber-500/50"
-                                  : "bg-white text-amber-900 ring-amber-200/90 hover:bg-amber-100/90"
-                              )}
-                            >
-                              <span className="line-clamp-3 max-w-full text-xs font-medium leading-snug">{r.label}</span>
-                              <span className="text-base font-semibold leading-none tabular-nums">{r.count}</span>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  ) : null}
-                  {vacantSaleModelYearPanelExpanded && vacantSaleToolbarStats.vacantCount > 0 ? (
-                    <div className="mt-2 rounded-2xl border border-rose-200/85 bg-rose-50/90 p-2 ring-1 ring-rose-100/80">
-                      <div className="mb-1.5">
-                        <span className="text-xs font-semibold tracking-wide text-rose-950">{uiLang === "en" ? "Model Year - Available" : "Model year ‚Äî ‡∏ß‡πà‡∏≤‡∏á"}</span>
-                        <p className="mt-0.5 text-[10px] font-normal leading-snug text-rose-900/75">
-                          {uiLang === "en"
-                            ? "Only for sale status \"Available\". All = any year, Empty = no model_year / c_year, multi chips = OR."
-                            : "‡πÄ‡∏â‡∏û‡∏≤‡∏∞‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏Ç‡∏≤‡∏¢ \"‡∏ß‡πà‡∏≤‡∏á\" ¬∑ ‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î = ‡πÑ‡∏°‡πà‡∏à‡∏≥‡∏Å‡∏±‡∏î‡∏õ‡∏µ ¬∑ ‡∏ß‡πà‡∏≤‡∏á = ‡πÑ‡∏°‡πà‡∏°‡∏µ model_year / c_year ¬∑ ‡∏´‡∏•‡∏≤‡∏¢‡∏ä‡∏¥‡∏õ = OR"}
-                        </p>
-                      </div>
-                      <div className="flex flex-wrap items-end gap-2 overflow-x-auto pb-0.5">
-                        <button
-                          type="button"
-                          onPointerDown={(e) => e.preventDefault()}
-                          onClick={clearVacantSaleModelYearDimStable}
-                          className={cn(
-                            "flex min-h-[52px] min-w-[4.5rem] max-w-[9rem] shrink-0 flex-col items-center justify-center gap-1 rounded-full px-2.5 py-2 text-center font-semibold ring-1 transition-[filter,box-shadow] touch-manipulation",
-                            !vacantSaleModelYearDimActive
-                              ? "bg-rose-600 text-white ring-rose-500/50"
-                              : "bg-white text-rose-900 ring-rose-200/90 hover:bg-rose-100/90"
-                          )}
-                        >
-                          <span className="line-clamp-2 max-w-full text-xs font-medium leading-snug">{uiLang === "en" ? "All" : "‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î"}</span>
-                          <span className="text-base font-semibold leading-none tabular-nums">
-                            {vacantSaleToolbarStats.vacantCount}
-                          </span>
-                        </button>
-                        {vacantSaleToolbarStats.modelYearEmpty > 0 ? (
-                          <button
-                            type="button"
-                            onPointerDown={(e) => e.preventDefault()}
-                            onClick={() => toggleStaffChipStable(STAFF_FILTER_VACANT_MODEL_YEAR_EMPTY)}
-                            className={cn(
-                              "flex min-h-[52px] min-w-[4.5rem] max-w-[9rem] shrink-0 flex-col items-center justify-center gap-1 rounded-full px-2.5 py-2 text-center font-semibold ring-1 transition-[filter,box-shadow] touch-manipulation",
-                              staffFilters.has(STAFF_FILTER_VACANT_MODEL_YEAR_EMPTY)
-                                ? "bg-rose-600 text-white ring-rose-500/50"
-                                : "bg-white text-rose-900 ring-rose-200/90 hover:bg-rose-100/90"
-                            )}
-                          >
-                            <span className="line-clamp-2 max-w-full text-xs font-medium leading-snug">{uiLang === "en" ? "Empty" : "‡∏ß‡πà‡∏≤‡∏á"}</span>
-                            <span className="text-base font-semibold leading-none tabular-nums">
-                              {vacantSaleToolbarStats.modelYearEmpty}
-                            </span>
-                          </button>
-                        ) : null}
-                        {vacantSaleToolbarStats.modelYearRounds.map((r) => (
-                          <button
-                            key={r.token}
-                            type="button"
-                            onPointerDown={(e) => e.preventDefault()}
-                            onClick={() => toggleStaffChipStable(r.token)}
-                            className={cn(
-                              "flex min-h-[52px] min-w-[4.5rem] max-w-[10rem] shrink-0 flex-col items-center justify-center gap-1 rounded-full px-2.5 py-2 text-center font-semibold ring-1 transition-[filter,box-shadow] touch-manipulation",
-                              staffFilters.has(r.token)
-                                ? "bg-rose-600 text-white ring-rose-500/50"
-                                : "bg-white text-rose-900 ring-rose-200/90 hover:bg-rose-100/90"
-                            )}
-                          >
-                            <span className="line-clamp-3 max-w-full text-xs font-medium leading-snug">{r.label}</span>
-                            <span className="text-base font-semibold leading-none tabular-nums">{r.count}</span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-                <div className="mb-2 rounded-2xl bg-slate-100/80 p-2">
-                  <div className="mb-1.5">
-                    <span className="text-xs font-semibold tracking-wide text-slate-600">{uiLang === "en" ? "Sale Code" : "‡πÄ‡∏ã‡∏•‡∏•‡πå"}</span>
-                  </div>
-                  <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(72px, 1fr))" }}>
-                    {saleChipModels.map(({ sale, label, count, active }) => (
-                      <button
-                        key={sale}
-                        type="button"
-                        onClick={() => toggleSaleChipStable(sale)}
-                        className={cn(
-                          "min-h-[48px] rounded-2xl px-1.5 py-2 text-center transition-colors",
-                          active ? "bg-slate-950 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200/70"
-                        )}
-                      >
-                        <div className="truncate text-xs font-medium leading-snug">{label}</div>
-                        <div className="text-base font-semibold tabular-nums leading-none">{count}</div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="rounded-2xl bg-slate-100/80 p-2">
-                  <div className="mb-1.5 flex items-center justify-between gap-2">
-                    <span className="text-xs font-semibold tracking-wide text-slate-600">{uiLang === "en" ? "Staff (Item Owners)" : "‡∏û‡∏ô‡∏±‡∏Å‡∏á‡∏≤‡∏ô (‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏á‡∏≤‡∏ô)"}</span>
-                    <button
-                      type="button"
-                      onPointerDown={(e) => e.preventDefault()}
-                      onClick={() => setShowStaffManager((open) => !open)}
-                      className={cn(
-                        "shrink-0 rounded-full px-3 py-1.5 text-xs font-medium transition-colors",
-                        showStaffManager ? "bg-slate-950 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200/60"
-                      )}
-                      aria-expanded={showStaffManager}
-                    >
-                      {(uiLang === "en" ? "Manage Staff" : "‡∏à‡∏±‡∏î‡∏Å‡∏≤‡∏£‡∏û‡∏ô‡∏±‡∏Å‡∏á‡∏≤‡∏ô") + (showStaffManager ? " ‚åÉ" : " ‚åÑ")}
-                    </button>
-                  </div>
-                  <div className="flex flex-wrap items-end gap-2 overflow-x-auto pb-1">
-                    <button
-                      type="button"
-                      onPointerDown={(e) => e.preventDefault()}
-                      onClick={() => toggleStaffChipStable("‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î")}
-                      className={cn(
-                        "flex min-h-[52px] min-w-[4.5rem] shrink-0 flex-col items-center justify-center gap-1 rounded-full px-3 py-2 text-center transition-colors touch-manipulation",
-                        staffFilters.size === 0 ? "bg-slate-950 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200/70"
-                      )}
-                    >
-                      <span className="text-xs font-medium leading-tight">{uiLang === "en" ? "All" : "‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î"}</span>
-                      <span className="text-base font-semibold leading-none tabular-nums">{staffAssigneeItemCounts.grandTotal}</span>
-                    </button>
-                    {staffUnassignedChipInToolbar ? (
-                      <button
-                        type="button"
-                        onPointerDown={(e) => e.preventDefault()}
-                        onClick={() => toggleStaffChipStable(STAFF_FILTER_UNASSIGNED)}
-                        className={cn(
-                          "flex min-h-[52px] min-w-[4.25rem] max-w-[7.5rem] shrink-0 flex-col items-center justify-center gap-1 rounded-full px-2.5 py-2 text-center font-semibold ring-1 transition-[filter,box-shadow] touch-manipulation",
-                          assigneeStaffFilterChipClasses(STAFF_FILTER_UNASSIGNED_LABEL, staffFilters.has(STAFF_FILTER_UNASSIGNED))
-                        )}
-                      >
-                        <span className="line-clamp-2 max-w-full text-xs font-medium leading-snug">{displayStaffFilterUnassignedLabel(uiLang)}</span>
-                        <span className="text-base font-semibold leading-none tabular-nums">{staffAssigneeItemCounts.unassigned}</span>
-                      </button>
-                    ) : null}
-                    {staffFilterChipNamesForToolbar.map((s) => (
-                      <button
-                        key={s}
-                        type="button"
-                        onPointerDown={(e) => e.preventDefault()}
-                        onClick={() => toggleStaffChipStable(s)}
-                        className={cn(
-                          "flex min-h-[52px] min-w-[4.25rem] max-w-[7.5rem] shrink-0 flex-col items-center justify-center gap-1 rounded-full px-2.5 py-2 text-center font-semibold ring-1 transition-[filter,box-shadow] touch-manipulation",
-                          assigneeStaffFilterChipClasses(
-                            s,
-                            staffFilters.has(s),
-                            staffToolbarAssigneePaletteIndexByName.get(s)
-                          )
-                        )}
-                      >
-                        <span className="line-clamp-2 max-w-full text-xs font-medium leading-snug">{s}</span>
-                        <span className="text-base font-semibold leading-none tabular-nums">{staffAssigneeItemCounts.byAssignee[s] ?? 0}</span>
-                      </button>
-                    ))}
-                  </div>
-                  {showStaffManager ? (
-                    <div className="mt-2 space-y-2 rounded-2xl bg-slate-100 p-2.5">
-                      <p className="text-xs font-normal leading-snug text-slate-600">
-                        {uiLang === "en"
-                          ? "Manage owner names here only. Add/remove filter roster names (saved on server, cached locally if server unavailable)."
-                          : "‡πÄ‡∏õ‡∏¥‡∏î‡∏à‡∏≤‡∏Å‡∏ó‡∏µ‡πà‡∏ô‡∏µ‡πà‡πÄ‡∏ó‡πà‡∏≤‡∏ô‡∏±‡πâ‡∏ô ‚Äî ‡πÄ‡∏û‡∏¥‡πà‡∏°/‡∏•‡∏ö‡∏ä‡∏∑‡πà‡∏≠‡πÉ‡∏ô‡∏£‡∏≤‡∏¢‡∏ä‡∏∑‡πà‡∏≠‡∏Å‡∏£‡∏≠‡∏á (‡πÄ‡∏Å‡πá‡∏ö‡∏ö‡∏ô‡πÄ‡∏ã‡∏¥‡∏£‡πå‡∏ü‡πÄ‡∏ß‡∏≠‡∏£‡πå ¬∑ ‡πÅ‡∏Ñ‡∏ä‡πÉ‡∏ô‡πÄ‡∏Ñ‡∏£‡∏∑‡πà‡∏≠‡∏á‡∏ñ‡πâ‡∏≤‡πÄ‡∏ã‡∏¥‡∏£‡πå‡∏ü‡πÄ‡∏ß‡∏≠‡∏£‡πå‡πÑ‡∏°‡πà‡∏û‡∏£‡πâ‡∏≠‡∏°)"}
-                      </p>
-                      <ul className="max-h-40 space-y-1 overflow-y-auto">
-                        {staffRoster.length === 0 ? (
-                          <li className="text-[11px] font-semibold text-slate-400">{uiLang === "en" ? "No names yet (add below)" : "‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏ä‡∏∑‡πà‡∏≠ (‡πÄ‡∏û‡∏¥‡πà‡∏°‡∏î‡πâ‡∏≤‡∏ô‡∏•‡πà‡∏≤‡∏á)"}</li>
-                        ) : (
-                          staffRoster.map((name) => (
-                            <li key={name} className="flex items-center justify-between gap-2 rounded-xl bg-white px-2 py-1.5">
-                              <span className="min-w-0 truncate text-sm font-medium text-slate-800">{name}</span>
-                              <button
-                                type="button"
-                                onPointerDown={(e) => e.preventDefault()}
-                                onClick={() => removeStaffFromRoster(name)}
-                                className="shrink-0 rounded-full bg-rose-100 px-2.5 py-1 text-xs font-medium text-rose-800"
-                              >
-                                {uiLang === "en" ? "Remove" : "‡∏•‡∏ö"}
-                              </button>
-                            </li>
-                          ))
-                        )}
-                      </ul>
-                      <div className="flex gap-2">
-                        <input
-                          value={staffNameInput}
-                          onChange={(e) => setStaffNameInput(e.target.value)}
-                          placeholder={uiLang === "en" ? "Type name then add" : "‡∏û‡∏¥‡∏°‡∏û‡πå‡∏ä‡∏∑‡πà‡∏≠‡πÅ‡∏•‡πâ‡∏ß‡∏Å‡∏î‡πÄ‡∏û‡∏¥‡πà‡∏°"}
-                          className="min-w-0 flex-1 rounded-2xl bg-white px-3 py-2.5 text-sm font-medium text-slate-900 outline-none ring-1 ring-slate-200/80"
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") {
-                              e.preventDefault();
-                              addStaffToRoster(staffNameInput);
-                              setStaffNameInput("");
-                            }
-                          }}
-                        />
-                        <button
-                          type="button"
-                          onPointerDown={(e) => e.preventDefault()}
-                          onClick={() => {
-                            addStaffToRoster(staffNameInput);
-                            setStaffNameInput("");
-                          }}
-                          className="shrink-0 rounded-2xl bg-slate-950 px-3 py-2.5 text-sm font-semibold text-white touch-manipulation"
-                        >
-                          {uiLang === "en" ? "Add" : "‡πÄ‡∏û‡∏¥‡πà‡∏°"}
-                        </button>
-                      </div>
-                      <div className="border-t border-slate-200/80 pt-2">
-                        <p className="mb-2 text-xs font-semibold tracking-wide text-slate-600">
-                          {uiLang === "en" ? "Map Sale Code -> Owner" : "‡∏à‡∏±‡∏ö‡∏Ñ‡∏π‡πà‡πÄ‡∏ã‡∏•‡∏•‡πå ‚Üí ‡∏û‡∏ô‡∏±‡∏Å‡∏á‡∏≤‡∏ô‡∏£‡∏±‡∏ö‡∏ú‡∏¥‡∏î‡∏ä‡∏≠‡∏ö"}
-                        </p>
-                        <p className="mb-2 text-[11px] font-normal leading-snug text-slate-500">
-                          {uiLang === "en"
-                            ? "After mapping, new items auto-select owner by sale code (fallback: first name in roster)."
-                            : "‡∏ï‡∏±‡πâ‡∏á‡∏Ñ‡πà‡∏≤‡πÅ‡∏•‡πâ‡∏ß ‡πÄ‡∏ß‡∏•‡∏≤‡∏Å‡∏î‡πÄ‡∏û‡∏¥‡πà‡∏°‡∏á‡∏≤‡∏ô‡πÉ‡∏ô‡∏Å‡∏≤‡∏£‡πå‡∏î‡∏à‡∏∞‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏ä‡∏∑‡πà‡∏≠‡∏û‡∏ô‡∏±‡∏Å‡∏á‡∏≤‡∏ô‡πÉ‡∏´‡πâ‡∏ï‡∏≤‡∏°‡πÄ‡∏ã‡∏•‡∏•‡πå‡∏Ç‡∏≠‡∏á‡∏£‡∏ñ (‡∏ñ‡πâ‡∏≤‡πÑ‡∏°‡πà‡πÑ‡∏î‡πâ‡∏à‡∏±‡∏ö‡∏Ñ‡∏π‡πà‡∏à‡∏∞‡πÉ‡∏ä‡πâ‡∏ä‡∏∑‡πà‡∏≠‡πÅ‡∏£‡∏Å‡πÉ‡∏ô‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏î‡πâ‡∏≤‡∏ô‡∏ö‡∏ô‡πÄ‡∏´‡∏°‡∏∑‡∏≠‡∏ô‡πÄ‡∏î‡∏¥‡∏°)"}
-                        </p>
-                        <ul className="max-h-56 space-y-1.5 overflow-y-auto">
-                          {ORDER_TRACKING_SALE_CODES.map((code) => (
-                            <li
-                              key={code}
-                              className="flex min-h-[44px] items-center gap-2 rounded-xl bg-white px-2 py-1.5 ring-1 ring-slate-200/60"
-                            >
-                              <span className="w-14 shrink-0 text-center text-xs font-bold tabular-nums text-slate-800">
-                                {code}
-                              </span>
-                              <select
-                                aria-label={uiLang === "en" ? `Owner for sale code ${code}` : `‡∏û‡∏ô‡∏±‡∏Å‡∏á‡∏≤‡∏ô‡∏™‡∏≥‡∏´‡∏£‡∏±‡∏ö‡πÄ‡∏ã‡∏•‡∏•‡πå ${code}`}
-                                value={saleAssignees[code] ?? ""}
-                                onChange={(e) => setSaleAssigneeForCode(code, e.target.value)}
-                                className="min-w-0 flex-1 rounded-xl bg-slate-50 px-2 py-2 text-sm font-medium text-slate-900 outline-none ring-1 ring-slate-200/80"
-                              >
-                                <option value="">{uiLang === "en" ? "‚Äî Unassigned ‚Äî" : "‚Äî ‡πÑ‡∏°‡πà‡∏£‡∏∞‡∏ö‡∏∏ ‚Äî"}</option>
-                                {staffRoster.map((n) => (
-                                  <option key={n} value={n}>
-                                    {n}
-                                  </option>
-                                ))}
-                              </select>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    </div>
-                  ) : null}
-                  <div className="mb-1 mt-3 flex items-center justify-between gap-2">
-                    <span className="text-xs font-semibold tracking-wide text-slate-600">{uiLang === "en" ? "Item Status" : "‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£"}</span>
-                    <button
-                      type="button"
-                      onPointerDown={(e) => e.preventDefault()}
-                      onClick={() => setShowStatusManager((open) => !open)}
-                      className={cn(
-                        "shrink-0 rounded-full px-3 py-1.5 text-xs font-medium transition-colors",
-                        showStatusManager ? "bg-slate-950 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200/60"
-                      )}
-                      aria-expanded={showStatusManager}
-                    >
-                      {(uiLang === "en" ? "Manage Status" : "‡∏à‡∏±‡∏î‡∏Å‡∏≤‡∏£‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞") + (showStatusManager ? " ‚åÉ" : " ‚åÑ")}
-                    </button>
-                  </div>
-                  {showStatusManager ? (
-                    <div className="mt-2 overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-200/80">
-                      <div className="max-h-[min(72vh,32rem)] space-y-0 overflow-y-auto overscroll-contain px-3 py-3 touch-pan-y">
-                        <div>
-                          <p className="text-xs font-semibold leading-snug text-slate-900">
-                            {uiLang === "en" ? "Item status ‚Äî all in one panel" : "‡∏ï‡∏±‡πâ‡∏á‡∏Ñ‡πà‡∏≤‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£ ‚Äî ‡πÉ‡∏ô‡πÅ‡∏ú‡∏á‡πÄ‡∏î‡∏µ‡∏¢‡∏ß"}
-                          </p>
-                          <p className="mt-1 text-[11px] font-normal leading-snug text-slate-600">
-                            {uiLang === "en"
-                              ? "Toolbar order & labels cache on device. Deposit / SLA / ‚ÄúDue today‚Äù sync to the server when available."
-                              : "‡∏•‡∏≥‡∏î‡∏±‡∏ö‡πÅ‡∏•‡∏∞‡∏ä‡∏∑‡πà‡∏≠‡∏ä‡∏¥‡∏õ‡πÄ‡∏Å‡πá‡∏ö‡πÉ‡∏ô‡πÄ‡∏Ñ‡∏∑‡πà‡∏≠‡∏á ¬∑ ‡∏Å‡∏≤‡∏£‡∏ô‡∏±‡∏ö‡∏ß‡∏±‡∏ô‡∏ù‡∏≤‡∏Å / SLA / ‡∏ä‡∏¥‡∏õ‡∏°‡∏≤‡∏ß‡∏±‡∏ô‡∏ô‡∏µ‡πâ ‡∏ã‡∏¥‡∏á‡∏Å‡πå‡πÄ‡∏°‡∏∑‡πà‡∏≠‡∏°‡∏µ‡πÄ‡∏ã‡∏¥‡∏£‡πå‡∏ü‡πÄ‡∏ß‡∏≠‡∏£‡πå"}
-                          </p>
-                        </div>
-
-                        <div className="mt-4 border-t border-slate-200/70 pt-4">
-                          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                            {uiLang === "en" ? "Filter bar" : "‡πÅ‡∏ñ‡∏ö‡∏Å‡∏£‡∏≠‡∏á‡∏ä‡∏¥‡∏õ"}
-                          </p>
-                          <p className="mt-2 text-[10px] font-normal leading-relaxed text-slate-600">
-                            {uiLang === "en"
-                              ? "On each active row: edit the chip text, tap Up / Down to reorder left-to-right on the bar, tap Remove from bar to tuck it below. dashed rows ‚Üí Add to bar restores it."
-                              : "‡πÉ‡∏ô‡πÅ‡∏ñ‡∏ß‡∏ó‡∏µ‡πà‡∏≠‡∏¢‡∏π‡πà‡πÅ‡∏ñ‡∏ö: ‡∏ä‡πà‡∏≠‡∏á‡∏Å‡∏•‡∏≤‡∏á‡∏Ñ‡∏∑‡∏≠‡πÅ‡∏Å‡πâ‡πÑ‡∏Ç‡∏ä‡∏∑‡πà‡∏≠‡∏ö‡∏ô‡∏ä‡∏¥‡∏õ ¬∑ ‡∏õ‡∏∏‡πà‡∏° ‚Äú‡∏Ç‡∏∂‡πâ‡∏ô/‡∏•‡∏á‚Äù ‡πÄ‡∏õ‡∏•‡∏µ‡πà‡∏¢‡∏ô‡∏•‡∏≥‡∏î‡∏±‡∏ö‡∏ä‡∏¥‡∏õ‡∏ö‡∏ô‡πÅ‡∏ñ‡∏ö ¬∑ ‚Äú‡∏•‡∏ö‡∏à‡∏≤‡∏Å‡πÅ‡∏ñ‡∏ö‚Äù ‡πÄ‡∏≠‡∏≤‡∏≠‡∏≠‡∏Å‡∏à‡∏≤‡∏Å‡πÅ‡∏ñ‡∏ö (‡πÑ‡∏õ‡∏≠‡∏¢‡∏π‡πà‡∏Å‡∏•‡∏∏‡πà‡∏°‡πÄ‡∏™‡πâ‡∏ô‡∏õ‡∏£‡∏∞‡∏î‡πâ‡∏≤‡∏ô‡∏•‡πà‡∏≤‡∏á) ¬∑ ‡πÅ‡∏ñ‡∏ß‡πÄ‡∏™‡πâ‡∏ô‡∏õ‡∏£‡∏∞‡∏°‡∏µ‡∏õ‡∏∏‡πà‡∏° ‚Äú‡πÄ‡∏û‡∏¥‡πà‡∏°‡πÄ‡∏Ç‡πâ‡∏≤‡πÅ‡∏ñ‡∏ö‚Äù"}
-                          </p>
-                          <div className="mt-3 rounded-xl bg-white p-2.5 ring-1 ring-slate-200/70">
-                            <p className="text-[11px] font-semibold leading-snug text-slate-800">
-                              {uiLang === "en" ? "All statuses (code ‚Üí chip label)" : "‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î (‡πÇ‡∏Ñ‡πâ‡∏î‡πÑ‡∏ó‡∏¢ ‚Üí ‡∏ä‡∏∑‡πà‡∏≠‡∏ö‡∏ô‡∏ä‡∏¥‡∏õ)"}
-                            </p>
-                            <p className="mt-1 text-[10px] text-slate-500">
-                              {uiLang === "en"
-                                ? "Fixed system codes ¬∑ label follows your edits above when on the bar."
-                                : "‡πÇ‡∏Ñ‡πâ‡∏î‡πÉ‡∏ô‡∏£‡∏∞‡∏ö‡∏ö‡∏Ñ‡∏á‡∏ó‡∏µ‡πà ¬∑ ‡∏ä‡∏∑‡πà‡∏≠‡∏ö‡∏ô‡∏ä‡∏¥‡∏õ‡∏ï‡∏≤‡∏°‡∏ó‡∏µ‡πà‡πÅ‡∏Å‡πâ‡πÉ‡∏ô‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£‡∏î‡πâ‡∏≤‡∏ô‡∏•‡πà‡∏≤‡∏á‡πÄ‡∏°‡∏∑‡πà‡∏≠‡∏≠‡∏¢‡∏π‡πà‡πÉ‡∏ô‡πÅ‡∏ñ‡∏ö"}
-                            </p>
-                            <ol className="mt-2 max-h-[11.5rem] list-decimal space-y-1.5 overflow-y-auto overscroll-contain pl-[1.125rem] pr-1 marker:text-[10px] marker:font-semibold marker:text-slate-400 touch-pan-y sm:max-h-none sm:marker:text-[11px]">
-                              {sortItemStatusesForFilterToolbar([...ITEM_STATUSES]).map((st) => (
-                                <li key={`ref-status-${st}`} className="pl-1 text-[11px] leading-snug text-slate-800">
-                                  <span className="font-bold">{st}</span>
-                                  <span className="text-slate-400"> ‚Üí </span>
-                                  <span className="font-medium text-slate-700">
-                                    {statusLabel(st as ItemStatusFilterValue)}
-                                  </span>
-                                </li>
-                              ))}
-                            </ol>
-                          </div>
-                          <ul className="mt-3 space-y-2">
-                          {itemStatusRoster.length === 0 ? (
-                            <li className="rounded-xl bg-slate-50 px-2 py-2 text-[11px] font-semibold text-slate-500 ring-1 ring-slate-100 leading-relaxed">
-                              {uiLang === "en"
-                                ? "Default: all statuses show on the bar. Remove at least one status here ‚Üí it moves into the dashed list below until you tap Add to bar."
-                                : "‡πÄ‡∏£‡∏¥‡πà‡∏°‡∏ï‡πâ‡∏ô‡πÅ‡∏ñ‡∏ö‡∏Ñ‡∏£‡∏ö‡∏ó‡∏∏‡∏Å‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞ ¬∑ ‡πÅ‡∏ï‡∏∞ ‚Äú‡∏•‡∏ö‡∏à‡∏≤‡∏Å‡πÅ‡∏ñ‡∏ö‚Äù ‡πÅ‡∏ñ‡∏ß‡πÉ‡∏î‡∏´‡∏ô‡∏∂‡πà‡∏á‡∏ö‡∏ô ‡πÄ‡∏û‡∏∑‡πà‡∏≠‡πÄ‡∏£‡∏¥‡πà‡∏°‡∏Å‡∏≥‡∏´‡∏ô‡∏î‡πÄ‡∏≠‡∏á ‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏ó‡∏µ‡πà‡πÄ‡∏´‡∏•‡∏∑‡∏≠‡∏à‡∏∞‡πÇ‡∏ú‡∏•‡πà‡πÉ‡∏ô‡∏Å‡∏•‡∏∏‡πà‡∏°‡πÄ‡∏™‡πâ‡∏ô‡∏õ‡∏£‡∏∞ ‡πÉ‡∏ä‡πâ‡∏õ‡∏∏‡πà‡∏° ‚Äú‡πÄ‡∏û‡∏¥‡πà‡∏°‡πÄ‡∏Ç‡πâ‡∏≤‡πÅ‡∏ñ‡∏ö‚Äù ‡∏Ñ‡∏∑‡∏ô‡πÑ‡∏î‡πâ"}
-                            </li>
-                          ) : null}
-                          {itemStatusRoster.map((st, rank) => (
-                              <li key={st} className="rounded-2xl bg-slate-50 p-2.5 ring-1 ring-slate-100">
-                                <div className="flex flex-col gap-2.5 sm:flex-row sm:items-stretch sm:gap-3">
-                                  <div className="flex shrink-0 flex-row items-center gap-2 sm:w-[5.75rem] sm:flex-col sm:items-stretch">
-                                    <span className="inline-flex w-fit rounded-lg bg-white px-2 py-1 text-center text-[11px] font-bold tracking-tight text-slate-800 ring-1 ring-slate-200/90">
-                                      {st}
-                                    </span>
-                                    <span className="text-[10px] font-medium leading-snug text-slate-500 sm:flex-1 sm:pt-0.5">
-                                      {uiLang === "en" ? `${rank + 1} on bar` : `‡∏•‡∏≥‡∏î‡∏±‡∏ö‡∏ó‡∏µ‡πà ${rank + 1} ‡∏ö‡∏ô‡πÅ‡∏ñ‡∏ö`}
-                                    </span>
-                                  </div>
-                                  <div className="min-w-0 flex-1 space-y-1">
-                                    <label
-                                      htmlFor={`item-status-chip-label-${encodeURIComponent(st)}`}
-                                      className="block text-[10px] font-semibold uppercase tracking-wide text-slate-500"
-                                    >
-                                      {uiLang === "en" ? "Edit chip label" : "‡πÅ‡∏Å‡πâ‡πÑ‡∏Ç‡∏ä‡∏∑‡πà‡∏≠‡∏ö‡∏ô‡∏ä‡∏¥‡∏õ"}
-                                    </label>
-                                    <input
-                                      id={`item-status-chip-label-${encodeURIComponent(st)}`}
-                                      value={itemStatusLabels[st] ?? st}
-                                      onChange={(e) => updateItemStatusLabel(st, e.target.value)}
-                                      placeholder={st}
-                                      aria-label={
-                                        uiLang === "en"
-                                          ? `Display label on filter chip (${st})`
-                                          : `‡∏ä‡∏∑‡πà‡∏≠‡πÅ‡∏™‡∏î‡∏á‡∏ö‡∏ô‡∏ä‡∏¥‡∏õ‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞ ${st}`
-                                      }
-                                      className="min-h-11 w-full rounded-xl bg-white px-3 py-2 text-sm font-medium text-slate-900 outline-none ring-1 ring-slate-200/80 placeholder:text-slate-400 focus:ring-2 focus:ring-slate-400/50"
-                                    />
-                                  </div>
-                                  <div className="flex shrink-0 gap-1.5 max-sm:flex-1">
-                                    <button
-                                      type="button"
-                                      onPointerDown={(e) => e.preventDefault()}
-                                      onClick={() => moveItemStatusInRoster(st, -1)}
-                                      className="min-h-11 min-w-[4.25rem] flex-1 touch-manipulation rounded-xl bg-slate-200/90 px-2 text-[11px] font-bold text-slate-800 shadow-sm active:bg-slate-300 sm:min-w-[3.5rem] sm:flex-none"
-                                      aria-label={uiLang === "en" ? `Move ¬´${st}¬ª up on bar` : `‡πÄ‡∏•‡∏∑‡πà‡∏≠‡∏ô ${st} ‡∏Ç‡∏∂‡πâ‡∏ô`}
-                                      title={uiLang === "en" ? "Move up ¬∑ earlier on bar" : "‡∏Ç‡∏∂‡πâ‡∏ô ¬∑ ‡πÄ‡∏£‡πá‡∏ß‡∏Ç‡∏∂‡πâ‡∏ô‡∏ö‡∏ô‡∏ä‡∏∏‡∏î‡∏ä‡∏¥‡∏õ"}
-                                    >
-                                      {uiLang === "en" ? "‚Üë Up" : "‚Üë ‡∏Ç‡∏∂‡πâ‡∏ô"}
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onPointerDown={(e) => e.preventDefault()}
-                                      onClick={() => moveItemStatusInRoster(st, 1)}
-                                      className="min-h-11 min-w-[4.25rem] flex-1 touch-manipulation rounded-xl bg-slate-200/90 px-2 text-[11px] font-bold text-slate-800 shadow-sm active:bg-slate-300 sm:min-w-[3.5rem] sm:flex-none"
-                                      aria-label={uiLang === "en" ? `Move ¬´${st}¬ª down on bar` : `‡πÄ‡∏•‡∏∑‡πà‡∏≠‡∏ô ${st} ‡∏•‡∏á`}
-                                      title={uiLang === "en" ? "Move down ¬∑ later on bar" : "‡∏•‡∏á ¬∑ ‡∏ä‡πâ‡∏≤‡∏•‡∏á‡πÉ‡∏ô‡∏ä‡∏∏‡∏î‡∏ä‡∏¥‡∏õ"}
-                                    >
-                                      {uiLang === "en" ? "‚Üì Down" : "‚Üì ‡∏•‡∏á"}
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onPointerDown={(e) => e.preventDefault()}
-                                      onClick={() => removeItemStatusFromRoster(st)}
-                                      className="min-h-11 touch-manipulation rounded-xl bg-rose-100 px-3 text-[11px] font-bold text-rose-900 ring-1 ring-rose-200/80 active:bg-rose-200/80 sm:px-2.5"
-                                      aria-label={uiLang === "en" ? `Remove ¬´${st}¬ª from bar` : `‡∏•‡∏ö ${st} ‡∏≠‡∏≠‡∏Å‡∏à‡∏≤‡∏Å‡πÅ‡∏ñ‡∏ö‡∏Å‡∏£‡∏≠‡∏á`}
-                                      title={uiLang === "en" ? "Remove from bar (restore below)" : "‡∏•‡∏ö‡∏à‡∏≤‡∏Å‡πÅ‡∏ñ‡∏ö (‡πÑ‡∏õ‡∏Å‡∏•‡∏∏‡πà‡∏°‡πÄ‡∏™‡πâ‡∏ô‡∏õ‡∏£‡∏∞)"}
-                                    >
-                                      {uiLang === "en" ? "Remove" : "‡∏•‡∏ö‡∏à‡∏≤‡∏Å‡πÅ‡∏ñ‡∏ö"}
-                                    </button>
-                                  </div>
-                                </div>
-                              </li>
-                            ))}
-                          {itemStatusRoster.length > 0 && addableItemStatuses.length > 0
-                            ? addableItemStatuses.map((st) => {
-                                const lbl = statusLabel(st as ItemStatusFilterValue);
-                                return (
-                                  <li
-                                    key={`toolbar-off-${st}`}
-                                    className="rounded-2xl border border-dashed border-slate-300/80 bg-slate-50/40 p-2.5"
-                                  >
-                                    <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:gap-3">
-                                      <span className="inline-flex w-fit shrink-0 rounded-lg bg-white px-2 py-1 text-[11px] font-bold text-slate-500 ring-1 ring-slate-200/80">
-                                        {st}
-                                      </span>
-                                      <div className="min-w-0 flex-1">
-                                        <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-                                          {uiLang === "en" ? "Not on bar" : "‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏≠‡∏¢‡∏π‡πà‡πÉ‡∏ô‡πÅ‡∏ñ‡∏ö‡∏Å‡∏£‡∏≠‡∏á"}
-                                        </p>
-                                        <p className="truncate text-sm font-semibold text-slate-700">{lbl}</p>
-                                      </div>
-                                      <button
-                                        type="button"
-                                        onPointerDown={(e) => e.preventDefault()}
-                                        onClick={() => addItemStatusToRoster(st)}
-                                        className="min-h-11 shrink-0 touch-manipulation rounded-xl bg-slate-950 px-4 text-xs font-bold text-white shadow-sm active:bg-slate-800"
-                                        aria-label={
-                                          uiLang === "en"
-                                            ? `Add ¬´${st}¬ª to filter bar`
-                                            : `‡πÄ‡∏û‡∏¥‡πà‡∏° ${st} ‡πÄ‡∏Ç‡πâ‡∏≤‡πÅ‡∏ñ‡∏ö‡∏Å‡∏£‡∏≠‡∏á`
-                                        }
-                                        title={uiLang === "en" ? "Add to bar" : "‡πÄ‡∏û‡∏¥‡πà‡∏°‡πÄ‡∏Ç‡πâ‡∏≤‡πÅ‡∏ñ‡∏ö‡∏Å‡∏£‡∏≠‡∏á"}
-                                      >
-                                        {uiLang === "en" ? "+ Add to bar" : "+ ‡πÄ‡∏û‡∏¥‡πà‡∏°‡πÄ‡∏Ç‡πâ‡∏≤‡πÅ‡∏ñ‡∏ö"}
-                                      </button>
-                                    </div>
-                                  </li>
-                                );
-                              })
-                            : null}
-                        </ul>
-                        </div>
-
-                        <div className="mt-4 border-t border-slate-200/70 pt-4">
-                          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                            {uiLang === "en" ? "Due-today chip" : "‡∏ä‡∏¥‡∏õ‡∏°‡∏≤‡∏ß‡∏±‡∏ô‡∏ô‡∏µ‡πâ"}
-                          </p>
-                          <p className="mt-1 text-[10px] font-normal leading-snug text-slate-500">
-                            {uiLang === "en"
-                              ? "Includes items whose status is selected and Thailand due-date offset equals the number (0 = due today)."
-                              : "‡πÄ‡∏•‡∏∑‡∏≠‡∏Å‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏ó‡∏µ‡πà‡πÄ‡∏Ç‡πâ‡∏≤‡∏Å‡∏•‡∏∏‡πà‡∏° ‡πÅ‡∏•‡πâ‡∏ß‡∏Å‡∏≥‡∏´‡∏ô‡∏î‡∏Ñ‡πà‡∏≤‡∏£‡∏∞‡∏¢‡∏∞‡∏à‡∏≤‡∏Å‡∏ß‡∏±‡∏ô‡∏ô‡∏µ‡πâ‡∏ñ‡∏∂‡∏á due (0 = ‡∏û‡∏≠‡∏î‡∏µ‡∏ß‡∏±‡∏ô‡∏ô‡∏µ‡πâ, ‡∏Å‡∏ó‡∏°.)"}
-                          </p>
-                          <div className="mt-2 flex flex-wrap gap-1.5">
-                            {ITEM_STATUSES.map((st) => {
-                              const on = itemStatusPoliciesNormalized.dueToday.statuses.includes(st);
-                              return (
-                                <button
-                                  key={st}
-                                  type="button"
-                                  onPointerDown={(e) => e.preventDefault()}
-                                  onClick={() => toggleDueTodayPolicyStatus(st)}
-                                  className={cn(
-                                    "rounded-full px-2.5 py-1 text-[11px] font-semibold transition-colors touch-manipulation",
-                                    on ? "bg-slate-950 text-white" : "bg-slate-200/80 text-slate-700"
-                                  )}
-                                >
-                                  {statusLabel(st as ItemStatusFilterValue)}
-                                </button>
-                              );
-                            })}
-                          </div>
-                          <label className="mt-3 flex flex-wrap items-center gap-2 text-[11px] font-medium text-slate-700">
-                            <span className="shrink-0">{uiLang === "en" ? "Match daysUntil" : "‡πÄ‡∏ó‡∏µ‡∏¢‡∏ö daysUntilBangkok"}</span>
-                            <input
-                              type="number"
-                              inputMode="numeric"
-                              step={1}
-                              value={itemStatusPoliciesNormalized.dueToday.matchDaysUntilDueBangkok}
-                              onChange={(e) => setDueTodayPolicyMatchDays(e.target.value)}
-                              className="w-24 rounded-xl border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm font-semibold tabular-nums outline-none ring-1 ring-transparent focus:ring-slate-300"
-                            />
-                          </label>
-                        </div>
-
-                        <div className="mt-4 border-t border-slate-200/70 pt-4">
-                          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                            {uiLang === "en" ? "Rules per status code" : "‡πÇ‡∏Ñ‡πâ‡∏î‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞ ¬∑ due / ‡∏ù‡∏≤‡∏Å / SLA"}
-                          </p>
-                          <ul className="mt-2 space-y-1.5">
-                          {ITEM_STATUSES.map((st) => {
-                            const row = itemStatusPoliciesNormalized.byStatus[st];
-                            return (
-                              <li key={st} className="rounded-xl bg-slate-50 px-2 py-1.5 ring-1 ring-slate-100">
-                                <div className="text-[11px] font-bold leading-tight text-slate-900">
-                                  <span>{st}</span>
-                                  <span className="ml-1 font-normal text-slate-600">¬∑ {statusLabel(st as ItemStatusFilterValue)}</span>
-                                </div>
-                                <div className="mt-2 flex flex-col gap-2">
-                                  <div className="flex flex-wrap gap-x-4 gap-y-2 text-[11px] font-medium text-slate-700">
-                                    <label className="inline-flex cursor-pointer items-center gap-1.5">
-                                      <input
-                                        type="checkbox"
-                                        checked={row.arrivalDueDate}
-                                        onChange={() =>
-                                          patchItemStatusPolicy(st, { arrivalDueDate: !row.arrivalDueDate })
-                                        }
-                                        className="h-4 w-4 shrink-0 rounded border-slate-300"
-                                      />
-                                      {uiLang === "en" ? "Due date drives arrival ETA" : "‡πÉ‡∏ä‡πâ due ‡πÄ‡∏õ‡πá‡∏ô‡∏Å‡∏≥‡∏´‡∏ô‡∏î‡∏°‡∏≤"}
-                                    </label>
-                                    <label className="inline-flex cursor-pointer items-center gap-1.5">
-                                      <input
-                                        type="checkbox"
-                                        checked={row.storeDepositClock}
-                                        onChange={() => {
-                                          const nextOn = !row.storeDepositClock;
-                                          patchItemStatusPolicy(st, {
-                                            storeDepositClock: nextOn,
-                                            storeDepositMaxDays: nextOn
-                                              ? row.storeDepositMaxDays ?? DEFAULT_STORE_DEPOSIT_MAX_DAYS
-                                              : row.storeDepositMaxDays,
-                                          });
-                                        }}
-                                        className="h-4 w-4 shrink-0 rounded border-slate-300"
-                                      />
-                                      {uiLang === "en" ? "Store deposit cap" : "‡πÄ‡∏û‡∏î‡∏≤‡∏ô‡∏ß‡∏±‡∏ô‡∏ù‡∏≤‡∏Å‡∏™‡πÇ‡∏ï‡∏£‡πå"}
-                                    </label>
-                                  </div>
-                                  <div className="flex flex-wrap gap-3">
-                                    {row.storeDepositClock ? (
-                                      <label className="flex flex-wrap items-center gap-1 text-[11px] text-slate-600">
-                                        <span className="font-medium">{uiLang === "en" ? "Cap days" : "‡πÄ‡∏û‡∏î‡∏≤‡∏ô‡∏ß‡∏±‡∏ô"}</span>
-                                        <input
-                                          type="number"
-                                          inputMode="numeric"
-                                          min={1}
-                                          max={730}
-                                          value={row.storeDepositMaxDays == null ? "" : String(row.storeDepositMaxDays)}
-                                          onChange={(e) => {
-                                            patchItemStatusPolicy(st, {
-                                              storeDepositMaxDays: parseOptionalPolicyDay(e.target.value),
-                                            });
-                                          }}
-                                          placeholder={String(DEFAULT_STORE_DEPOSIT_MAX_DAYS)}
-                                          className="w-[4.25rem] rounded-lg bg-white px-1.5 py-1 text-xs font-semibold tabular-nums ring-1 ring-slate-200/80"
-                                        />
-                                      </label>
-                                    ) : null}
-                                    <label className="flex flex-wrap items-center gap-1 text-[11px] text-slate-600">
-                                      <span className="font-medium">{uiLang === "en" ? "Days in-status (warn)" : "‡∏≠‡∏¢‡∏π‡πà‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡πÄ‡∏Å‡∏¥‡∏ô‡∏ß‡∏±‡∏ô (‡πÄ‡∏ï‡∏∑‡∏≠‡∏ô)"}</span>
-                                      <input
-                                        type="number"
-                                        inputMode="numeric"
-                                        min={1}
-                                        max={730}
-                                        value={row.slaMaxCalendarDaysInStatus == null ? "" : String(row.slaMaxCalendarDaysInStatus)}
-                                        onChange={(e) => {
-                                          patchItemStatusPolicy(st, {
-                                            slaMaxCalendarDaysInStatus: parseOptionalPolicyDay(e.target.value),
-                                          });
-                                        }}
-                                        placeholder="‚Äî"
-                                        className="w-[4.25rem] rounded-lg bg-white px-1.5 py-1 text-xs font-semibold tabular-nums ring-1 ring-slate-200/80"
-                                      />
-                                    </label>
-                                  </div>
-                                </div>
-                              </li>
-                            );
-                          })}
-                        </ul>
-                        </div>
-                      </div>
-                    </div>
-                  ) : null}
-                  <div className="mt-1.5 flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onPointerDown={(e) => e.preventDefault()}
-                      onClick={clearItemStatusFiltersStable}
-                      className={cn(
-                        "flex min-h-[52px] min-w-[5rem] shrink-0 flex-col items-center justify-center gap-1 rounded-xl px-2 py-2 text-center touch-manipulation transition-colors",
-                        itemStatusFilters.size === 0 ? "bg-slate-950 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200/70"
-                      )}
-                    >
-                      <div className="text-xs font-medium leading-snug">{uiLang === "en" ? "Show all" : "‡πÅ‡∏™‡∏î‡∏á‡∏ó‡∏±‡πâ‡∏á‡∏´‡∏°‡∏î"}</div>
-                      <div className="text-base font-semibold tabular-nums">{itemStatusTotalCount}</div>
-                    </button>
-                    {itemStatusFilterOptionsForToolbar.map((s) => (
-                      <button
-                        key={s}
-                        type="button"
-                        onPointerDown={(e) => e.preventDefault()}
-                        onClick={() => toggleItemStatusChipStable(s)}
-                        title={
-                          s === ITEM_STATUS_DUE_TODAY
-                            ? uiLang === "en"
-                              ? `Matches due-day rule: statuses ${itemStatusPoliciesNormalized.dueToday.statuses.join(", ")} ¬∑ daysUntilBangkok=${itemStatusPoliciesNormalized.dueToday.matchDaysUntilDueBangkok}`
-                              : `‡∏ä‡∏¥‡∏õ‡∏°‡∏≤‡∏ß‡∏±‡∏ô‡∏ô‡∏µ‡πâ: ‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞ ${itemStatusPoliciesNormalized.dueToday.statuses.join(" ¬∑ ")} ¬∑ daysUntilBangkok=${itemStatusPoliciesNormalized.dueToday.matchDaysUntilDueBangkok}`
-                            : undefined
-                        }
-                        className={cn(
-                          "flex min-h-[52px] min-w-[4.25rem] max-w-[7rem] shrink-0 flex-col items-center justify-center gap-1 rounded-xl px-2 py-2 text-center transition-colors touch-manipulation",
-                          toolbarItemStatusFilterChipClasses(s, itemStatusFilters.has(s))
-                        )}
-                      >
-                        <span className="line-clamp-3 max-w-full text-xs font-medium leading-snug">{statusLabel(s)}</span>
-                        <span className="text-base font-semibold tabular-nums">
-                          {s === ITEM_STATUS_DUE_TODAY ? dueTodayItemCount : itemStatusCounts.get(s) ?? 0}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-          </>
-        </header>
-        <main className="px-0 pb-[calc(4.75rem+env(safe-area-inset-bottom,0px))] pt-0 sm:px-3">
-            <div className="space-y-3 pb-4">
-              {visiblePagedForRender.map((order) => (
-                <OrderCard
-                  key={order.id}
-                  order={order}
-                  uiLang={uiLang}
-                  staffRosterNames={staffRoster}
-                  saleAssigneesBySale={saleAssignees}
-                  shareBaseUrl={shareBaseUrl}
-                  itemStatusLabels={itemStatusLabels}
-                  itemPoliciesNorm={itemStatusPoliciesNormalized}
-                  itemStatusRosterForCard={itemStatusRoster}
-                  toolbarStaffFilters={filteringStaffFilters}
-                  toolbarStatusFilters={filteringItemStatusFilters}
-                  onLiveItemsChange={handleOrderLiveItemsChange}
-                  lineInboxActive={lineInboxFocusOrderId === order.id}
-                />
-              ))}
-              {orderChipCacheExperimentEnabled && experimentLoadingDetails && experimentMissingWantedCount > 0 ? (
-                Array.from({ length: Math.min(3, experimentMissingWantedCount) }).map((_, index) => (
-                  <div
-                    key={`experiment-skeleton-${index}`}
-                    className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200/70"
-                  >
-                    <div className="h-5 w-3/4 animate-pulse rounded-full bg-slate-200" />
-                    <div className="mt-3 h-3 w-1/2 animate-pulse rounded-full bg-slate-200" />
-                    <div className="mt-4 flex gap-2">
-                      <div className="h-8 w-20 animate-pulse rounded-full bg-slate-100" />
-                      <div className="h-8 w-24 animate-pulse rounded-full bg-slate-100" />
-                    </div>
-                    <div className="mt-4 h-12 animate-pulse rounded-2xl bg-slate-100" />
-                  </div>
-                ))
-              ) : null}
-              {hasMoreVisible ? (
-                <div ref={loadMoreRef} className="h-9 w-full rounded-2xl bg-slate-100 text-center text-sm font-medium leading-9 text-slate-600">
-                  {orderChipCacheExperimentEnabled && experimentLoadingDetails
-                    ? (uiLang === "en" ? "Loading card details..." : "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡πÇ‡∏´‡∏•‡∏î‡∏£‡∏≤‡∏¢‡∏•‡∏∞‡πÄ‡∏≠‡∏µ‡∏¢‡∏î‡∏Å‡∏≤‡∏£‡πå‡∏î...")
-                    : (uiLang === "en" ? "Loading more..." : "‡∏Å‡∏≥‡∏•‡∏±‡∏á‡πÇ‡∏´‡∏•‡∏î‡πÄ‡∏û‡∏¥‡πà‡∏°...")} ({visiblePagedForRender.length}/{visible.length})
-                </div>
-              ) : null}
-              {!visible.length ? (
-                <div className="rounded-2xl bg-white p-6 text-center shadow-sm ring-1 ring-slate-200/60">
-                  <p className="text-base font-semibold leading-snug text-slate-800">
-                    {mappedOrders.length === 0
-                      ? (uiLang === "en" ? "No orders found in system yet" : "‡∏¢‡∏±‡∏á‡πÑ‡∏°‡πà‡∏°‡∏µ‡∏á‡∏≤‡∏ô‡πÉ‡∏ô‡∏£‡∏∞‡∏ö‡∏ö")
-                      : (uiLang === "en" ? "No orders match current filters" : "‡πÑ‡∏°‡πà‡∏û‡∏ö‡∏á‡∏≤‡∏ô‡∏ó‡∏µ‡πà‡∏ï‡∏£‡∏á‡∏Å‡∏±‡∏ö‡∏ï‡∏±‡∏ß‡∏Å‡∏£‡∏≠‡∏á")}
-                  </p>
-                  {mappedOrders.length > 0 ? (
-                    <>
-                      <p className="mt-2 text-xs font-semibold leading-relaxed text-slate-500">
-                        {uiLang === "en"
-                          ? "Try clearing search, or changing sale code / sale status / owner / item status filters."
-                          : "‡∏•‡∏≠‡∏á‡∏•‡πâ‡∏≤‡∏á‡∏ä‡πà‡∏≠‡∏á‡∏Ñ‡πâ‡∏ô‡∏´‡∏≤ ‡∏´‡∏£‡∏∑‡∏≠‡πÄ‡∏õ‡∏•‡∏µ‡πà‡∏¢‡∏ô‡πÄ‡∏ã‡∏•‡∏•‡πå / ‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏Ç‡∏≤‡∏¢ / ‡∏û‡∏ô‡∏±‡∏Å‡∏á‡∏≤‡∏ô / ‡∏™‡∏ñ‡∏≤‡∏ô‡∏∞‡∏£‡∏≤‡∏¢‡∏Å‡∏≤‡∏£"}
-                      </p>
-                      <button type="button" onClick={clearFiltersStable} className="mt-4 h-11 w-full max-w-[280px] rounded-2xl bg-slate-950 text-sm font-semibold text-white touch-manipulation">
-                        {uiLang === "en" ? "Clear filters" : "‡∏•‡πâ‡∏≤‡∏á‡∏ï‡∏±‡∏ß‡∏Å‡∏£‡∏≠‡∏á"}
-                      </button>
-                    </>
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
-        </main>
-      </div>
-    </div>
-        <LineInboxFloatingNavigator />
-      </LineInboxBridgeProvider>
-    </>
-  );
-}
+Y™Áäx-ÆÈ‹j◊ù¢Îi∫⁄+äßj[hëÈ‹¢ÈÌ◊nπÔ‘Ëµ©h∫⁄n∂XßzÕHù\ŸH€Y[ùé¬Çö[\‹ùôXX›¬àúòY€Y[ùà\ŸPÿ[òX⁄Àà\ŸRYà\ŸSY[[Àà\ŸQYô\úôYò[YKà\ŸTôYãà\ŸT›]Kà\ŸQYôôX›à\ŸS^[›]YôôX›à›\ùò[ú⁄][€ãüHúõ€HúôXX›é¬ö[\‹ù»õ\⁄ﬁ[ò»Húõ€HúôXX›Y€Hé¬ö[\‹ù»‹ôX]P€Y[ùHúõ€Hê›\Xò\ŸK‹›\Xò\ŸKZú»é¬ö[\‹ù[ö»úõ€Hõô^€[ö»é¬ö[\‹ù[XYŸHúõ€Hõô^⁄[XYŸHé¬ö[\‹ù»\ŸT]ò[YK\ŸTõ›]\ã\ŸTŸX\ò⁄\ò[\»Húõ€Hõô^€ò]öYÿ][€àé¬ö[\‹ù\H»ÿ\àHúõ€Hê›\\Àÿÿ\àé¬ö[\‹ù\H»‹ô\ïòX⁄⁄[ô‘ÿ[T›]\‘›[[X\ûK‹ô\ïòX⁄⁄[ô‘›[[X\ûT€ò\⁄›Húõ€Hê€XãŸ]Kÿÿ\ú»é¬ö[\‹ù¬à‘ëTó“UST◊’PìW”êSQKà‘ëTó’T“◊’TUT◊’PìW”êSQKà\H‹ô\í][Qö[\í[ô^]KüHúõ€Hê€XãŸ]K€‹ô\ú»é¬ö[\‹ù¬à‘ëTó’êP““Së◊‘–SW–”—TÀàõ‹õX[^ôTÿ[P\‹⁄Y€ôY\”X\àô\€€ôTÿ[T›Yôëõ‹ì‹ô\ãüHúõ€Hê€Xã€‹ô\úÀ‹ÿ[KX\‹⁄Y€ôY\À\⁄\ôYé¬ö[\‹ù»\‘›Yôîõ‹›\ìò[YQ^€YYõ‹õX[^ôT›Yôîõ‹›\ìò[Y\»Húõ€Hê€Xã€‹ô\úÀ‹›Yôã\õ‹›\ã\⁄\ôYé¬ö[\‹ù»ôZX€SX]⁄\”‹ô\îŸX\ò⁄Húõ€Hê€Xã€‹ô\úÀ›ôZX€K\ŸX\ò⁄é¬ö[\‹ù»ùZ[‹ô\ïòX⁄⁄[ô‘⁄\ôS‹[ï\õHúõ€Hê€Xã€[ôK€‹ô\ã]òX⁄⁄[ôÀ\⁄\ôK]\õé¬ö[\‹ù¬à[ôR[òõﬁúöYŸTõ›öY\ãà[ôR[òõﬁõÿ][ô”ò]öYÿ]‹ãà[ôR[òõﬁÿ\êZTŸX›[€ãà\H[ôR[òõﬁX⁄–ÿ\î^[ÿYüHúõ€Hêÿ€€\€ô[ùÀ€‹ô\úÀ€[ÿö[K]åã€[ôKZ[òõﬁXZK]€€ò\àé¬ö[\‹ù¬à‘ëTó“USW‘ëQó‘P◊—Sãà‘ëTó“USW’SW‘ì”‘’“—Sãà‹ô\í][SXô[€€ùZ[ú’[Tõ€‹à\úŸQ[ô€\⁄›‘ôYìX\öŸ\úÀà›ö\[ô€\⁄›‘ôYìX\öŸ\úÀüHúõ€Hê€Xã€‹ô\úÀ€‹ô\ãZ][K][K\õ€‹]⁄Ÿ[àé¬ö[\‹ù¬à‘ëTó’êP““Së◊“USW‘’UT—TÀàQêUS‘’‘ëW—T‘“U”PV—VTÀàYò][][T›]\‘€X⁄Y\”õ‹õX[^ôYàõ‹õX[^ôR][T›]\‘€X⁄Y\‘ò]Ààõ‹õX[^ôY][T€X⁄Y\’‘›‹ôYú€€ãà\úö]ò[YPÿ[[ô\ë^\’[ù[ò[ô⁄€⁄ÀàX]⁄\—YUŸ^P⁄\à›‹ôQ\‹⁄]YôôX›]ôSX^^\Àà›‹ôQ\‹⁄]ô[XZ[ö[ô”Xô[à›‹ôQ\‹⁄]€ôKà€Q^ŸYYY[î›]\Àà\H][T›]\‘€X⁄Y\”õ‹õX[^ôYà\Hô\€€ôY][Tõ›‘›]\‘€XﬁKüHúõ€Hê€Xã€‹ô\úÀ⁄][K\›]\À\€X⁄Y\»é¬Çã äà[X\»8†%8.'¯.,x.!¯. x.c8."∏.,x.&x.`¯.&HXà8.`8.%8.-x.(∏.)¯. x.,x.&∏.`8.%8.-8.(x.%¯.-x.b8.`8.!8.(∏.+∏.,∏.(¯.c8.%8.`∏.!8.bx.%8.a8.)¯.bx. ∏.bx.,∏.!¯.)x.b8.,∏.!»
+ã¬ò€€ú›ÿ[[ô\ë^\’[ù[YPò[ô⁄€⁄»H\úö]ò[YPÿ[[ô\ë^\’[ù[ò[ô⁄€⁄Œ¬Çò€€ú›‘ëTó“USW’SW‘ì”‘’“—Só‘ëQ—VBà 8.%x.,∏.(x.(¯..x.&ﬂ8.%x.,∏.(x.(8.,∏.'üôYó úXﬂ\◊ ‹›ﬂŸYW ‹› KŸ⁄N¬Çò€€ú›–SW‘’UT—T»H»∏.%¯.,x.bx.!¯.*¯.(x.%ã∏."8.+x.!»ã∏.(¯.+x.*∏.b8.!»ã∏.*∏.b8.!¯.`x.)x.bx.)»ã∏.)¯.b8.,∏.!»óH\»€€ú›¬ò€€ú›USW‘’UT—T»H‘ëTó’êP““Së◊“USW‘’UT—TŒ¬ò€€ú›–RUSë»H»∏.`8."∏.a¯.!ã∏.%x.bx.+x.!¯.*∏.,x.b8.!»ã∏.*∏.,x.b8.!»óH\»€€ú›¬ò€€ú›”ëHH»∏.(x.-Hã∏.(x.,àã∏.(¯.%∏.&x.+x. Hã∏."∏.b8.,∏.!¯.&x.+x. Hã∏."8.&àóH\»€€ú›¬ò€€ú›’UT◊–P’S”ó”ì’HHó◊”ì’W◊»é¬ò€€ú›–SW—íSTó’SêT‘“Q”ëQHó◊‹ÿ[W›[ò\‹⁄Y€ôY◊»é¬ò€€ú›”ì’”ó‘–SW–”—T»Hô]»Ÿ]›ö[ôœä‘ëTó’êP““Së◊‘–SW–”—TÀõX\
+
+€ŸJHOà€ŸKù’\\êÿ\ŸJ
+JJN¬ã äà8.!8.)¯.,∏.(x. x.)¯.bx.,∏.!¯.&¯..8.b8.(x.%x.b8.+x."∏.b8.+x.!¯.`8.(x.-¯.b8.+x.&¯.,x.%8."¯.bx.,∏.(∏.`8.&¯.-8.%
+
+H8†%8.*∏.,∏.(x."∏.b8.+x.!»H8.`8.'∏.-8.b8.(x.!¯.,∏.&H0≠»8.`8.'∏.-8.b8.(x.`x.%∏.)»0≠»8.)x.&à
+ã¬ò€€ú›’“TW‘ì’◊–P’S”ó‘H¬ã äà8.(¯.,8.(∏.,8.`8.&¯.-8.%8.`8.%x.a¯.(x.`8.(x.-¯.b8.+x.&¯.,x.%8."¯.bx.,∏.(à
+8.*∏.,∏.(x.&¯..8.b8.(x.`8.%¯.b8.,∏. x.,x.&JH
+ã¬ò€€ú›’“TW‘ì’◊”Qï”‘Só‘H’“TW‘ì’◊–P’S”ó‘
+àŒ¬ã äà8."8.,∏. x.&¯.-8.%8°§à8.&¯.,x.%8."¯.bx.,∏.(∏.`8. x.-8.&x.*∏.,x.%8.*∏.b8.)¯.&x.&x.-x.bx.`x.)x.bx.)¯.&¯.)x.b8.+x.(àH8.*∏.`x.&x.&¯.`8.&¯.-8.%
+8.%x.b8.,»H8.&¯.,x.%8.&x.-8.%8.`8.%8.-x.(∏.)¯. x.a¯.)x.a¯.+x. x.a8.%8.bJH
+ã¬ò€€ú›’“TW‘ì’◊‘”êT‘êUS»HåN¬ã äà8.`x.(∏. x.%¯.-8.*8.%¯.,∏.!¯.)x.,∏. x.`x.&x.)¯.&x.+x.&Hú»8.`8.)x.-¯.b8.+x.&x.*¯.&x.bx.,∏.`x.&x.)¯.%x.,x.bx.!»8†%8.)x.%8. x.,∏.(¯.`x.(∏.b8.!¯.*∏. x.+x.(¯.c8.)H
+ã¬ò€€ú›’“TW’’P“‘”‘‘HLé¬ã äà8.`x.%∏.)¯.(¯.b8.,∏.!»[ùZŸH8.%¯.-x.b8.+x.(∏..x.b8.*¯.)x.,x.!¯.`x.%∏.)¯.*∏..8.%8.%¯.bx.,∏.(∏. ∏.+x.!¯. x.,∏.(¯.c8.%
+8.&¯..8.b8.(x.`8.'∏.-8.b8.(x.`x.%∏.)¯.)¯.b8.,∏.!¯.`¯.&x.'¯.+x.(¯.c8.(JH
+ã¬ò€€ú›SìSëW“Sî—Tï–QïTó—SëHó◊⁄[õ[ôWÿYù\ó€\›◊»é¬Çù\H[õ[ôQòYùõ›»H¬àYà›ö[ôŒ¬àò[YNà›ö[ôŒ¬à\Xÿ]Nàõ€€X[é¬à äà8.%x.-8.b∏. x.`8.'∏.-¯.b8.+x.*∏.b8.!¯.`8. ∏.bx.,∏.`8.'∏.-8.b8.(x.!¯.,∏.&x."8.(¯.-8.!»
+ã¬àŸ[X›Yàõ€€X[é¬à\‹⁄Y€ôYNà›ö[ôŒ¬à›]\Œà][T›]\’ò[YN¬à[úŸ\ùYù\ïZYà›ö[ôŒ¬üN¬ù\HZS[ô»Hùàô[àé¬ã äà8.%8.-∏.!¯.)x.!¯.(¯.-x.`8.'¯.(¯."à8†%8.(¯.,8.(∏.,8.%8.-∏.!»
+8.*¯.)x.,x.!¯.)x.%8.`x.(¯.! H8.%¯.-x.b8.&¯.)x.b8.+x.(∏.`x.)x.bx.)¯.`¯.*¯.bHôYúô\⁄
+ã¬ò€€ú›ó‘ëSPT—W—STQ‘Hé¬ò€€ú›’Qëó‘ì‘’Tó‘’‘êQ—W“—VHHùöY€ÕKõ‹ô\ïòX⁄⁄[ôÀú›Yôîõ‹›\àé¬ò€€ú›–SW–T‘“Q”ëQT◊‘’‘êQ—W“—VHHùöY€ÕKõ‹ô\ïòX⁄⁄[ôÀúÿ[P\‹⁄Y€ôY\»é¬ò€€ú›USW‘’UT◊‘ì‘’Tó‘’‘êQ—W“—VHHùöY€ÕKõ‹ô\ïòX⁄⁄[ôÀö][T›]\‘õ‹›\àé¬ò€€ú›USW‘’UT◊”PëS◊‘’‘êQ—W“—VHHùöY€ÕKõ‹ô\ïòX⁄⁄[ôÀö][T›]\”Xô[»é¬ò€€ú›USW‘’UT◊‘”P“QT◊‘’‘êQ—W“—VHHùöY€ÕKõ‹ô\ïòX⁄⁄[ôÀö][T›]\‘€X⁄Y\ÀùåHé¬ò€€ú›’Qëó‘ì‘’Tó–TW‘UHãÿ\K€K€‹ô\ã]òX⁄⁄[ôÀ‹›Yôã\õ‹›\àé¬ò€€ú›‘ëTó’êP““Së◊––Të—URS◊–TW‘UHãÿ\K€K€‹ô\ã]òX⁄⁄[ôÀÿÿ\ôY]Z[»é¬ò€€ú›‘ëTó’êP““Së◊—VTíSQSï“SíUPS–”’SïHå¬ò€€ú›‘ëTó’êP““Së◊—VTíSQSï“Sê‘ëSQSïHL¬ò€€ú›‘ëTó’êP““Së◊—VTíSQSï–RPQ–ïQëëTàHå¬ã äà8."∏.-8.&¯. x.(¯.+x.!¯.(¯.,∏.(∏. x.,∏.(¯.%¯.-x.b8.(∏.,x.!¯.a8.(x.b8.(x.-x."∏.-¯.b8.+x.'∏.&x.,x. x.!¯.,∏.&H8†%8.!8.b8.,∏.(8.,∏.(∏.`¯.&H8.a8.(x.b8."∏.&x. x.,x.&∏."∏.-¯.b8.+x."8.(¯.-8.!»
+ã¬ò€€ú›’Qëó—íSTó’SêT‘“Q”ëQHó◊’SêT‘“Q”ëQ◊»é¬ò€€ú›’Qëó—íSTó’SêT‘“Q”ëQ”PëSH∏.a8.(x.b8.(¯.,8.&∏..8."∏.-¯.b8.+Hé¬ã äà8. x.(¯.+x.!¯.%x.,∏.(x.(¯.+x.&∏.*∏.b8.!»
+8.!8.b8.,àõ€⁄ŸY‹⁄\[ô H8†%⁄Ÿ[àHôYö^
+»⁄\‹õ›\Ÿ^J⁄\
+H
+ã¬ò€€ú›’Qëó—íSTó–ì”“—Q‘“T‘ëQíVHó◊–ì”“—Q‘“T◊»é¬ã äà8. x.(¯.+x.!¯.%x.,∏.(x."∏.-¯.b8.+x.)x..x. x.!8.bx.,à
+8.*∏.%∏.,∏.&x.,8. ∏.,∏.(à8."8.+x.! H8†%⁄Ÿ[àHôYö^
+»ù^Y\ë‹õ›\Ÿ^Jù^Y\äH
+ã¬ò€€ú›’Qëó—íSTó–ì”“—Q–ïVQTó‘ëQíVHó◊–ì”“—Q–ïVQTó◊»é¬ã äà8.*∏.b8.!¯.`x.)x.bx.)Œà8. x.(¯.+x.!¯.%x.,∏.(Hÿ\úÀú⁄\Y
+8.)¯.b8.,∏.!»H8.a8.(x.b8.(x.-x. ∏.bx.+x.!8.)¯.,∏.(JH
+ã¬ò€€ú›’Qëó—íSTó‘””‘“TQ—STHHó◊‘””‘“TQ—STW◊»é¬ò€€ú›’Qëó—íSTó‘””‘“TQ‘ëQíVHó◊‘””‘“T◊»é¬ã äà8.*∏.b8.!¯.`x.)x.bx.)Œà8. x.(¯.+x.!¯.%x.,∏.(H[Ÿ[YX\à
+8.)¯.b8.,∏.!»H8.a8.(x.b8.(x.-x.&¯.-x.`¯.&x.(¯.,8.&∏.&äH
+ã¬ò€€ú›’Qëó—íSTó‘”””S—S÷QPTó—STHHó◊‘”””VW—STW◊»é¬ò€€ú›’Qëó—íSTó‘”””S—S÷QPTó‘ëQíVHó◊‘”””VW◊»é¬ã äà8.*∏.%∏.,∏.&x.,8. ∏.,∏.(à8.)¯.b8.,∏.!Œà8. x.(¯.+x.!¯.%x.,∏.(H[Ÿ[YX\à
+8.`x.(∏. x."8.,∏. x."∏..8.%8.*∏.b8.!¯.`x.)x.bx.) H
+ã¬ò€€ú›’Qëó—íSTó’êP–Sï”S—S÷QPTó—STHHó◊’êP◊”VW—STW◊»é¬ò€€ú›’Qëó—íSTó’êP–Sï”S—S÷QPTó‘ëQíVHó◊’êP◊”VW◊»é¬ã äàYÿXﬁH8."∏.-8.&¯.(¯.)¯.(H
+8.`8.%8.-8.(JH8†%8.(∏.,x.!¯.(¯.+x.!¯.(¯.,x.&∏.`¯.&H›]H8.`x.%x.bRH8.`¯."∏.bx."∏.-8.&¯.%x.b8.+x.(¯.+x.&à
+ã¬ò€€ú›’Qëó—íSTó–ì”“—Q‘“TSë»Hó◊–ì”“—Q‘“TSë◊◊»é¬ò€€ú›USW‘’UT◊‘ëQî◊–TW‘UHãÿ\K€K€‹ô\ã]òX⁄⁄[ôÀ⁄][K\›]\À\ôYú»é¬ò€€ú›‘ëTó‘’‘◊”T’–TW‘UHãÿ\K€K€‹ô\ã\›‹À€\›é¬ò€€ú›‘ëTó‘’‘◊’T–Q–TW‘UHãÿ\K€K€‹ô\ã\›‹À›\ÿYé¬ò€€ú›‘ëTó‘’‘◊—SUW–TW‘UHãÿ\K€K€‹ô\ã\›‹ÀŸ[]Hé¬ã äà8.%8.-∏.!¯.(¯..x.&¯."8.,∏. HTì8.&∏.&x.`8."¯.-8.(¯.c8.'¯.`8.)¯.+x.(¯.c8†%8.`¯."∏.bx.`8.(x.-¯.b8.+x.)x.,∏. x."8.,∏. HSëH8.`8.%8.*∏. x.c8.%¯.a¯.+x.&¯.a8.%8.bx.`x.%x.b8.`8.&¯.a¯.&x.)x.-8.!¯. x.c8.a8.(x.b8.`¯."∏.b8.a8.'¯.)x.c
+ã¬ò€€ú›‘ëTó‘’‘◊—ëU“’Tì–TW‘UHãÿ\K€K€‹ô\ã\›‹ÀŸô]⁄]\õé¬ò€€ú›‘ëTó“UST◊’êSî”UW––Të–TW‘UHãÿ\K€K€‹ô\ãZ][\À›ò[ú€]KXÿ\ôé¬ò€€ú›‘ëTó“UST◊’êSî”UW–S–TW‘UHãÿ\K€K€‹ô\ãZ][\À›ò[ú€]KX[é¬ò€€ú›‘ëTó’êP““Së◊’êSî”UW––Tó‘’SSPTñW–TW‘UHãÿ\K€K€‹ô\ã]òX⁄⁄[ôÀ›ò[ú€]KXÿ\ã\›[[X\ûHé¬ò€€ú›‘ëTó’êP““Së◊’RW”Së◊‘’‘êQ—W“—VHHùöY€ÕKõ‹ô\ïòX⁄⁄[ôÀùZS[ô»é¬Çã äàSëH»⁄õ€YH8.*¯.)x.,∏.(∏. x.(¯.$¯.-x.`¯.*¯.bx.`8.&¯.a¯.&HTì8.`¯.&H^8.a8.(x.b8.`¯."∏.bö[H
+ã¬ôù[ò›[€à^òX›[XYŸU\õ—úõ€Q]Uò[úŸô\äà]Uò[úŸô\àù[
+Nà›ö[ô÷◊H¬àYà
+Y
+Hô]\õà◊N¬à€€ú››]Hô]»Ÿ]›ö[ôœä
+N¬à€€ú›ûPY»H
+ò]Œà›ö[ô HOà¬à€€ú›HHò]ÀõX]⁄
+⁄Œó◊÷◊ó»âœò
+WWJÀ⁄JN¬àYà
+[OÀñÃJHô]\õé¬à]HHVÃKúô\XŸJ÷À
+N◊J…ŸÀàäN¬àHHKúô\XŸJ…ò[\ÀŸÀâàäN¬àûH¬àYà
+ô]»Tì
+JKúõ›ÿ€€OOHöŒàäHô]\õé¬à›]òY
+JN¬àHÿ]⁄¬à àY€õ‹ôH
+ã¬àBàN¬ÇàûH¬à€€ú›\\»Hù\\»»\úò^Kôúõ€Jù\\»\»]\òXõO›ö[ôœäHà◊N¬àõ‹à
+€€ú›\HŸà\\ H¬àYà
+]\H\HOOHëö[\»äH€€ù[ùYN¬à]]HHàé¬àûH¬à]HHôŸ]]J\JN¬àHÿ]⁄¬à€€ù[ùYN¬àBàYà
+Y]JH€€ù[ùYN¬à€€ú›H\Kù”›Ÿ\êÿ\ŸJ
+N¬à äà⁄õ€YH8.&∏.,∏.!¯.`x.*¯.)x.b8.!»8.`8."∏.b8.&H8.)x.,∏. x."8.,∏. x.`x.+x.&À¯.`8.)¯.a¯.&à
+ã¬àYà
+ö[ò€Y\ ô›€õÿY\õäJH¬à€€ú›[ô\»H]Kú‹]
+◊ã KõX\
+
+ HOàÀùö[J
+JKôö[\äõ€€X[äN¬à€€ú›\›H[ô\÷€[ô\Àõ[ô›HWN¬àYà
+\›
+HûPY \›
+N¬àûPY ]JN¬àBàYà
+\HOOHù^›\öK[\›àö[ò€Y\ ù\öK[\›äJH¬àõ‹à
+€€ú›[ôHŸà]Kú‹]
+◊è◊ã JH¬à€€ú›HH[ôKùö[J
+N¬àYà
+]HKú›\ù’⁄]
+à»äJH€€ù[ùYN¬àûPY Kú‹]
+óäVÃHœ»JN¬àBàBàYà
+\HOOHù^‹Z[àäH¬à€€ú›X]⁄\»H]KõX]⁄
+⁄Œó◊÷◊óœàâ◊JÀŸ⁄JHœ»◊N¬àõ‹à
+€€ú›ŸàX]⁄\ HûPY 
+N¬àBàYà
+\HOOHù^⁄[äH¬à€€ú›X]⁄\»H]KõX]⁄
+⁄Œó◊÷◊àâ◊œóJÀŸ⁄JHœ»◊N¬àõ‹à
+€€ú›ŸàX]⁄\ H¬à äà8.)x.%ò[ŸH‹⁄]]ôH8†%8.(∏.+x.(x.'8..x. x.`8.!8.(¯.-¯.+x. ∏.b8.,∏.(∏.(∏.+x.%8.&x.-8.(∏.(H
+»8.&x.,∏.(x.*∏. x..8.)x.(¯..x.&»
+ã¬à€€ú›€X[àHúô\XŸJ…ò[\ÀŸÀâàäN¬àYà
+à€[ôK\ÿŸü[ôWõY_[ôKX\ﬂÿú◊õ[ô_[Y›\üòòŸü[ú›Y‹ò[_€€Ÿ€]\Ÿ\ò€€ù[ù⁄Kù\›
+€X[äHà◊äúOŸﬂôﬂŸXú⁄YäJﬂﬂ	…óJK⁄Kù\›
+€X[äBà
+H¬àûPY €X[äN¬àBàBàBàBà äà8.%∏.bx.,∏.(∏.,x.!¯.a8.(x.b8.a8.%8.bHTì8†%8.`∏.*¯.)x.%8.%¯..8. H\H8.`x.)x.bx.)¯.%8.-∏.!»»8.%¯.-x.b8.&x.b8.,∏."8.,8.`8.&¯.a¯.&x.(¯..x.&»
+8.*¯.)x.,∏.(∏.`x.+x.&¯.(¯.,8.&∏..RSQH8.&¯.(¯.,8.*¯.)x.,∏.%
+H
+ã¬àYà
+›]ú⁄^ôHOOH
+H¬àõ‹à
+€€ú›\HŸà\\ H¬àYà
+]\H\HOOHëö[\»äH€€ù[ùYN¬àûH¬à€€ú›]HHôŸ]]J\JN¬àYà
+Y]HY]Kö[ò€Y\ öŒãÀ»äJH€€ù[ùYN¬à€€ú›\»H]KõX]⁄
+⁄Œó◊÷◊ó»âœò
+WWJÀŸ⁄JHœ»◊N¬àõ‹à
+€€ú›Ÿà\ H¬àYà
+€[ôK\ÿŸüÿú◊õ[ô_[ôWõY_[ôKX\À⁄Kù\›
+
+JHûPY 
+N¬à[ŸHYà
+◊äúOŸﬂôﬂŸXú⁄YäJﬂﬂ	…óJK⁄Kù\›
+
+JHûPY 
+N¬àBàHÿ]⁄¬à àY€õ‹ôH
+ã¬àBàBàBàHÿ]⁄¬à àY€õ‹ôH
+ã¬àBÇàô]\õà\úò^Kôúõ€J›]
+N¬üBÇôù[ò›[€à\’[ò]]‹ö^ôY\Q\úõ‹äY\‹ÿYŸNà›ö[ô Nàõ€€X[à¬à€€ú›HHY\‹ÿYŸKùö[J
+N¬àô]\õàHOOHï[ò]]‹ö^ôYàKú›\ù’⁄]
+ï[ò]]‹ö^ôYäN¬üBÇôù[ò›[€à\úŸT›Yôîõ‹›\íú€€äò]Œà›ö[ô»ù[
+Nà›ö[ô÷◊Hù[¬àYà
+\ò] Hô]\õàù[¬àûH¬à€€ú›\úŸYHî””ãú\úŸJò] H\»[ö€õ›€é¬à€€ú›ò[Y\»Hõ‹õX[^ôT›Yôîõ‹›\ìò[Y\ \úŸY
+N¬àô]\õàò[Y\Àõ[ô›»ò[Y\»àù[¬àHÿ]⁄¬àô]\õàù[¬àBüBÇôù[ò›[€àôXY›Yôîõ‹›\ëúõ€T›‹òYŸJ
+Nà›ö[ô÷◊H¬àYà
+\[Ÿà⁄[ô›»OOHù[ôYö[ôYäHô]\õà◊N¬àô]\õà\úŸT›Yôîõ‹›\íú€€äÿÿ[›‹òYŸKôŸ]][J’Qëó‘ì‘’Tó‘’‘êQ—W“—VJJHœ»◊N¬üBÇôù[ò›[€à‹ö]T›Yôîõ‹›\ï‘›‹òYŸJò[Y\Œà›ö[ô÷◊JH¬àYà
+\[Ÿà⁄[ô›»OOHù[ôYö[ôYäHô]\õé¬àûH¬àÿÿ[›‹òYŸKúŸ]][J’Qëó‘ì‘’Tó‘’‘êQ—W“—VKî””ãú›ö[ô⁄YûJò[Y\ JN¬àHÿ]⁄¬à àY€õ‹ôH][›H»ö]ò]H[ŸH
+ã¬àBüBÇôù[ò›[€àôXYÿ[P\‹⁄Y€ôY\—úõ€T›‹òYŸJ
+NàôX€‹ô›ö[ôÀ›ö[ôœà¬àYà
+\[Ÿà⁄[ô›»OOHù[ôYö[ôYäHô]\õàﬂN¬àûH¬à€€ú›ò]»Hÿÿ[›‹òYŸKôŸ]][J–SW–T‘“Q”ëQT◊‘’‘êQ—W“—VJN¬àYà
+\ò] Hô]\õàﬂN¬à€€ú›\úŸYHî””ãú\úŸJò] H\»[ö€õ›€é¬àô]\õàõ‹õX[^ôTÿ[P\‹⁄Y€ôY\”X\
+\úŸY
+H\»ôX€‹ô›ö[ôÀ›ö[ôœé¬àHÿ]⁄¬àô]\õàﬂN¬àBüBÇôù[ò›[€à‹ö]Tÿ[P\‹⁄Y€ôY\’‘›‹òYŸJX\àôX€‹ô›ö[ôÀ›ö[ôœäH¬àYà
+\[Ÿà⁄[ô›»OOHù[ôYö[ôYäHô]\õé¬àûH¬àÿÿ[›‹òYŸKúŸ]][J–SW–T‘“Q”ëQT◊‘’‘êQ—W“—VKî””ãú›ö[ô⁄YûJX\
+JN¬àHÿ]⁄¬à àY€õ‹ôH
+ã¬àBüBã äà8.`8.)x.-¯.+x. x.`8."¯.)x.)x.c8.`8.'∏.-8.b8.(x."8.,∏. x."∏.-x.%H8†%S
+»8.(¯.*¯.,x.*∏."8.,∏. Hÿ[KX\‹⁄Y€ôY\À\⁄\ôY
+ã¬ò€€ú›S‘–ST»H»êSãããì‘ëTó’êP““Së◊‘–SW–”—T◊H\»€€ú›¬ò€€ú›‘ëTî◊“SíUPS‘Q—W‘“VëHHå¬ò€€ú›‘ëTî◊‘Q—W“Sê‘ëSQSïHL¬ã äà8.!8.)¯.,∏.(x.(∏.,∏.)¯.*∏..x.!¯.*∏..8.%8."∏.b8.+x.!¯.!8.bx.&x.*¯.,à
+8.'∏.-8.(x.'∏.c»8.)¯.,∏.!¯."8.,∏. HSëH»8.!8.)x.-8.&¯.&∏.+x.(¯.c8.%
+H
+ã¬ò€€ú›ëRP”W‘—PTê“”PVH¬ò€€ú›–SW‘’UT◊‘íS‘íUNàôX€‹ôÿ[T›]\’ò[YKù[Xô\èàH¬à8.(¯.+x.*∏.b8.!Œàà8."8.+x.!ŒàKà8.)¯.b8.,∏.!Œàãà8.*∏.b8.!¯.`x.)x.bx.)ŒàÀüN¬Çù\Hÿ[Uò[YHH›ö[ôŒ¬ù\Hÿ[T›]\’ò[YHH^€YO
+\[Ÿà–SW‘’UT—T V€ù[Xô\óK∏.%¯.,x.bx.!¯.*¯.(x.%èé¬ù\Hÿ[T›]\—ö[\ïò[YHH
+\[Ÿà–SW‘’UT—T V€ù[Xô\óN¬ù\H][T›]\’ò[YHH
+\[ŸàUSW‘’UT—T V€ù[Xô\óN¬ò€€ú›USW‘’UT◊—QW’—VHH∏.(x.,∏.)¯.,x.&x.&x.-x.bHà\»€€ú›¬ù\H][T›]\—ö[\ïò[YHH][T›]\’ò[YH\[ŸàUSW‘’UT◊—QW’—VN¬ò€€ú›USW‘’UT◊”‘ëTéà][T›]\’ò[YV◊HH¬à∏.`8."∏.a¯.!ãà∏.(x.-Hãà∏.%x.bx.+x.!¯.*∏.,x.b8.!»ãà∏.*∏.,x.b8.!»ãà∏.(x.,àãà∏.(¯.%∏.&x.+x. Hãà∏."∏.b8.,∏.!¯.&x.+x. Hãà∏.'x.,∏. x.*∏.`∏.%x.(¯.cãà∏.'x.,∏. x. x.,x.&∏.(¯.%àãà∏."8.&àãóN¬Çã äàõ‹›\à8.)¯.b8.,∏.!»H8.(∏.,x.!¯.a8.(x.b8. x.,¯.*¯.&x.%8.`8.+x.!»8°§à8.`x.*∏.%8.!¯."∏.-8.&¯.!8.(¯.&∏.%x.,∏.(x.)x.,¯.%8.,x.&∏.(x.,∏.%x.(¯.$8.,∏.&H
+ã¬ôù[ò›[€àYôôX›]ôR][T›]\‘õ‹›\äõ‹›\éà][T›]\’ò[YV◊JNà][T›]\’ò[YV◊H¬àô]\õàõ‹›\ãõ[ô›à»õ‹›\ààÀããíUSW‘’UT◊”‘ëTóN¬üBÇã äà8.)¯.b8.,∏.!¯.`¯.&H[ú]H8.&¯.-8.%8.!8.b8.,∏.%¯.-x.b8.%x.bx.+x.!¯. x.,∏.(»
+ù[
+N»8.+x.(∏.b8.,∏.&x.,x.&àòSà
+ã¬ôù[ò›[€à\úŸS‹[€ò[€XﬁQ^Jò]Œà›ö[ô Nàù[Xô\àù[¬à€€ú›H›ö[ô ò] Kùö[J
+N¬àYà
+]
+Hô]\õàù[¬à€€ú›àHX]úõ›[ô
+ù[Xô\ä
+JN¬àYà
+Sù[Xô\ãö\—ö[ö]JäJHô]\õàù[¬àô]\õàX]õZ[äÃÃX]õX^
+KäJN¬üBÇò€€ú›USW‘’UT◊—Só”PëSŒàôX€‹ô][T›]\’ò[YK›ö[ôœàH¬à8.`8."∏.a¯.!àê⁄X⁄»ãà8.(x.-Nàí[à›ÿ⁄»ãà8.%x.bx.+x.!¯.*∏.,x.b8.!ŒàìôYY‹ô\àãà8.*∏.,x.b8.!Œàì‹ô\ôYãà8.(x.,éàîôXŸZ]ôYãà8.(¯.%∏.&x.+x. Nàì›]€›\òŸHÿ\àãà8."∏.b8.,∏.!¯.&x.+x. Nàì›]€›\òŸHÿ\òYŸHãà8.'x.,∏. x.*∏.`∏.%x.(¯.càî›‹ôH€ãà8.'x.,∏. x. x.,x.&∏.(¯.%éàí€⁄]ÿ\àãà8."8.&éàë€ôHãüN¬Çò€€ú›–SW‘’UT◊—Só”PëSŒàôX€‹ôÿ[T›]\—ö[\ïò[YK›ö[ôœàH¬à8.%¯.,x.bx.!¯.*¯.(x.%àê[ãà8."8.+x.!Œàêõ€⁄ŸYãà8.(¯.+x.*∏.b8.!ŒàïÿZ][ô»⁄\ãà8.*∏.b8.!¯.`x.)x.bx.)Œàî⁄\Yãà8.)¯.b8.,∏.!Œàê]òZ[XõHãüN¬Çôù[ò›[€à\‹^R][T›]\”Xô[
+›à][T›]\’ò[YKZS[ôŒàZS[ô Nà›ö[ô»¬àô]\õàZS[ô»OOHô[àà»USW‘’UT◊—Só”PëS÷‹›Hœ»›à›¬üBÇôù[ò›[€à\‹^Tÿ[T›]\”Xô[
+›àÿ[T›]\—ö[\ïò[YKZS[ôŒàZS[ô Nà›ö[ô»¬àô]\õàZS[ô»OOHô[àà»–SW‘’UT◊—Só”PëS÷‹›Hœ»›à›¬üBÇã äà8."∏.-8.&¯. x.(¯.+x.!¯.(¯.,∏.(∏. x.,∏.(¯.%¯.-x.b8.(∏.,x.!¯.a8.(x.b8.(x.-x."∏.-¯.b8.+x.'∏.&x.,x. x.!¯.,∏.&H8†%8.`x.*∏.%8.!»Sà8.`8.(x.-¯.b8.+HRH8.`8.&¯.a¯.&x.+x.,x.!¯. x.)8.*H
+8.!8.-x.(∏.c8.(8.,∏.(∏.`¯.&x.`¯."∏.bH’Qëó—íSTó’SêT‘“Q”ëQ
+H
+ã¬ôù[ò›[€à\‹^T›Yôëö[\ï[ò\‹⁄Y€ôYXô[
+ZS[ôŒàZS[ô Nà›ö[ô»¬àô]\õàZS[ô»OOHô[àà»ï[ò\‹⁄Y€ôYàà’Qëó—íSTó’SêT‘“Q”ëQ”PëS¬üBÇã äà8.)x.,¯.%8.,x.&∏."∏.-8.&¯.`¯.&x.%x.,x.)¯. x.(¯.+x.!¯.*∏.%∏.,∏.&x.,8.(¯.,∏.(∏. x.,∏.(»8†%8.!8.!¯.%¯.-x.b8.%x.,∏.(x.`x.%∏.)¯.%8.bx.,∏.&x.&∏.&H
+8.a8.(x.b8.%x.,∏.(x.)x.,¯.%8.,x.&∏.)x.,∏. x.`¯.&x."8.,x.%8. x.,∏.(¯.*∏.%∏.,∏.&x.,
+H
+ã¬ôù[ò›[€à€‹ù][T›]\Ÿ\—õ‹ëö[\ï€€ò\ä›]\Ÿ\Œà][T›]\’ò[YV◊JNà][T›]\’ò[YV◊H¬à€€ú›ò[ö»H
+Œà][T›]\’ò[YJHOà¬à€€ú›HHUSW‘’UT◊”‘ëTãö[ô^Ÿä N¬àô]\õàHèH»HàUSW‘’UT◊”‘ëTãõ[ô›
+»N¬àN¬àô]\õàÀããú›]\Ÿ\◊Kú€‹ù
+
+KäHOàò[ö JHHò[ö äHKõÿÿ[P€€\\ôJãùäJN¬üBÇã äÇà
+à8.`∏.%¯.&x."∏.-8.&¯.%x.,x.)¯. x.(¯.+x.!¯.*∏.%∏.,∏.&x.,8.(¯.,∏.(∏. x.,∏.(¬à
+à8.`8."∏.a¯.!8.`8.*¯.)x.-¯.+x.!»0≠»8.(x.-H8.`8. ∏.-x.(∏.)»0≠»8.*∏.,x.b8.!»8.*∏.bx.(H0≠»8.(x.,àH8.(¯.,x.&∏.`x.)x.bx.)»
+8.`8. ∏.-x.(∏.)¯.+x.-x. x.`∏.%¯.&JH0≠»8."8.&à8.'¯.bx.,à0≠»8.(¯.%∏.&x.+x. K¯."∏.b8.,∏.!¯.&x.+x. H8.`8. ∏.-x.(∏.)¯.`8. ∏.bx.(H0≠»8.'x.,∏. x.*∏.`∏.%x.(¯.c8.`8.%¯.,Çà
+ã¬ôù[ò›[€à€€ò\í][T›]\—ö[\ê⁄\€\‹Ÿ\ Œà][T›]\—ö[\ïò[YKX›]ôNàõ€€X[äNà›ö[ô»¬àYà
+»OOHUSW‘’UT◊—QW’—VJH¬àô]\õàX›]ôBà»òôÀ\ôYMå^]⁄]H⁄Y›À\€Hö[ôÀLHö[ôÀ\ôYMLÕÇààòôÀ\õ‹ŸKLL^\ôYNö[ôÀLHö[ôÀ\õ‹ŸKLÃŒL›ô\éòôÀ\õ‹ŸKLåŒLé¬àBàYà
+»OOH∏.`8."∏.a¯.!äH¬àô]\õàX›]ôBà»òôÀX[Xô\ãML^]⁄]H⁄Y›À\€Hö[ôÀLHö[ôÀX[Xô\ãMåÕHÇààòôÀX[Xô\ãLL^X[Xô\ãNMLö[ôÀLHö[ôÀX[Xô\ãLÃŒL›ô\éòôÀX[Xô\ãLåŒLé¬àBàYà
+»OOH∏.(x.-HäH¬àô]\õàX›]ôBà»òôÀY[Y\ò[Må^]⁄]H⁄Y›À\€Hö[ôÀLHö[ôÀY[Y\ò[MLÕÇààòôÀY[Y\ò[LL^Y[Y\ò[NLö[ôÀLHö[ôÀY[Y\ò[LÃŒH›ô\éòôÀY[Y\ò[LåŒLé¬àBàYà
+»OOH∏.*∏.,x.b8.!»äH¬àô]\õàX›]ôBà»òôÀ[‹ò[ôŸKMå^]⁄]H⁄Y›À\€Hö[ôÀLHö[ôÀ[‹ò[ôŸKMLÕÇààòôÀ[‹ò[ôŸKLL^[‹ò[ôŸKNMLö[ôÀLHö[ôÀ[‹ò[ôŸKLÃŒL›ô\éòôÀ[‹ò[ôŸKLåŒLé¬àBàÀ»8.!8.)¯.,∏.(x.*¯.(x.,∏.(∏.%¯.,∏.!¯.(¯.bx.,∏.&H8¢b8‡#8.(¯.,x.&∏.`x.)x.bx.)¯‡#H8†%8.`∏.!8.bx.%8.*∏.%∏.,∏.&x.,8.!8.-¯.+H8‡#8.(x.,∏‡#BàYà
+»OOH∏.(x.,àäH¬àô]\õàX›]ôBà»òôÀY‹ôY[ãMå^]⁄]H⁄Y›À\€Hö[ôÀLHö[ôÀY‹ôY[ãMåÃÕHÇààòôÀY‹ôY[ãLL^Y‹ôY[ãNLö[ôÀLHö[ôÀY‹ôY[ãLÃŒH›ô\éòôÀY‹ôY[ãLåŒLé¬àBàYà
+»OOH∏."8.&àäH¬àô]\õàX›]ôBà»òôÀ\⁄ﬁKMå^]⁄]H⁄Y›À\€Hö[ôÀLHö[ôÀ\⁄ﬁKMLÃÕHÇààòôÀ\⁄ﬁKLL^\⁄ﬁKNLö[ôÀLHö[ôÀ\⁄ﬁKLÃŒH›ô\éòôÀ\⁄ﬁKLåŒLé¬àBàYà
+»OOH∏.(¯.%∏.&x.+x. Hà»OOH∏."∏.b8.,∏.!¯.&x.+x. HäH¬àô]\õàX›]ôBà»òôÀY[Y\ò[NL^]⁄]H⁄Y›À\€Hö[ôÀLHö[ôÀY[Y\ò[NMLÕLÇààòôÀY[Y\ò[Lå^Y[Y\ò[NMLö[ôÀLHö[ôÀY[Y\ò[MÃÃÕH›ô\éòôÀY[Y\ò[LÃŒLé¬àBàYà
+»OOH∏.'x.,∏. x.*∏.`∏.%x.(¯.cäH¬àô]\õàX›]ôBà»òôÀY‹ò^KMÃ^]⁄]H⁄Y›À\€Hö[ôÀLHö[ôÀY‹ò^KNÕHÇààòôÀY‹ò^KLå^Y‹ò^KNLö[ôÀLHö[ôÀY‹ò^KMÕÕH›ô\éòôÀY‹ò^KLÃŒLé¬àBàô]\õàX›]ôH»òôÀ\€]KNML^]⁄]HààòôÀ\€]KLL^\€]KMÃ›ô\éòôÀ\€]KLåÕÃé¬üBÇò€€ú›S’—Q“USW‘’UT◊‘—UHô]»Ÿ]›ö[ôœäUSW‘’UT—T N¬ù\H][T›]\”Xô[X\H\ùX[ôX€‹ô][T›]\’ò[YK›ö[ôœèé¬Çôù[ò›[€àõ‹õX[^ôR][T›]\‘õ‹›\ä[ú]à[ö€õ›€äNà][T›]\’ò[YV◊H¬àYà
+P\úò^Kö\–\úò^J[ú]
+JHô]\õà◊N¬à€€ú›ŸY[àHô]»Ÿ]][T›]\’ò[YOä
+N¬à€€ú›[ö\]YNà][T›]\’ò[YV◊HH◊N¬àõ‹à
+€€ú›Ÿà[ú]
+H¬à€€ú›»H›ö[ô 
+Kùö[J
+N¬àYà
+PS’—Q“USW‘’UT◊‘—Uö\  JH€€ù[ùYN¬à€€ú››H»\»][T›]\’ò[YN¬àYà
+ŸY[ãö\ ›
+JH€€ù[ùYN¬àŸY[ãòY
+›
+N¬à[ö\]YKú\⁄
+›
+N¬àBàYà
+][ö\]YKõ[ô›
+Hô]\õà◊N¬à€€ú›‹ô\ôYHÀããíUSW‘’UT◊”‘ëTóKôö[\ä
+ HOàŸY[ãö\  JN¬à€€ú›^ò\»H[ö\]YKôö[\ä
+ HOà[‹ô\ôYö[ò€Y\  JN¬àô]\õàÀããõ‹ô\ôYããô^ò\◊N¬üBÇôù[ò›[€à\úŸR][T›]\‘õ‹›\íú€€äò]Œà›ö[ô»ù[
+Nà][T›]\’ò[YV◊Hù[¬àYà
+\ò] Hô]\õàù[¬àûH¬à€€ú›\úŸYHî””ãú\úŸJò] H\»[ö€õ›€é¬àô]\õàõ‹õX[^ôR][T›]\‘õ‹›\ä\úŸY
+N¬àHÿ]⁄¬àô]\õàù[¬àBüBÇã äà8."∏.-8.&¯. x.(¯.+x.!¯.*∏.%∏.,∏.&x.,8.(¯.,∏.(∏. x.,∏.(»8†%8.`8.*¯.(x.-¯.+x.&Hõ‹›\à8.'∏.&x.,x. x.!¯.,∏.&H0≠»8.`8. x.a¯.&àÿÿ[›‹òYŸH8.`8.!8.(¯.-¯.b8.+x.!¯.&x.-x.bH
+ã¬ôù[ò›[€àôXY][T›]\‘õ‹›\ëúõ€T›‹òYŸJ
+Nà][T›]\’ò[YV◊H¬àYà
+\[Ÿà⁄[ô›»OOHù[ôYö[ôYäHô]\õà◊N¬à€€ú›\úŸYH\úŸR][T›]\‘õ‹›\íú€€äÿÿ[›‹òYŸKôŸ]][JUSW‘’UT◊‘ì‘’Tó‘’‘êQ—W“—VJJHœ»◊N¬àYà
+à\úŸYõ[ô›OOHUSW‘’UT◊”‘ëTãõ[ô›	âÇàUSW‘’UT◊”‘ëTãô]ô\ûJ
+ÀJHOà\úŸY⁄WHOOH Bà
+H¬àô]\õà◊N¬àBàô]\õà\úŸY¬üBÇôù[ò›[€à‹ö]R][T›]\‘õ‹›\ï‘›‹òYŸJõ‹›\éà][T›]\’ò[YV◊JH¬àYà
+\[Ÿà⁄[ô›»OOHù[ôYö[ôYäHô]\õé¬àûH¬àÿÿ[›‹òYŸKúŸ]][JUSW‘’UT◊‘ì‘’Tó‘’‘êQ—W“—VKî””ãú›ö[ô⁄YûJõ‹›\äJN¬àHÿ]⁄¬à àY€õ‹ôH
+ã¬àBüBÇôù[ò›[€à\úŸR][T›]\”Xô[“ú€€äò]Œà›ö[ô»ù[
+Nà][T›]\”Xô[X\ù[¬àYà
+\ò] Hô]\õàù[¬àûH¬à€€ú›\úŸYHî””ãú\úŸJò] H\»[ö€õ›€é¬àYà
+\\úŸY\[Ÿà\úŸYOOHõÿöôX›äHô]\õàù[¬à€€ú››]à][T›]\”Xô[X\HﬂN¬àõ‹à
+€€ú››]\»ŸàUSW‘’UT—T H¬à€€ú›ò[YHH
+\úŸY\»ôX€‹ô›ö[ôÀ[ö€õ›€èäV‹›]\◊N¬àYà
+ò[YHOHù[
+H€€ù[ùYN¬à€€ú›Xô[H›ö[ô ò[YJKùö[J
+N¬àYà
+[Xô[Xô[OOH›]\ H€€ù[ùYN¬à›]‹›]\◊HHXô[¬àBàô]\õà›]¬àHÿ]⁄¬àô]\õàù[¬àBüBÇôù[ò›[€àôXY][T›]\”Xô[—úõ€T›‹òYŸJ
+Nà][T›]\”Xô[X\¬àYà
+\[Ÿà⁄[ô›»OOHù[ôYö[ôYäHô]\õàﬂN¬àô]\õà\úŸR][T›]\”Xô[“ú€€äÿÿ[›‹òYŸKôŸ]][JUSW‘’UT◊”PëS◊‘’‘êQ—W“—VJJHœ»ﬂN¬üBÇôù[ò›[€à‹ö]R][T›]\”Xô[’‘›‹òYŸJXô[Œà][T›]\”Xô[X\
+H¬àYà
+\[Ÿà⁄[ô›»OOHù[ôYö[ôYäHô]\õé¬àûH¬àÿÿ[›‹òYŸKúŸ]][JUSW‘’UT◊”PëS◊‘’‘êQ—W“—VKî””ãú›ö[ô⁄YûJXô[ JN¬àHÿ]⁄¬à àY€õ‹ôH
+ã¬àBüBÇôù[ò›[€à‹ö]R][T›]\‘€X⁄Y\‘‹\úŸU‘›‹òYŸJ€X⁄Y\‘‹\úŸNàôX€‹ô›ö[ôÀ[ö€õ›€èäH¬àYà
+\[Ÿà⁄[ô›»OOHù[ôYö[ôYäHô]\õé¬àûH¬àÿÿ[›‹òYŸKúŸ]][JUSW‘’UT◊‘”P“QT◊‘’‘êQ—W“—VKî””ãú›ö[ô⁄YûJ€X⁄Y\‘‹\úŸJJN¬àHÿ]⁄¬à àY€õ‹ôH
+ã¬àBüBÇôù[ò›[€àôXY][T›]\‘€X⁄Y\—úõ€T›‹òYŸSõ‹õX[^ôY
+
+Nà][T›]\‘€X⁄Y\”õ‹õX[^ôYù[¬àYà
+\[Ÿà⁄[ô›»OOHù[ôYö[ôYäHô]\õàù[¬àûH¬à€€ú›ò]»Hÿÿ[›‹òYŸKôŸ]][JUSW‘’UT◊‘”P“QT◊‘’‘êQ—W“—VJN¬àYà
+\ò] Hô]\õàù[¬à€€ú›\úŸYHî””ãú\úŸJò] H\»[ö€õ›€é¬àô]\õàõ‹õX[^ôR][T›]\‘€X⁄Y\‘ò] \úŸY
+N¬àHÿ]⁄¬àô]\õàù[¬àBüBÇôù[ò›[€àõ‹õX[^ôR][T›]\”Xô[ [ú]à[ö€õ›€äNà][T›]\”Xô[X\¬àYà
+Z[ú]\[Ÿà[ú]OOHõÿöôX›äHô]\õàﬂN¬à€€ú›õ›»H[ú]\»ôX€‹ô›ö[ôÀ[ö€õ›€èé¬à€€ú›ô^à][T›]\”Xô[X\HﬂN¬àõ‹à
+€€ú››]\»ŸàUSW‘’UT—T H¬à€€ú›ò[YHHõ›÷‹›]\◊N¬àYà
+ò[YHOHù[
+H€€ù[ùYN¬à€€ú›Xô[H›ö[ô ò[YJKùö[J
+N¬àYà
+[Xô[Xô[OOH›]\ H€€ù[ùYN¬àô^‹›]\◊HHXô[¬àBàô]\õàô^¬üBÇò€€ú›–RUSë◊‘—UHô]»Ÿ]][T›]\’ò[YOä–RUSë N¬ò€€ú›”ëW‘—UHô]»Ÿ]][T›]\’ò[YOä”ëJN¬Çù\H‹ô\í][HH¬àYŒà›ö[ô»ù[¬à‹ô\ï\⁄“YŒà›ö[ô»ù[¬àò[YNà›ö[ôŒ¬àò[YQ[èŒà›ö[ôŒ¬à›]\Œà][T›]\’ò[YN¬à\‹⁄Y€ôYNà›ö[ôŒ¬àYQ]OŒà›ö[ôŒ¬à äà8.'x.,∏. x.*∏.`∏.%x.(¯.cà8.)¯.,x.&x.`8.(¯.-8.b8.(x.&x.,x.&àÃ8.)¯.,x.&H
+^^^K[[KY8. x.%¯.(KäH8."8.,∏. H\]Yÿ]ÿ‹ôX]Yÿ]8.`¯.&Hà
+ã¬à€ÿ⁄‘›\ù[YŒà›ö[ôŒ¬à äà8.)¯.,x.&x.%¯.-x.b8.`8.&¯.)x.-x.b8.(∏.&x.*∏.%∏.,∏.&x.,8.)x.b8.,∏.*∏..8.%
+^^^K[[KY8. x.%¯.(KäH8."8.,∏. H›]\◊ÿ⁄[ôŸYÿ]8.`¯.&Hà
+ã¬à›]\–⁄[ôŸY][YŒà›ö[ôŒ¬àõ›OŒà›ö[ôŒ¬à äà8.`x.&¯.)x.+x.,x.%x.`∏.&x.(x.,x.%x.-8. ∏.+x.!¯.*¯.(x.,∏.(∏.`8.*¯.%x..
+õ›WŸ[äH8†%8.`x.*∏.%8.!¯.`8.(x.-¯.b8.+HRH8.`8.&¯.a¯.&x.(8.,∏.*x.,∏.+x.,x.!¯. x.)8.*H
+ã¬àõ›Q[èŒà›ö[ôŒ¬à€€ŸŒàõ€€X[é¬à›\Y\èŒà›ö[ôŒ¬à]OŒà›ö[ôŒ¬àöXŸOŒà›ö[ôŒ¬à›ô\ôYOŒàõ€€X[é¬üN¬Çù\H‹ô\î›—[ùûHH»Yà›ö[ôŒ»\õà›ö[ôŒ»‹ôX]Yÿ]Œà›ö[ô»ù[N¬Çù\H‹ô\àH¬àYà›ö[ôŒ¬àÿ\îõ›“Yà›ö[ô»ù[¬àÿ\íYàù[Xô\àù[¬àÿ[Nà›ö[ôŒ¬à[Ÿ[YX\éà›ö[ôŒ¬àÿ[T›]\Œàÿ[T›]\’ò[YN¬à äà8. ∏.bx.+x.!8.)¯.,∏.(H⁄\Y8."8.,∏. Hÿ\úÀú⁄\Y8†%8.*∏.%∏.,∏.&x.,8.*∏.b8.!¯.`x.)x.bx.)¯.`¯."∏.bx. x.(¯.+x.!À¯.`x.*∏.%8.!¯.`x.(∏. x.%x.,∏.(x.&x.-x.bH
+8.a8.(x.b8.`¯."∏.bõ€⁄ŸY‹⁄\[ô H
+ã¬à⁄\Yà›ö[ôŒ¬à⁄\à›ö[ôŒ¬à[öŒà›ö[ôŒ¬àù[]Nà›ö[ôŒ¬à]Nà›ö[ôŒ¬àÿ\éà›ö[ôŒ¬à⁄\‹⁄\Œà›ö[ôŒ¬àù^Y\éà›ö[ôŒ¬àÿ[TöXŸNà›ö[ôŒ¬à€‹›à›ö[ôŒ¬à€‹›úôXZŸ›€éà›ö[ôŒ¬à äà8."∏.-¯.b8.+x.`8.%8.-x.(∏.)¯. x.,x.&à[ÿ⁄»8†%8.%∏.bx.,∏.(x.-x."8.,8.`¯."∏.bx.`x.%¯.&H€‹›úôXZŸ›€à8.`¯.&x. x.,∏.(¯.c8.%
+ã¬à€‹›]Z[Œà›ö[ôŒ¬à^[úŸNà›ö[ôŒ¬à äà8.*∏.(¯..8.&¯.`8.+x. x.*∏.,∏.(À¯.`8.)x.b8.(H
+8."8.,∏. Hÿ\ú»8.`8.(x.-¯.b8.+x.(x.-JH
+ã¬àÿ›[Y[ù]Z[à›ö[ôŒ¬àô\Z\ë]Z[Œà›ö[ôŒ¬àô\Z\ë]Z[Œà›ö[ôŒ¬à\ùXÿŸ\‹€‹öY\‘ò]Œà›ö[ôŒ¬à›Œà›ö[ôŒ¬à^[úŸTéà›ö[ô»ù[¬à\]\Œà\úò^O¬àYŒà›ö[ô»ù[¬àX›[€ï\Nà›ö[ôŒ¬à€ò[YNà›ö[ôŒ¬àô]’ò[YNà›ö[ôŒ¬àõ›Nà›ö[ôŒ¬à\]YûNà›ö[ôŒ¬à‹ôX]Y]à›ö[ôŒ¬àOé¬à][\Œà‹ô\í][V◊N¬üN¬Çã äÇà
+à8."8.,x.%8.`8.(¯.-x.(∏.!¯. x.,∏.(¯.c8.%8.`¯.&x.)x.-8.*∏.%x.cà8.(x.-x.!¯.,∏.&x.!8.bx.,∏.!»
+8.(x.-x.(¯.,∏.(∏. x.,∏.(¯.`x.)x.,8.(∏.,x.!¯.a8.(x.b8."8.&äH8°§à8.(x.-x.(¯.,∏.(∏. x.,∏.(¯."8.&∏.`x.)x.bx.)»8°§à8.(∏.,x.!¯.a8.(x.b8.(x.-x.(¯.,∏.(∏. x.,∏.(¬à
+ã¬ôù[ò›[€à‹ô\êÿ\ô€‹ö‘ô\Ÿ[òŸTò[ö ‹ô\éà‹ô\äNàù[Xô\à¬à€€ú›\›H‹ô\ãö][\»œ»◊N¬àYà
+\›õ[ô›OOH
+Hô]\õàé¬à€€ú›\”‹[ï€‹ö»H\›ú€€YJ
+]
+HOàJ]ô€€Ÿœ»ò[ŸJH	âàQ”ëW‘—Uö\ ]ú›]\ JN¬àô]\õà\”‹[ï€‹ö»»àN¬üBÇã äà8.(¯..x.&¯.%¯.-x.b8.`¯.*∏.b8.`¯.&HSëH»8.)x.-8.!¯. x.c8. x.,∏.(¯.c8.%8.a8.%8.bH8†%8.%x.bx.+x.!¯.`8.&¯.a¯.&H
+ H8.`8.%¯.b8.,∏.&x.,x.bx.&H
+8.a8.(x.b8.*∏.(¯.bx.,∏.!¯.)x.-8.!¯. x.c8.%∏.bx.,∏.`8.&¯.a¯.&Hÿ8.*¯.(¯.-¯.+x.a8.(x.b8.`¯."∏.bTì
+H
+ã¬ôù[ò›[€à‹ô\î›“\õ
+›Œà›ö[ô»[ôYö[ôY
+Nà›ö[ô»ù[¬à€€ú›H›ö[ô ›»œ»àäKùö[J
+N¬àYà
+]OOHà»àK◊öœŒó◊À⁄Kù\›
+
+JHô]\õàù[¬àô]\õà¬üBÇù\H[ÿö[S‹ô\ïòX⁄⁄[ô“€YTõ‹»H¬àÿ\ú—]OŒàÿ\ñ◊N¬à‹ô\í][\–ûPÿ\èŒàôX€‹ôà›ö[ôÀà\úò^O¬àYŒà›ö[ô»ù[¬à‹ô\ó›\⁄◊⁄YŒà›ö[ô»ù[¬àXô[à›ö[ôŒ¬àXô[Ÿ[èŒà›ö[ô»ù[¬à›]\Œà›ö[ôŒ¬à\‹⁄Y€ôYW‹›Yôéà›ö[ô»ù[¬àYWŸ]OŒà›ö[ô»ù[¬àõ›OŒà›ö[ô»ù[¬àõ›WŸ[èŒà›ö[ô»ù[¬à›]⁄YW‹›\Y\éà›ö[ô»ù[¬à›]⁄YWŸ]WŸ]Nà›ö[ô»ù[¬à›]⁄YW‹öXŸNàù[Xô\àù[¬à€ÿ⁄◊‹›\ùﬁ[YŒà›ö[ô»ù[¬à›]\◊ÿ⁄[ôŸYÿ]Œà›ö[ô»ù[¬àOÇàé¬à‹ô\ï\]\–ûPÿ\èŒàôX€‹ôà›ö[ôÀà\úò^O¬àYŒà›ö[ô»ù[¬à‹ô\ó›\⁄◊⁄YŒà›ö[ô»ù[¬àõ€OŒà›ö[ô»ù[¬àY\‹ÿYŸOŒà›ö[ô»ù[¬à‹ôX]Yÿ]Œà›ö[ô»ù[¬àOÇàé¬à‹ô\í][Qö[\í[ô^ûPÿ\èŒàôX€‹ô›ö[ôÀ‹ô\í][Qö[\í[ô^]V◊Oé¬à‹ô\ê⁄\ÿX⁄Q^\ö[Y[ù[òXõYŒàõ€€X[é¬à‹ô\ê⁄\ÿX⁄PòYŸSXô[Œà›ö[ô»ù[¬à^\ö[Y[ù[ö]X[Yò]Yÿ\íŸ^\œŒà›ö[ô÷◊N¬à]Uÿ\õö[ô‹œŒà›ö[ô÷◊N¬à äà8."8.,∏. H€K€‹ô\úœ€‹ô\èKããò8†%8.`8.)x.-¯.b8.+x.&x.a8.&¯. x.,∏.(¯.c8.%8.`x.)x.,8. x.(¯.+x.!¯.%¯.,8.`8.&∏.-x.(∏.&x.`¯.*¯.bx.`∏.'8.)x.b
+ã¬à[ö]X[õÿ›\ŸY‹ô\íYŒà›ö[ô»ù[¬à äà‹öY⁄[à8."8.,∏. Hô\]Y\›
+8.`8."¯.-8.(¯.c8.'¯.`8.)¯.+x.(¯.c
+H8†%8.`¯.*¯.bx.)x.-8.!¯. x.c8.`x."∏.(¯.cSëH8.(x.-HTì8.`8.%x.a¯.(x.`x.(x.bx.(∏.,x.!¯.a8.(x.bYò]H
+ã¬à⁄\ôPò\ŸU\õŒà›ö[ô»ù[¬à äàÿÿ[H8.`8.(¯.-8.b8.(x.%x.bx.&x."8.,∏. H€€⁄⁄YH8.'x.,x.b8.!¯.`8."¯.-8.(¯.c8.'¯.`8.)¯.+x.(¯.c
+ã¬à[ö]X[ZS[ôœŒàZS[ôŒ¬à äà8.*∏.(¯..8.&¯.*∏.%∏.,∏.&x.,8. ∏.,∏.(∏."8.,∏. x.(¯.%∏.%¯.,x.bx.!¯.*¯.(x.%
+8.a8.(x.b8.`∏.%8.&Hÿ\8.(¯.,∏.(∏. x.,∏.(¯.(¯.+x.&∏.`x.(¯. JH
+ã¬àÿ[T›]\‘›[[X\ûP[ÿ\úœŒà‹ô\ïòX⁄⁄[ô‘ÿ[T›]\‘›[[X\ûHù[¬à äà€ò\⁄›8.*∏.(¯..8.&¯.%¯..8. x. x.)x.b8.+x.!¯."8.,∏. HÿX⁄HXõH
+ã¬à›[[X\ûT€ò\⁄›[ÿ\úœŒà‹ô\ïòX⁄⁄[ô‘›[[X\ûT€ò\⁄›ù[¬à äà8.%∏.bx.,àùYNà8.*¯.bx.,∏.(Hò[òX⁄»8.a8.&¯. ∏.bx.+x.(x..x.)H[[»8.`¯.&x.a8.'¯.)x.c
+ã¬à\ÿXõQ[[—ò[òX⁄œŒàõ€€X[é¬à äà8.`∏.*¯.)x.%8.*∏.(¯..8.&¯. x.b8.+x.&H8.`x.)x.bx.)¯.!8.b8.+x.(àYò]H8.(¯.,∏.(∏. x.,∏.(¯.(¯.%∏.+x.,x.%x.`∏.&x.(x.,x.%x.-
+ã¬àYô\êÿ\ú“Yò][€èŒàõ€€X[é¬à äà8.*∏.%∏.,∏.&x.,8. ∏.,∏.(∏.%¯.-x.b8.`8.)x.-¯.+x. x.a8.)¯.bx.%x.,x.bx.!¯.`x.%x.b8.`8.&¯.-8.%8.*¯.&x.bx.,à
+ã¬à[ö]X[ÿ[T›]\—ö[\úœŒàÿ[T›]\—ö[\ïò[YV◊N¬üN¬Çò€€ú›‘ëTîŒà‹ô\ñ◊HH¬à¬àYàì’LLçãàÿ\îõ›“Yàù[àÿ\íYàù[àÿ[Nàï–Sàãàÿ[T›]\Œà∏."8.+x.!»ãà⁄\Yààãà⁄\àåãMãåàãà[öŒàöŒãÀ›öY€ÕK[‹Àò€€K€K€‹ô\úÀ”’LLçãàù[]NàçÃLÃÃHãà]NàçÃLÃÃHãàÿ\éàîì––”»—ãé’ëTìSë\»U›XõW–ÿXà‘êVHò[åçàãà⁄\‹⁄\ŒàìTåPL–UéÃÃLÃÃHãà[Ÿ[YX\éààãàù^Y\éàîíVï–SàPíQãàÿ[TöXŸNàâÀåãà€‹›àâKåNãà€‹›úôXZŸ›€éÇàåçÀåäÃãç HKOàLL
+›[€‹›
+HH
+ÿ\àöXŸJH
+»LL
+^[úŸJH¯. x.,¯.a8.(◊HKOà⁄YLL⁄YNå8.`8.)x.b8.(x.'∏.(¯.bx.+x.(H
+ÃL⁄YML8.!8.+x.(x.`8.+x.`8.(∏.b8.&x.`8.+x.a¯.(H8.(¯.,x.&∏.(¯.%∏.`8."∏.-x.(∏.!¯.(¯.,∏.(à8.`8.%x.-8.(x.&x.bx.,¯.(x.,x.&H8."8.bx.,∏.!¯.!8.&x. ∏.,x.&à8.`8."∏.b8.,∏.(¯.%çMLãà€‹›]Z[ÇàåçÀåäÃãç HKOàLL
+›[€‹›
+HH
+ÿ\àöXŸJH
+»LL
+^[úŸJH¯. x.,¯.a8.(◊HKOà⁄YLL⁄YNå8.`8.)x.b8.(x.'∏.(¯.bx.+x.(H
+ÃL⁄YML8.!8.+x.(x.`8.+x.`8.(∏.b8.&x.`8.+x.a¯.(H8.(¯.,x.&∏.(¯.%∏.`8."∏.-x.(∏.!¯.(¯.,∏.(à8.`8.%x.-8.(x.&x.bx.,¯.(x.,x.&H8."8.bx.,∏.!¯.!8.&x. ∏.,x.&à8.`8."∏.b8.,∏.(¯.%çMLãà^[úŸNàåMÕÀÕ»ãà›Œàà‹›‹ÀLLçãà^[úŸTéààŸ^[úŸ\ÀLLçãàÿ›[Y[ù]Z[à∏.`8.)x.b8.(x.'∏.(¯.bx.+x.(H»8.`8.+x. x.*∏.,∏.(¯.!8.(¯.&à»8.(¯.+x.`∏.+x.&x.*¯.)x.,x.!¯."8.b8.,∏.(∏.!8.(¯.&àãàô\Z\ë]Z[Œà∏."¯.b8.+x.(x.*∏.-x. x.,x.&x."∏.&x.*¯.&x.bx.,à»8.`8."∏.a¯.!8."∏.b8.)¯.!¯.)x.b8.,∏.!»»8.`8. x.a¯.&∏.!¯.,∏.&x.a8.'¯.*¯.&x.bx.,àãàô\Z\ë]Z[à∏."¯.b8.+x.(x.*∏.-x. x.,x.&x."∏.&x.*¯.&x.bx.,à»8.`8."∏.a¯.!8."∏.b8.)¯.!¯.)x.b8.,∏.!»»8.`8. x.a¯.&∏.!¯.,∏.&x.a8.'¯.*¯.&x.bx.,àãà\ùXÿŸ\‹€‹öY\‘ò]Œààãà\]\Œà◊Kà][\Œà¬à»ò[YNà∏.)x.bx.+x.`x.(x.a¯. HM»8.&x.-8.bx.)»ã›]\Œà∏.(x.-Hã\‹⁄Y€ôYNààã€€ŸàùYHKà»ò[YNà∏.a8.'»Qã›]\Œà∏.(x.-Hã\‹⁄Y€ôYNààã€€ŸàùYHKà»ò[YNà∏.`∏.(¯.&∏.,∏.(¯.cã›]\Œà∏.*∏.,x.b8.!»ã\‹⁄Y€ôYNààã›\Y\éà∏.%∏.,∏.)¯.(»ã]NàåéH\àãöXŸNà∏./ÃÀàKà»ò[YNà∏. x.,x.&x."∏.&x.*¯.&x.bx.,àã›]\Œà∏.`8."∏.a¯.!ã\‹⁄Y€ôYNàààKà»ò[YNà∏.(∏.,∏.!»Uã›]\Œà∏.`8."∏.a¯.!ã\‹⁄Y€ôYNàààKàKàKà¬àYàì’LLçHãàÿ\îõ›“Yàù[àÿ\íYàù[àÿ[NàëêRãàÿ[T›]\Œà∏.(¯.+x.*∏.b8.!»ãà⁄\Yààãà⁄\à∏.`8.(¯.-¯.+HàX^Hãà[öŒàöŒãÀ›öY€ÕK[‹Àò€€K€K€‹ô\úÀ”’LLçHãàù[]Nà∏. ∏. àLåHãà]NàéLåHãàÿ\éàëì‘ïSëTàãç—ååãà⁄\‹⁄\ŒàìTåéîÕÃNLLàãà[Ÿ[YX\éàåååãàù^Y\éàîô[ZY\à»ò\òòY‹»ãàÿ[TöXŸNàâKåãà€‹›àåÕåãà€‹›úôXZŸ›€éàåKLK
+›[€‹›
+HHKÃ
+ÿ\àöXŸJH
+»ÕK
+^[úŸJH¯. x.,¯.a8.(¯.&x.bx.+x.(óHKOàô[ZY\àò\òòY‹»ãà^[úŸNà∏./ŒKãà›Œàà‹›‹ÀLLçHãà^[úŸTéààŸ^[úŸ\ÀLLçHãàÿ›[Y[ù]Z[à∏.`8.+x. x.*∏.,∏.(¯.(¯.+x.`8."∏.a¯.!8.`8.)x.b8.(H»8.*∏.,¯.`8.&x.,∏.'8..x.bx. ∏.,∏.(∏.!8.(¯.&àãàô\Z\ë]Z[Œà∏.`8.&¯.)x.-x.b8.(∏.&x.&∏.,x.&x.a8.%8. ∏.bx.,∏.!»»8.`8. x.a¯.&∏.(¯.+x.(∏.(¯.+x.&∏.!8.,x.&Hãà\ùXÿŸ\‹€‹öY\‘ò]Œààãà\]\Œà◊Kà][\Œà¬à»ò[YNà∏.&∏.,x.&x.a8.%8. ∏.bx.,∏.!»ã›]\Œà∏."8.&àã\‹⁄Y€ôYNààã€€ŸàùYHKà»ò[YNà∏. x.)x.bx.+x.!¯.*¯.)x.,x.!»ã›]\Œà∏."8.&àã\‹⁄Y€ôYNààã€€ŸàùYHKà»ò[YNà∏.'¯.-8.)x.c8.(Hã›]\Œà∏."8.&àã\‹⁄Y€ôYNààã€€ŸàùYHKàKàKà¬àYàì’LLçàãàÿ\îõ›“Yàù[àÿ\íYàù[àÿ[Nàë””—ãàÿ[T›]\Œà∏.*∏.b8.!¯.`x.)x.bx.)»ãà⁄\Yà∏.`8.(¯.-¯.+x.+x.+x. HLàX^HåçHãà⁄\ààãà[öŒàöŒãÀ›öY€ÕK[‹Àò€€K€K€‹ô\úÀ”’LLçàãàù[]Nà∏.&¯.bx.,∏.(∏.`x.%8.!»LåÕHãà]NàåLåÕHãàÿ\éàïêUì»ãé—åçHãà⁄\‹⁄\ŒàìTåëU’êUìÃLåÕHãà[Ÿ[YX\éàååçHãàù^Y\éàìô]»›ÿ⁄»ãàÿ[TöXŸNàâŒLãà€‹›àåÃKåãà€‹›úôXZŸ›€éàéNMK
+›[€‹›
+HHN
+ÿ\àöXŸJH
+»MK
+^[úŸJH¯.(¯.+x.&¯.-8.%8.!¯.,∏.&WHKOàô]»›ÿ⁄»ãà^[úŸNà∏./Ãçãà›Œàà‹›‹ÀLLçàãà^[úŸTéààŸ^[úŸ\ÀLLçàãàÿ›[Y[ù]Z[à∏.(¯.%∏.`¯.*¯.(x.b»8.`8.+x. x.*∏.,∏.(¯.(¯.+x.`¯.&∏. x.,¯. x.,x.&àãàô\Z\ë]Z[Œà∏.%x.-8.%8.%x.,x.bx.!¯."∏..8.%8.`x.%x.b8.!»»8.%x.(¯.)¯."8.(¯.,8.&∏.&∏.a8.'»ãà\ùXÿŸ\‹€‹öY\‘ò]Œààãà\]\Œà◊Kà][\Œà¬à»ò[YNà∏.`∏.(¯.&∏.,∏.(¯.cã›]\Œà∏.`8."∏.a¯.!ã\‹⁄Y€ôYNàààKà»ò[YNà∏.'¯.-8.)x.c8.(Hã›]\Œà∏.(x.-Hã\‹⁄Y€ôYNààã€€ŸàùYHKà»ò[YNà∏."∏..8.%8.`x.%x.b8.!»ã›]\Œà∏.*∏.,x.b8.!»ã\‹⁄Y€ôYNààã›\Y\éà∏.(¯.bx.,∏.&x.`x.%x.b8.!»ã]Nà∏.`8.)x.(àà8.)¯.,x.&HãöXŸNà∏./ÃLãã›ô\ôYNàùYHKàKàKóN¬Çò€€ú›€àH
+ããùéà\úò^O›ö[ô»ò[ŸHù[[ôYö[ôYäHOàãôö[\äõ€€X[äKöõ⁄[äóàäN¬ò€€ú›õ‹õHH
+éà[ö€õ›€äHOà›ö[ô ààäKúô\XŸJ◊ ÀŸÀàäKù”›Ÿ\êÿ\ŸJ
+N¬Çò€€ú›””êTó—ìQ◊‘’ë◊–êT—HHöVÃKåÕÕ\ô[WH⁄ö[öÀLõ›[ôYVÃ‹H⁄Y›À\€Hö[ôÀLHö[ôÀXõX⁄ÀÃLé¬Çã äà8.&8.!¯.`8.)x.a¯. x.*∏.,¯.*¯.(¯.,x.&∏.&¯..8.b8.(x.*∏.)x.,x.&∏.(8.,∏.*x.,à8†%8.`¯."∏.bH’ë»8.`x.%¯.&x.+x.-x.`∏.(x."8.-
+⁄[ô›‹»8.(x.,x. x.a8.(x.b8.`8.(¯.&x.`8.%8.+x.(¯.c8.&8.!¯.`8.&¯.a¯.&x.(8.,∏.'äH
+ã¬ôù[ò›[€à‹ô\ïòX⁄⁄[ô’€€ò\ëõY’
+»€\‹”ò[YHNà»€\‹”ò[YOŒà›ö[ô»JH¬àô]\õà
+à›ô¬à[úœHöãÀ›››ÀùÃÀõ‹ôÀÃå‹›ô»ÇàöY]–õﬁHåLåÇà€\‹”ò[YO^ÿ€ä””êTó—ìQ◊‘’ë◊–êT—KùÀVÃãååç\ô[WHã€\‹”ò[YJ_Bà\öXKZY[Çàõÿ›\ÿXõOHôò[ŸHÇàÇàôX›⁄YHéLàZY⁄HåLàö[Hà—QPÃçàœÇàôX›OHåLà⁄YHéLàZY⁄HåLàö[HàŸôôààœÇàôX›OHååà⁄YHéLàZY⁄Hååàö[HàÃçMéàœÇàôX›OHçà⁄YHéLàZY⁄HåLàö[HàŸôôààœÇàôX›OHçLà⁄YHéLàZY⁄HåLàö[Hà—QPÃçàœÇà‹›ôœÇà
+N¬üBÇôù[ò›[€à‹ô\ïòX⁄⁄[ô’€€ò\ëõY—ÿä»€\‹”ò[YHNà»€\‹”ò[YOŒà›ö[ô»JH¬à€€ú›€\YH\ŸRY
+
+Kúô\XŸJŒãŸÀó»äN¬àô]\õà
+à›ô¬à[úœHöãÀ›››ÀùÃÀõ‹ôÀÃå‹›ô»ÇàöY]–õﬁHååÃÇà€\‹”ò[YO^ÿ€ä””êTó—ìQ◊‘’ë◊–êT—KùÀVÃãçMåç\ô[WHã€\‹”ò[YJ_Bà\öXKZY[Çàõÿ›\ÿXõOHôò[ŸHÇàÇàYúœÇà€\]Y^ÿ€\YOÇàôX›⁄YHçåàZY⁄HåÃàûHåéàûOHåéàœÇàÿ€\]ÇàŸYúœÇà»€\]^ÿ\õ
+…ÿ€\YJXOÇàôX›⁄YHçåàZY⁄HåÃàö[HàÃLåMéHàœÇà]›õ⁄ŸOHàŸôôàà›õ⁄ŸU⁄YHåLàHìLåÃMåÃàœÇà]›õ⁄ŸOHà–ŒLëHà›õ⁄ŸU⁄YHçààHìLåÃMåÃàœÇà]›õ⁄ŸOHàŸôôàà›õ⁄ŸU⁄YHåLààHìLÃåÃLMHåàœÇà]›õ⁄ŸOHà–ŒLëHà›õ⁄ŸU⁄YHéàHìLÃåÃLMHåàœÇàŸœÇà‹›ôœÇà
+N¬üBÇã äÇà
+à8.*∏.-x.%x.b8.+x.'∏.&x.,x. x.!¯.,∏.&H
+8.`x.+∏."∏."∏.-¯.b8.+JH8†%8.`¯."∏.bx.%¯.,x.bx.!¯."∏.b8.+x.!¯.`8.)x.-¯.+x. x.`¯.&x. x.,∏.(¯.c8.%8.`x.)x.,8."∏.-8.&¯. x.(¯.+x.!¯.%8.bx.,∏.&x.&∏.&x.`¯.*¯.bx.%x.(¯.!¯. x.,x.&Bà
+à8."∏..8.%8.*∏.-x.(∏.,∏.)»
+åé8.`∏.%¯.&JH
+»ìïãLXH8.)x.%8. x.,∏.(¯."∏.&x.`8.(x.-¯.b8.+x.(x.-x."∏.-8.&¯.`8.(∏.+x.,8†%8."∏.-¯.b8.+x.`8.%8.-8.(x.a8.%8.bx.*∏.-x.!8.!¯.%¯.-x.bà
+à›\ôòXŸHH8.`x.&∏.&∏.`¯.&Hÿ\ô0≠»X›]ôHH8."∏.-8.&¯.%x.+x.&x.`8.)x.-¯.+x. x. x.(¯.+x.!¬à
+ã¬ò€€ú›T‘“Q”ëQW‘SUHH¬à»›\ôòXŸNàòôÀ\õ‹ŸKLå^\õ‹ŸKNMLö[ôÀ\õ‹ŸKMåÕLãX›]ôNàòôÀ\õ‹ŸKMÃ^]⁄]Hö[ôÀ\õ‹ŸKNLÕMHàKà»›\ôòXŸNàòôÀ\ôYLå^\ôYNMLö[ôÀ\ôYMåÕLãX›]ôNàòôÀ\ôYMÃ^]⁄]Hö[ôÀ\ôYNLÕMHàKà»›\ôòXŸNàòôÀ[‹ò[ôŸKLå^[‹ò[ôŸKNMLö[ôÀ[‹ò[ôŸKMåÕLãX›]ôNàòôÀ[‹ò[ôŸKMÃ^]⁄]Hö[ôÀ[‹ò[ôŸKNLÕMHàKà»›\ôòXŸNàòôÀX[Xô\ãLå^X[Xô\ãNMLö[ôÀX[Xô\ãMåÕLãX›]ôNàòôÀX[Xô\ãMÃ^]⁄]Hö[ôÀX[Xô\ãNLÕMHàKà»›\ôòXŸNàòôÀ^Y[›ÀLå^^Y[›ÀNMLö[ôÀ^Y[›ÀMåÕHãX›]ôNàòôÀ^Y[›ÀMÃ^]⁄]Hö[ôÀ^Y[›ÀNLÕLàKà»›\ôòXŸNàòôÀ[[YKLå^[[YKNMLö[ôÀ[[YKMåÕLãX›]ôNàòôÀ[[YKMÃ^]⁄]Hö[ôÀ[[YKNLÕMHàKà»›\ôòXŸNàòôÀY‹ôY[ãLå^Y‹ôY[ãNMLö[ôÀY‹ôY[ãMåÕLãX›]ôNàòôÀY‹ôY[ãMÃ^]⁄]Hö[ôÀY‹ôY[ãNLÕMHàKà»›\ôòXŸNàòôÀY[Y\ò[Lå^Y[Y\ò[NMLö[ôÀY[Y\ò[MåÕLãX›]ôNàòôÀY[Y\ò[MÃ^]⁄]Hö[ôÀY[Y\ò[NLÕMHàKà»›\ôòXŸNàòôÀ]X[Lå^]X[NMLö[ôÀ]X[MåÕLãX›]ôNàòôÀ]X[MÃ^]⁄]Hö[ôÀ]X[NLÕMHàKà»›\ôòXŸNàòôÀXﬁX[ãLå^XﬁX[ãNMLö[ôÀXﬁX[ãMåÕLãX›]ôNàòôÀXﬁX[ãMÃ^]⁄]Hö[ôÀXﬁX[ãNLÕMHàKà»›\ôòXŸNàòôÀ\⁄ﬁKLå^\⁄ﬁKNMLö[ôÀ\⁄ﬁKMåÕLãX›]ôNàòôÀ\⁄ﬁKMÃ^]⁄]Hö[ôÀ\⁄ﬁKNLÕMHàKà»›\ôòXŸNàòôÀXõYKLå^XõYKNMLö[ôÀXõYKMåÕLãX›]ôNàòôÀXõYKMÃ^]⁄]Hö[ôÀXõYKNLÕMHàKà»›\ôòXŸNàòôÀZ[ôY€ÀLå^Z[ôY€ÀNMLö[ôÀZ[ôY€ÀMåÕLãX›]ôNàòôÀZ[ôY€ÀMÃ^]⁄]Hö[ôÀZ[ôY€ÀNLÕMHàKà»›\ôòXŸNàòôÀ]ö[€]Lå^]ö[€]NMLö[ôÀ]ö[€]MåÕLãX›]ôNàòôÀ]ö[€]MÃ^]⁄]Hö[ôÀ]ö[€]NLÕMHàKà»›\ôòXŸNàòôÀ\\úKLå^\\úKNMLö[ôÀ\\úKMåÕLãX›]ôNàòôÀ\\úKMÃ^]⁄]Hö[ôÀ\\úKNLÕMHàKà»›\ôòXŸNàòôÀYùX⁄⁄XKLå^YùX⁄⁄XKNMLö[ôÀYùX⁄⁄XKMåÕLãX›]ôNàòôÀYùX⁄⁄XKMÃ^]⁄]Hö[ôÀYùX⁄⁄XKNLÕMHàKà»›\ôòXŸNàòôÀ\[öÀLå^\[öÀNMLö[ôÀ\[öÀMåÕLãX›]ôNàòôÀ\[öÀMÃ^]⁄]Hö[ôÀ\[öÀNLÕMHàKà»›\ôòXŸNàòôÀ\›€ôKLå^\›€ôKNLö[ôÀ\›€ôKMåÕHãX›]ôNàòôÀ\›€ôKMÃ^]⁄]Hö[ôÀ\›€ôKNLÕLàKà»›\ôòXŸNàòôÀ^ö[òÀLå^^ö[òÀNLö[ôÀ^ö[òÀMåÕHãX›]ôNàòôÀ^ö[òÀMÃ^]⁄]Hö[ôÀ^ö[òÀNLÕLàKà»›\ôòXŸNàòôÀ[ô]]ò[Lå^[ô]]ò[NLö[ôÀ[ô]]ò[MåÕHãX›]ôNàòôÀ[ô]]ò[MÃ^]⁄]Hö[ôÀ[ô]]ò[NLÕLàKà»›\ôòXŸNàòôÀ\€]KLå^\€]KNLö[ôÀ\€]KMåÕHãX›]ôNàòôÀ\€]KMÃ^]⁄]Hö[ôÀ\€]KNLÕLàKà à8.`∏.%¯.&x.`8. ∏.bx.(x. ∏.-∏.bx.&x.`8.)x.a¯. x.&x.bx.+x.(à8†%8.`x.(∏. x."8.,∏. x.`x.%∏.)»Lå8.`8.%8.-8.(x.`8.(x.-¯.b8.+x.(x.-x."∏.-8.&¯.`8.(∏.+x.,
+ã¬à»›\ôòXŸNàòôÀ[‹ò[ôŸKLÃ^[‹ò[ôŸKNMLö[ôÀ[‹ò[ôŸKMÃÕHãX›]ôNàòôÀ[‹ò[ôŸKN^]⁄]Hö[ôÀ[‹ò[ôŸKNMLÕMHàKà»›\ôòXŸNàòôÀ[[YKLÃ^[[YKNMLö[ôÀ[[YKMÃÕHãX›]ôNàòôÀ[[YKN^]⁄]Hö[ôÀ[[YKNMLÕMHàKà»›\ôòXŸNàòôÀ\⁄ﬁKLÃ^\⁄ﬁKNMLö[ôÀ\⁄ﬁKMÃÕHãX›]ôNàòôÀ\⁄ﬁKN^]⁄]Hö[ôÀ\⁄ﬁKNMLÕMHàKà»›\ôòXŸNàòôÀ]ö[€]LÃ^]ö[€]NMLö[ôÀ]ö[€]MÃÕHãX›]ôNàòôÀ]ö[€]N^]⁄]Hö[ôÀ]ö[€]NMLÕMHàKà»›\ôòXŸNàòôÀX[Xô\ãLÃ^X[Xô\ãNMLö[ôÀX[Xô\ãMÃÕHãX›]ôNàòôÀX[Xô\ãN^]⁄]Hö[ôÀX[Xô\ãNMLÕMHàKà»›\ôòXŸNàòôÀ]X[LÃ^]X[NMLö[ôÀ]X[MÃÕHãX›]ôNàòôÀ]X[N^]⁄]Hö[ôÀ]X[NMLÕMHàKà»›\ôòXŸNàòôÀYùX⁄⁄XKLÃ^YùX⁄⁄XKNMLö[ôÀYùX⁄⁄XKMÃÕHãX›]ôNàòôÀYùX⁄⁄XKN^]⁄]Hö[ôÀYùX⁄⁄XKNMLÕMHàKóH\»€€ú›¬Çôù[ò›[€à\‹⁄Y€ôYT›XõT[]R[ô^
+\‹⁄Y€ôYSXô[à›ö[ô Nàù[Xô\à¬à€€ú›»H\‹⁄Y€ôYSXô[ùö[J
+N¬à äàìïãLXHÃãXö]8†%8. x.(¯.,8."8.,∏.(∏.%8.-x. x.)¯.b8.,à\⁄
+åÃH8.`8.(x.-¯.b8.+x.`∏.(x.%8..x.`∏.)x."∏..8.%8.*∏.-x.(∏.,∏.)»
+ã¬à]HåMçåLÕåçåN¬àõ‹à
+]HH»HÀõ[ô›»H
+œHJH¬àèHÀò⁄\ê€ŸP]
+JN¬àHX]ö[][
+MçÕÕÕåNJN¬àBàô]\õàX]òXú 
+H	HT‘“Q”ëQW‘SUKõ[ô›¬üBÇôù[ò›[€à\‹⁄Y€ôYTŸ[X››\ôòXŸP€\‹Ÿ\ \‹⁄Y€ôYNà›ö[ô Nà›ö[ô»¬à€€ú›ò[YHH›ö[ô \‹⁄Y€ôYHœ»àäKùö[J
+N¬àYà
+[ò[YJHô]\õàòôÀ]⁄]H^\€]KNö[ôÀ\€]KLåÕÕHé¬àô]\õàT‘“Q”ëQW‘SUVÿ\‹⁄Y€ôYT›XõT[]R[ô^
+ò[YJWHKú›\ôòXŸN¬üBÇã äÇà
+à8."∏.-8.&¯.`x.%∏.&∏.'∏.&x.,x. x.!¯.,∏.&H8†%8."8.,x.%[ô^8.a8.(x.b8."¯.bx.,¯.`¯.&x.(¯.+x.&∏.`8.%8.-x.(∏.)¯. x.,x.&H
+8."∏.-¯.b8.+x."∏..8.%8.`8.%8.-x.(∏.)¯. x.,x.&x.a8.%8.bx.*∏.-x.!8.!¯.%¯.-x.b8."8.,∏. x.`x.+∏."∏."8.&x. x.)¯.b8.,∏."8.,8."∏.&JBà
+ã¬ôù[ò›[€àùZ[›Yôï€€ò\ê\‹⁄Y€ôYT[]R[ô^X\
+ò[Y\ŒàôXY€õH›ö[ô÷◊JNàX\›ö[ôÀù[Xô\èà¬à€€ú›€‹ùYHÀããõò[Y\◊Kú€‹ù
+
+KäHOàKõÿÿ[P€€\\ôJãô[àäJN¬à€€ú›\ŸYHô]»Ÿ]ù[Xô\èä
+N¬à€€ú›X\Hô]»X\›ö[ôÀù[Xô\èä
+N¬à€€ú›HT‘“Q”ëQW‘SUKõ[ô›¬àõ‹à
+€€ú›ò[YHŸà€‹ùY
+H¬à]YH\‹⁄Y€ôYT›XõT[]R[ô^
+ò[YJH	H¬àYà
+\ŸYú⁄^ôH
+H¬à]öY\»H¬à⁄[H
+\ŸYö\ Y
+H	âàöY\»
+H¬àYH
+Y
+»JH	H¬àöY\»
+œHN¬àBà\ŸYòY
+Y
+N¬àBàX\úŸ]
+ò[YKY
+N¬àBàô]\õàX\¬üBÇã äà8."∏.-8.&¯. x.(¯.+x.!¯."∏.-¯.b8.+x.'∏.&x.,x. x.!¯.,∏.&H8†%8.`¯."∏.bx.*∏.-x.`8.%8.-x.(∏.)¯. x.,x.&∏.'¯.-8.)x.%8.c8.'∏.&x.,x. x.!¯.,∏.&x.`¯.&x. x.,∏.(¯.c8.%0≠»[]R[ô^›ô\úöYHH8.*∏.-x.!8.!¯.%¯.-x.b8."8.,∏. x.`x.%∏.&à
+8.a8.(x.b8."¯.bx.,¯.`¯.&x. x.)x..8.b8.(x."∏.-8.& H
+ã¬ôù[ò›[€à\‹⁄Y€ôYT›Yôëö[\ê⁄\€\‹Ÿ\ ›YôìXô[à›ö[ôÀŸ[X›Yàõ€€X[ã[]R[ô^›ô\úöYOŒàù[Xô\äNà›ö[ô»¬à€€ú›ò[YHH›ö[ô ›YôìXô[œ»àäKùö[J
+N¬àYà
+[ò[YJH¬àô]\õàŸ[X›Y»òôÀ\€]KNML^]⁄]Hö[ôÀ\€]KNÕààòôÀ\€]KLL^\€]KMÃö[ôÀ\€]KLåŒ›ô\éòôÀ\€]KLåÕÃé¬àBà€€ú›YBà[]R[ô^›ô\úöYHOOH[ôYö[ôY	âà[]R[ô^›ô\úöYHèHà»[]R[ô^›ô\úöYH	HT‘“Q”ëQW‘SUKõ[ô›àà\‹⁄Y€ôYT›XõT[]R[ô^
+ò[YJN¬à€€ú›»›\ôòXŸKX›]ôHHHT‘“Q”ëQW‘SUV⁄YHN¬àYà
+Ÿ[X›Y
+Hô]\õàX›]ôN¬àô]\õà€ä›\ôòXŸKö›ô\éòúöY⁄ô\‹ÀVÃéM◊HäN¬üBÇã äà8.`¯."∏.bx.*∏.(¯.bx.,∏.!¯.)x.-8.!¯. x.c€K€‹ô\úœ€‹ô\èx†)ò8†%8.)x.,¯.%8.,x.&éà8."8.,∏. x.`8."¯.-8.(¯.c8.'¯.`8.)¯.+x.(¯.c8°§à⁄[ô›»8°§à[ùà
+ã¬ôù[ò›[€àô\€€ôT⁄\ôP\ò\ŸJXõX”‹öY⁄[îõ‹à›ö[ô»[ôYö[ôYù[
+Nà›ö[ô»¬à€€ú›úõ€TŸ\ùô\àH›ö[ô XõX”‹öY⁄[îõ‹œ»àäKùö[J
+Kúô\XŸJ◊…ÀàäN¬àYà
+úõ€TŸ\ùô\äHô]\õàúõ€TŸ\ùô\é¬àYà
+\[Ÿà⁄[ô›»OOHù[ôYö[ôYà	âà⁄[ô›Àõÿÿ][€èÀõ‹öY⁄[à	âà⁄[ô›Àõÿÿ][€ãõ‹öY⁄[àOOHõù[äH¬àô]\õà⁄[ô›Àõÿÿ][€ãõ‹öY⁄[ãúô\XŸJ◊…ÀàäN¬àBà€€ú›XàH›ö[ô õÿŸ\‹Àô[ùãìëV‘PìP◊–T’Tìœ»àäKùö[J
+Kúô\XŸJ◊…ÀàäN¬àYà
+XäHô]\õàXé¬à€€ú›ò»H›ö[ô õÿŸ\‹Àô[ùãïëTê—S’Tìœ»àäKùö[J
+N¬àYà
+ò Hô]\õà
+òÀú›\ù’⁄]
+öäH»ò»àŒãÀ…›òﬂX
+Kúô\XŸJ◊…ÀàäN¬àô]\õààé¬üBÇã äà8.!8.,¯.!8.bx.&x.`8.%8.-x.(∏.)¯."8.,x.&∏.%¯.,x.bx.!¯.`8.)x. ∏.%¯.,8.`8.&∏.-x.(∏.&H
+8.`x.)x.,8.&¯.bx.,∏.(∏.`8.%x.a¯.(JH8.`8.)x. ∏.%x.,x.)¯.%∏.,x.!»8.`x.)x.,8.(¯..8.b8.&x.(¯.%à
+ã¬ò€€ú›X]⁄\’ôZX€TŸX\ò⁄HôZX€SX]⁄\”‹ô\îŸX\ò⁄¬Çôù[ò›[€à\ŸQXõ›[òŸYò[YOäò[YNà[^S\Œàù[Xô\äNà¬à€€ú›ŸXõ›[òŸYŸ]Xõ›[òŸYHH\ŸT›]Jò[YJN¬Çà\ŸQYôôX›
+
+
+HOà¬à€€ú›[Y\àH⁄[ô›ÀúŸ][Y[›]
+
+
+HOàŸ]Xõ›[òŸY
+ò[YJK[^S\ N¬àô]\õà
+
+HOà⁄[ô›Àò€X\ï[Y[›]
+[Y\äN¬àK›ò[YK[^S\◊JN¬Çàô]\õàXõ›[òŸY¬üBÇôù[ò›[€à][SX]⁄\‘›Yôëö[\ä\‹⁄Y€ôYNà›ö[ô»[ôYö[ôYù[›YôîŸ[X›[€éà›ö[ô Nàõ€€X[à¬àYà
+\–õ€⁄ŸY⁄\›Yôëö[\ä›YôîŸ[X›[€äJHô]\õàò[ŸN¬àYà
+\–õ€⁄ŸYù^Y\î›Yôëö[\ä›YôîŸ[X›[€äJHô]\õàò[ŸN¬àYà
+\‘€€⁄\Y›Yôëö[\ä›YôîŸ[X›[€äJHô]\õàò[ŸN¬àYà
+\‘€€[Ÿ[YX\î›Yôëö[\ä›YôîŸ[X›[€äJHô]\õàò[ŸN¬àYà
+\’òXÿ[ùÿ[S[Ÿ[YX\î›Yôëö[\ä›YôîŸ[X›[€äJHô]\õàò[ŸN¬àYà
+›YôîŸ[X›[€àOOH∏.%¯.,x.bx.!¯.*¯.(x.%äHô]\õàùYN¬àYà
+›YôîŸ[X›[€àOOH’Qëó—íSTó’SêT‘“Q”ëQ
+Hô]\õàT›ö[ô \‹⁄Y€ôYHœ»àäKùö[J
+N¬àô]\õà›ö[ô \‹⁄Y€ôYHœ»àäKùö[J
+HOOH›YôîŸ[X›[€é¬üBÇã äà8.&∏.(¯.(¯.%¯.,x.%8.`x.(¯. x."8.,∏. x. x.,∏.(¯.)¯.,∏.!»8†%8.a8.%¯.(à»x†$÷à»8.`8.)x. à»8."∏.b8.+x.!¯.)¯.b8.,∏.!»
+ã¬ôù[ò›[€àÿ[ö]^ôUôZX€TŸX\ò⁄\›Jò]Œà›ö[ô Nà›ö[ô»¬à€€ú›[ôHHò]¬àú‹]
+◊è◊ã BàõX\
+
+ HOàÀùö[J
+JBàôö[ô
+õ€€X[äHœ»àé¬à€€ú›€X[ôYH[ôBàúô\XŸJ÷◊óLLWLM—òK^êKVåNHWKŸÀàäBàúô\XŸJ◊ ÀŸÀàäBàùö[J
+N¬àô]\õà€X[ôYú€XŸJëRP”W‘—PTê“”PV
+N¬üBÇã äà8. ∏.$¯.,8.'∏.-8.(x.'∏.c8.`¯.&x."∏.b8.+x.!¯.!8.bx.&x.*¯.,à8†%8.+x.&x..8.#x.,∏.%x.a8.%¯.(à»x†$÷à»8.`8.)x. à»8."∏.b8.+x.!¯.)¯.b8.,∏.!»»H
+8.a8.(x.b8.(¯.)¯.(x.&∏.(¯.(¯.%¯.,x.%8.`¯.*¯.(x.b
+H
+ã¬ôù[ò›[€àÿ[ö]^ôUôZX€TŸX\ò⁄[ú]
+ò]Œà›ö[ô Nà›ö[ô»¬àô]\õàò]Àúô\XŸJ÷◊óLLWLM—òK^êKVåNHWKŸÀàäKú€XŸJëRP”W‘—PTê“”PV
+N¬üBÇôù[ò›[€àõ‹õX]YQ]SXô[
+\€—]Nà›ö[ô Nà›ö[ô»¬à€€ú›àH›ö[ô \€—]Hœ»àäKùö[J
+N¬àYà
+]äHô]\õààé¬à€€ú›]HHô]»]J	›üUåå
+N¬àYà
+ù[Xô\ãö\”òSä]KôŸ][YJ
+JJHô]\õàé¬àô]\õà]Kù”ÿÿ[Q]T›ö[ô ùUã»^Nàõù[Y\öX»ã[€ùàú⁄‹ùàJN¬üBÇã äà8."∏.-¯.b8.+x.`8.%8.-x.(∏.)¯. x.,x.&à[ÿ⁄»8†%8.(¯.,x.&∏.!8.b8.,à^^^K[[KY
+ã¬ôù[ò›[€àõ‹õX]]R[ú]
+ò[YNà›ö[ô Nà›ö[ô»¬àYà
+]ò[YJHô]\õààé¬àô]\õàõ‹õX]YQ]SXô[
+ò[YJN¬üBÇã äàSëH⁄\ôH8†%8."8.,¯. x.,x.%8.!8.)¯.,∏.(x.(∏.,∏.)»Tì8.`∏.%8.(∏.&¯.(¯.,8.(x.,∏.$»
+ã¬ò€€ú›SëW‘“TëW”PV–“Tî»Håå¬Çôù[ò›[€à€‹ù‹ô\í][\—õ‹î⁄\ôJõ›‹Œà‹ô\í][V◊JNà‹ô\í][V◊H¬àô]\õàÀããúõ›‹◊Kú€‹ù
+
+KäHOà¬à€€ú›ZHHUSW‘’UT◊”‘ëTãö[ô^ŸäKú›]\ N¬à€€ú›öHHUSW‘’UT◊”‘ëTãö[ô^Ÿäãú›]\ N¬à€€ú›‹ô\ëYôàH
+ZHOOHLH»NHàZJHH
+öHOOHLH»NHàöJN¬àYà
+‹ô\ëYôàOOH
+Hô]\õà‹ô\ëYôé¬àô]\õà›ö[ô Kõò[YHœ»àäKõÿÿ[P€€\\ôJ›ö[ô ãõò[YHœ»àäKô[àã»Ÿ[ú⁄]]ö]Nàòò\ŸHàJN¬àJN¬üBÇã äà8.a8.(x.b8."¯.bx.,¯.&¯.bx.,∏.(∏.`8.(x.-¯.b8.+H‹X»8. ∏.-∏.bx.&x.%x.bx.&x.%8.bx.)¯.(∏.`8.)x. ∏.%¯.,8.`8.&∏.-x.(∏.&x.`8.%8.-x.(∏.)¯. x.,x.&àù[]H
+ã¬ôù[ò›[€àÿ\íXY[ôQõ‹î⁄\ôJù[]Nà›ö[ôÀÿ\î‹XŒà›ö[ô Nà›ö[ô»¬à€€ú›Hù[]Kùö[J
+N¬à€€ú›»Hÿ\î‹XÀùö[J
+N¬àYà
+X Hô]\õà	âàOOHãHà»à∏.(¯.,∏.(∏.)x.,8.`8.+x.-x.(∏.%8.(¯.%àé¬àYà
+\OOHãHäHô]\õàŒ¬àYà
+Àú›\ù’⁄]
+
+JHô]\õàŒ¬àô]\õà	‹H	ÿﬂXùö[J
+N¬üBÇôù[ò›[€à‹ô\í][T⁄\ôS[ôJ][Nà‹ô\í][Kõ‹õ\Œà][T›]\‘€X⁄Y\”õ‹õX[^ôY
+Nà›ö[ô»¬à€€ú›ò[YHH›ö[ô ][Kõò[YHœ»àäKùö[J
+Hä8.a8.(x.b8.(x.-x."∏.-¯.b8.+JHé¬à€€ú›ö]Œà›ö[ô÷◊HH€ò[YK][Kú›]\◊N¬à€€ú›\Ÿ»H›ö[ô ][Kò\‹⁄Y€ôYHœ»àäKùö[J
+N¬àYà
+\Ÿ Hö]Àú\⁄
+\Ÿ N¬à€€ú›õ›‘€Hõ‹õ\ÀòûT›]\÷⁄][Kú›]\»\»][T›]\’ò[YWN¬àYà
+õ›‘€Àú›‹ôQ\‹⁄]€ÿ⁄ H¬à€€ú›ÿ\H›‹ôQ\‹⁄]YôôX›]ôSX^^\ õ›‘€
+N¬àYà
+][Kò€ÿ⁄‘›\ù[YÀùö[J
+JH¬àö]Àú\⁄
+à8.)x.!¯. ∏.bx.+x.(x..x.)H	Ÿõ‹õX]]R[ú]
+][Kò€ÿ⁄‘›\ù[Y
+_H0≠»	‹›‹ôQ\‹⁄]ô[XZ[ö[ô”Xô[
+][Kò€ÿ⁄‘›\ù[Yÿ\
+_Xà
+N¬àH[ŸH¬àö]Àú\⁄
+›‹ôQ\‹⁄]ô[XZ[ö[ô”Xô[
+[ôYö[ôYÿ\
+JN¬àBàH[ŸHYà
+õ›‘€Àò\úö]ò[YQ]H	âà][KôYQ]OÀùö[J
+JH¬àö]Àú\⁄
+8.(x.,à	Ÿõ‹õX]]R[ú]
+][KôYQ]J_X
+N¬àH[ŸHYà
+][KôYQ]OÀùö[J
+JH¬àö]Àú\⁄
+8.(x.,à	Ÿõ‹õX]]R[ú]
+][KôYQ]J_X
+N¬àBàYà
+][Kú›]\–⁄[ôŸY][YÀùö[J
+JH¬àö]Àú\⁄
+8.*∏.%∏.,∏.&x.,	Ÿõ‹õX]]R[ú]
+][Kú›]\–⁄[ôŸY][Y
+_X
+N¬àBà€€ú›õ›HH][Kõõ›OÀùö[J
+N¬àYà
+õ›JHö]Àú\⁄
+8.*¯.(x.,∏.(∏.`8.*¯.%x..à	€õ›_X
+N¬àô]\õà8•™˚Ó#»	ÿö]Àöõ⁄[äà0≠»ä_X¬üBÇò€€ú›êSë“”“◊’àHê\⁄XK–ò[ô⁄€⁄»é¬Çôù[ò›[€àŸ^Pò[ô⁄€⁄÷[Y
+
+Nà›ö[ô»¬àô]\õàô]»]J
+Kù”ÿÿ[Q]T›ö[ô ô[ãP–Hã»[YVõ€ôNàêSë“”“◊’àJN¬üBÇã äà[Y\›[\à8."8.,∏. Hà8°§à^^^K[[KY
+8.&¯.#¯.-8.%¯.-8.&x. x.%¯.(KäH8.*∏.,¯.*¯.(¯.,x.&∏.`x.*∏.%8.!¯.)¯.,x.&x.%¯.-x.b8.`8.&¯.)x.-x.b8.(∏.&x.*∏.%∏.,∏.&x.,
+ã¬ôù[ò›[€à›]\–⁄[ôŸY][Yúõ€Qí\€ \€Œà›ö[ô»ù[[ôYö[ôY
+Nà›ö[ô»[ôYö[ôY¬à€€ú›»H›ö[ô \€»œ»àäKùö[J
+N¬àYà
+\ Hô]\õà[ôYö[ôY¬à€€ú›\úŸYH]Kú\úŸJ◊óÕKWÃüKWÃüIÀù\›
+ H»	‹ﬂULéåå
+ÃŒåà N¬àYà
+ù[Xô\ãö\”òSä\úŸY
+JHô]\õà[ôYö[ôY¬à€€ú›[YHô]»]J\úŸY
+Kù”ÿÿ[Q]T›ö[ô ô[ãP–Hã»[YVõ€ôNàêSë“”“◊’àJN¬àô]\õà◊óÕKWÃüKWÃüIÀù\›
+[Y
+H»[Yà[ôYö[ôY¬üBÇã äà8.)¯.,x.&x.%¯.-x.b8.`8.&¯.)x.-x.b8.(∏.&x.*∏.%∏.,∏.&x.,à8.`x.*∏.%8.!¯.`8."x.'∏.,∏.,8. x.(¯.$¯.-x.'8.b8.,∏.&x.(x.,∏.`8. x.-8.&HH8.)¯.,x.&H
+èHà8.)¯.,x.&JH
+ã¬ôù[ò›[€à›]\–⁄[ôŸY[\ŸYXô[
+›]\–⁄[ôŸY[Yà›ö[ô»[ôYö[ôY
+Nà›ö[ô»ù[¬à€€ú›ò]»H›ö[ô ›]\–⁄[ôŸY[Yœ»àäKùö[J
+Kú€XŸJL
+N¬àYà
+K◊óÕKWÃüKWÃüIÀù\›
+ò] JHô]\õàù[¬à€€ú›Ÿ^V[YHŸ^Pò[ô⁄€⁄÷[Y
+
+N¬à€€ú›Hô]»]J	›Ÿ^V[YULéåå
+ÃŒå
+KôŸ][YJ
+N¬à€€ú›ÃHô]»]J	‹ò]ﬂULéåå
+ÃŒå
+KôŸ][YJ
+N¬àYà
+ù[Xô\ãö\”òSä
+Hù[Xô\ãö\”òSäÃ
+JHô]\õàù[¬à€€ú›[\ŸYHX]úõ›[ô
+
+HÃ
+H»
+ç
+àå
+àå
+àL
+JN¬àYà
+[\ŸYHJHô]\õàù[¬àô]\õà	Ÿ[\ŸYH8.)¯.,x.&X¬üBÇã äà8.`8.*¯.)x.-¯.+x.!»H8.`8.*¯.)x.-¯.+HH8.)¯.,x.&x. x.b8.+x.&x.)¯.,x.&x.(x.,à0≠»8.`x.%8.!»H8.)¯.,x.&x.&x.-x.bx.!8.(¯.&∏.*¯.(¯.-¯.+x.`8.)x.(∏. x.,¯.*¯.&x.%
+ã¬ôù[ò›[€àYQ]P\úö]ò[ù]€ï€ôJYV[Yà›ö[ô»[ôYö[ôY
+Nàò[Xô\ààúôYàú⁄ﬁHà¬à€€ú›^\»Hÿ[[ô\ë^\’[ù[YPò[ô⁄€⁄ YV[Y
+N¬àYà
+^\»OHù[
+Hô]\õàú⁄ﬁHé¬àYà
+^\»H
+Hô]\õàúôYé¬àYà
+^\»OOHJHô]\õàò[Xô\àé¬àô]\õàú⁄ﬁHé¬üBÇã äà8.%x.,x.)¯. x.(¯.+x.!¯.*∏.%∏.,∏.&x.,8.(¯.,∏.(∏. x.,∏.(¯.&∏.&x.`x.%∏.&∏.`8.!8.(¯.-¯.b8.+x.!¯.(x.-¯.+H8†%8.`¯."∏.bx.!8..x.b8. x.,x.&∏. x.(¯.+x.!¯.'∏.&x.,x. x.!¯.,∏.&x.`8.'∏.-¯.b8.+x."¯.b8.+x.&x.`x.%∏.)¯.`¯.&x. x.,∏.(¯.c8.%
+ã¬ôù[ò›[€à][SX]⁄\’€€ò\î›]\—ö[\äà][NàX⁄œ‹ô\í][Kú›]\»àô€€ŸàôYQ]Hèãà›]\—ö[\éà][T›]\—ö[\ïò[YHàãàYUŸ^P⁄\à][T›]\‘€X⁄Y\”õ‹õX[^ôY»ôYUŸ^HóBäNàõ€€X[à¬àYà
+\›]\—ö[\äHô]\õàùYN¬àYà
+›]\—ö[\àOOHUSW‘’UT◊—QW’—VJHô]\õàX]⁄\—YUŸ^P⁄\
+][KYUŸ^P⁄\
+N¬àYà
+›]\—ö[\àOOH∏."8.&àäHô]\õà][Kú›]\»OOH∏."8.&ààõ€€X[ä][Kô€€Ÿ
+N¬àô]\õà][Kú›]\»OOH›]\—ö[\é¬üBÇôù[ò›[€àŸŸ€TŸ]Y[Xô\èäô]éàŸ]ãŸ^Nà
+NàŸ]à¬à€€ú›ô^Hô]»Ÿ]
+ô]äN¬àYà
+ô^ö\ Ÿ^JJHô^ô[]JŸ^JN¬à[ŸHô^òY
+Ÿ^JN¬àô]\õàô^¬üBÇôù[ò›[€à‹ô\ìX]⁄\‘ÿ[Qö[\ú ‹ô\éà‹ô\ãÿ[Qö[\úŒàŸ]›ö[ôœäNàõ€€X[à¬àYà
+ÿ[Qö[\úÀú⁄^ôHOOH
+Hô]\õàùYN¬à€€ú›\H›ö[ô ‹ô\ãúÿ[JKù’\\êÿ\ŸJ
+N¬àõ‹à
+€€ú›€ŸHŸà\úò^Kôúõ€Jÿ[Qö[\ú JH¬àYà
+€ŸHOOH–SW—íSTó’SêT‘“Q”ëQ	âàR”ì’”ó‘–SW–”—TÀö\ \
+JHô]\õàùYN¬àYà
+\OOH›ö[ô €ŸJKù’\\êÿ\ŸJ
+JHô]\õàùYN¬àBàô]\õàò[ŸN¬üBÇôù[ò›[€à‹ô\ìX]⁄\‘ÿ[T›]\—ö[\ú ‹ô\éà‹ô\ãÿ[T›]\—ö[\úŒàŸ]ÿ[T›]\—ö[\ïò[YOäNàõ€€X[à¬àYà
+ÿ[T›]\—ö[\úÀú⁄^ôHOOH
+Hô]\õàùYN¬àô]\õàÿ[T›]\—ö[\úÀö\ ‹ô\ãúÿ[T›]\ N¬üBÇôù[ò›[€à‹]›Yôëö[\ú ›Yôëö[\úŒàŸ]›ö[ôœäNà¬à][T›Yôëö[\úŒàŸ]›ö[ôœé¬àõ€⁄ŸY⁄\Ÿ^\ŒàŸ]›ö[ôœé¬àõ€⁄ŸYù^Y\íŸ^\ŒàŸ]›ö[ôœé¬à€€⁄\Y⁄Ÿ[úŒàŸ]›ö[ôœé¬à€€[Ÿ[YX\ï⁄Ÿ[úŒàŸ]›ö[ôœé¬àòXÿ[ù[Ÿ[YX\ï⁄Ÿ[úŒàŸ]›ö[ôœé¬à[ûPõ€⁄ŸY⁄\[ô”YÿXﬁNàõ€€X[é¬üH¬à€€ú›][T›Yôëö[\ú»Hô]»Ÿ]›ö[ôœä
+N¬à€€ú›õ€⁄ŸY⁄\Ÿ^\»Hô]»Ÿ]›ö[ôœä
+N¬à€€ú›õ€⁄ŸYù^Y\íŸ^\»Hô]»Ÿ]›ö[ôœä
+N¬à€€ú›€€⁄\Y⁄Ÿ[ú»Hô]»Ÿ]›ö[ôœä
+N¬à€€ú›€€[Ÿ[YX\ï⁄Ÿ[ú»Hô]»Ÿ]›ö[ôœä
+N¬à€€ú›òXÿ[ù[Ÿ[YX\ï⁄Ÿ[ú»Hô]»Ÿ]›ö[ôœä
+N¬à][ûPõ€⁄ŸY⁄\[ô”YÿXﬁHHò[ŸN¬àõ‹à
+€€ú›àŸà\úò^Kôúõ€J›Yôëö[\ú JH¬àYà
+àOOH’Qëó—íSTó–ì”“—Q‘“TSë H¬à[ûPõ€⁄ŸY⁄\[ô”YÿXﬁHHùYN¬à€€ù[ùYN¬àBà€€ú›⁄»Hõ€⁄ŸY⁄\Ÿ^Qúõ€Qö[\ï⁄Ÿ[ääN¬àYà
+⁄»OOHù[
+H¬àõ€⁄ŸY⁄\Ÿ^\ÀòY
+⁄ N¬à€€ù[ùYN¬àBà€€ú›ö»Hõ€⁄ŸYù^Y\íŸ^Qúõ€Qö[\ï⁄Ÿ[ääN¬àYà
+ö»OOHù[
+H¬àõ€⁄ŸYù^Y\íŸ^\ÀòY
+ö N¬à€€ù[ùYN¬àBàYà
+\‘€€⁄\Y›Yôëö[\ääJH¬à€€⁄\Y⁄Ÿ[úÀòY
+äN¬à€€ù[ùYN¬àBàYà
+\‘€€[Ÿ[YX\î›Yôëö[\ääJH¬à€€[Ÿ[YX\ï⁄Ÿ[úÀòY
+äN¬à€€ù[ùYN¬àBàYà
+\’òXÿ[ùÿ[S[Ÿ[YX\î›Yôëö[\ääJH¬àòXÿ[ù[Ÿ[YX\ï⁄Ÿ[úÀòY
+äN¬à€€ù[ùYN¬àBà][T›Yôëö[\úÀòY
+äN¬àBàô]\õà¬à][T›Yôëö[\úÀàõ€⁄ŸY⁄\Ÿ^\Ààõ€⁄ŸYù^Y\íŸ^\Àà€€⁄\Y⁄Ÿ[úÀà€€[Ÿ[YX\ï⁄Ÿ[úÀàòXÿ[ù[Ÿ[YX\ï⁄Ÿ[úÀà[ûPõ€⁄ŸY⁄\[ô”YÿXﬁKàN¬üBÇã äà8.'∏.&x.,x. x.!¯.,∏.&x.*¯.)x.,∏.(∏."∏.-8.&»8†%‘à8.(8.,∏.(∏.`¯.&x."∏..8.%0≠»8.)¯.b8.,∏.!»H8.a8.(x.b8."8.,¯. x.,x.%
+ã¬ôù[ò›[€à][SX]⁄\‘›Yôëö[\ú \‹⁄Y€ôYNà›ö[ô»[ôYö[ôYù[›Yôëö[\úŒàŸ]›ö[ôœäNàõ€€X[à¬àYà
+›Yôëö[\úÀú⁄^ôHOOH
+Hô]\õàùYN¬àõ‹à
+€€ú›àŸà\úò^Kôúõ€J›Yôëö[\ú JH¬àYà
+][SX]⁄\‘›Yôëö[\ä\‹⁄Y€ôYKäJHô]\õàùYN¬àBàô]\õàò[ŸN¬üBÇã äà8.*∏.%∏.,∏.&x.,8.(¯.,∏.(∏. x.,∏.(¯.*¯.)x.,∏.(∏."∏.-8.&»8†%‘à0≠»8.)¯.b8.,∏.!»H8.a8.(x.b8."8.,¯. x.,x.%
+ã¬ôù[ò›[€à][SX]⁄\’€€ò\î›]\—ö[\ú à][NàX⁄œ‹ô\í][Kú›]\»àô€€ŸàôYQ]Hèãà›]\—ö[\úŒàŸ]][T›]\—ö[\ïò[YH\[ŸàUSW‘’UT◊—QW’—VOãàYUŸ^P⁄\à][T›]\‘€X⁄Y\”õ‹õX[^ôY»ôYUŸ^HóBäNàõ€€X[à¬àYà
+›]\—ö[\úÀú⁄^ôHOOH
+Hô]\õàùYN¬àõ‹à
+€€ú›àŸà\úò^Kôúõ€J›]\—ö[\ú JH¬àYà
+][SX]⁄\’€€ò\î›]\—ö[\ä][KãYUŸ^P⁄\
+JHô]\õàùYN¬àBàô]\õàò[ŸN¬üBÇôù[ò›[€à][SX]⁄\’€€ò\ì[ôQö[\ú”][Jà][NàX⁄œ‹ô\í][Kú›]\»àô€€ŸàôYQ]Hàò\‹⁄Y€ôYHèãà›Yôëö[\úŒàŸ]›ö[ôœãà›]\—ö[\úŒàŸ]][T›]\—ö[\ïò[YH\[ŸàUSW‘’UT◊—QW’—VOãàYUŸ^P⁄\à][T›]\‘€X⁄Y\”õ‹õX[^ôY»ôYUŸ^HóBäNàõ€€X[à¬àô]\õà][SX]⁄\‘›Yôëö[\ú ][Kò\‹⁄Y€ôYK›Yôëö[\ú H	âà][SX]⁄\’€€ò\î›]\—ö[\ú ][K›]\—ö[\úÀYUŸ^P⁄\
+N¬üBÇôù[ò›[€à‹ô\êÿ\íŸ^\ ‹ô\éàX⁄œ‹ô\ãòÿ\îõ›“Yàòÿ\íYèäNà›ö[ô÷◊H¬à€€ú›Ÿ^\Œà›ö[ô÷◊HH◊N¬à€€ú›õ›“YH›ö[ô ‹ô\ãòÿ\îõ›“Yœ»àäKùö[J
+N¬àYà
+õ›“Y
+HŸ^\Àú\⁄
+õ›Œâ‹õ›“YX
+N¬àYà
+‹ô\ãòÿ\íYOHù[
+H¬à€€ú›YH›ö[ô ‹ô\ãòÿ\íY
+Kùö[J
+N¬àYà
+Y
+HŸ^\Àú\⁄
+Yâ⁄YX
+N¬àBàô]\õàŸ^\Œ¬üBÇôù[ò›[€à‹ô\êÿ\îô\]Y\›
+‹ô\éàX⁄œ‹ô\ãòÿ\îõ›“Yàòÿ\íYèäNà»õ›◊⁄Yà›ö[ô»ù[»Yàù[Xô\àù[H¬àô]\õà¬àõ›◊⁄Yà›ö[ô ‹ô\ãòÿ\îõ›“Yœ»àäKùö[J
+Hù[àYà‹ô\ãòÿ\íYœ»ù[àN¬üBÇôù[ò›[€àö[\í[ô^][\—õ‹ì‹ô\äà‹ô\éàX⁄œ‹ô\ãòÿ\îõ›“Yàòÿ\íYèãà[ô^ûPÿ\éàôX€‹ô›ö[ôÀ‹ô\í][Qö[\í[ô^]V◊OÇäNàX⁄œ‹ô\í][Kú›]\»àô€€ŸàôYQ]Hàò\‹⁄Y€ôYHèñ◊H¬à€€ú›Ÿ^\»H‹ô\êÿ\íŸ^\ ‹ô\äN¬à€€ú›õ›‹»HŸ^\ÀõX\
+
+Ÿ^JHOà[ô^ûPÿ\ñ⁄Ÿ^WHœ»◊JKôö[ô
+
+\›
+HOà\›õ[ô›à
+Hœ»◊N¬àô]\õàõ›‹ÀõX\
+
+][JHOà¬à€€ú››]\»Hõ‹õX[^ôR][T›]\ ][Kú›]\ N¬à€€ú›YQ]HH›ö[ô ][KôYWŸ]Hœ»àäKùö[J
+Kú€XŸJL
+N¬àô]\õà¬à›]\Àà€€Ÿà”ëW‘—Uö\ ›]\ KàYQ]Nà◊óÕKWÃüKWÃüIÀù\›
+YQ]JH»YQ]Hà[ôYö[ôYà\‹⁄Y€ôYNàõ‹õX[^ôP\‹⁄Y€ôYJ][Kò\‹⁄Y€ôYW‹›YôäKàN¬àJN¬üBÇôù[ò›[€à‹ô\ìX]⁄\’€€ò\ëö[\ú à‹ô\éà‹ô\ãà›Yôëö[\úŒàŸ]›ö[ôœãà›]\—ö[\úŒàŸ]][T›]\—ö[\ïò[YH\[ŸàUSW‘’UT◊—QW’—VOãàYUŸ^P⁄\à][T›]\‘€X⁄Y\”õ‹õX[^ôY»ôYUŸ^HóKàö[\í][\ŒàX⁄œ‹ô\í][Kú›]\»àô€€ŸàôYQ]Hàò\‹⁄Y€ôYHèñ◊HH‹ô\ãö][\¬äNàõ€€X[à¬à€€ú›¬à][T›Yôëö[\úÀàõ€⁄ŸY⁄\Ÿ^\Ààõ€⁄ŸYù^Y\íŸ^\Àà€€⁄\Y⁄Ÿ[úÀà€€[Ÿ[YX\ï⁄Ÿ[úÀàòXÿ[ù[Ÿ[YX\ï⁄Ÿ[úÀà[ûPõ€⁄ŸY⁄\[ô”YÿXﬁKàHH‹]›Yôëö[\ú ›Yôëö[\ú N¬àYà
+[ûPõ€⁄ŸY⁄\[ô”YÿXﬁHõ€⁄ŸY⁄\Ÿ^\Àú⁄^ôHà
+H¬àYà
+‹ô\ãúÿ[T›]\»OOH∏.(¯.+x.*∏.b8.!»äHô]\õàò[ŸN¬à€€ú›⁄\»H⁄\‹õ›\Ÿ^J‹ô\ãú⁄\
+N¬àYà
+õ€⁄ŸY⁄\Ÿ^\Àú⁄^ôHà
+H¬àYà
+Xõ€⁄ŸY⁄\Ÿ^\Àö\ ⁄\ JHô]\õàò[ŸN¬àH[ŸHYà
+[ûPõ€⁄ŸY⁄\[ô”YÿXﬁJH¬àYà
+[‹ô\ãú⁄\ùö[J
+JHô]\õàò[ŸN¬àBàBàYà
+õ€⁄ŸYù^Y\íŸ^\Àú⁄^ôHà
+H¬àYà
+‹ô\ãúÿ[T›]\»OOH∏."8.+x.!»äHô]\õàò[ŸN¬à€€ú›ù^Y\í»Hù^Y\ë‹õ›\Ÿ^J‹ô\ãòù^Y\äN¬àYà
+Xõ€⁄ŸYù^Y\íŸ^\Àö\ ù^Y\í JHô]\õàò[ŸN¬àBàYà
+€€⁄\Y⁄Ÿ[úÀú⁄^ôHà
+H¬àYà
+[‹ô\ìX]⁄\‘€€⁄\Y›Yôë[J‹ô\ã€€⁄\Y⁄Ÿ[ú JHô]\õàò[ŸN¬àBàYà
+€€[Ÿ[YX\ï⁄Ÿ[úÀú⁄^ôHà
+H¬àYà
+[‹ô\ìX]⁄\‘€€[Ÿ[YX\î›Yôë[J‹ô\ã€€[Ÿ[YX\ï⁄Ÿ[ú JHô]\õàò[ŸN¬àBàYà
+òXÿ[ù[Ÿ[YX\ï⁄Ÿ[úÀú⁄^ôHà
+H¬àYà
+[‹ô\ìX]⁄\’òXÿ[ùÿ[S[Ÿ[YX\î›Yôë[J‹ô\ãòXÿ[ù[Ÿ[YX\ï⁄Ÿ[ú JHô]\õàò[ŸN¬àBà€€ú›\ŸS[ôTÿ€‹HH][T›Yôëö[\úÀú⁄^ôHà›]\—ö[\úÀú⁄^ôHà¬àYà
+]\ŸS[ôTÿ€‹JHô]\õàùYN¬àYà
+ö[\í][\Àõ[ô›OOH
+Hô]\õà][T›Yôëö[\úÀú⁄^ôHOOH¬àô]\õàö[\í][\Àú€€YJ
+][JHOà][SX]⁄\’€€ò\ì[ôQö[\ú”][J][K][T›Yôëö[\úÀ›]\—ö[\úÀYUŸ^P⁄\
+JN¬üBÇôù[ò›[€àö\ú›ù[Xô\äò]Œà›ö[ô Nà›ö[ô»¬à€€ú›HHò]ÀõX]⁄
+÷ÃNWVÃNKJäñÃNWJ OÀ N¬àô]\õàH»VÃHàãHé¬üBÇôù[ò›[€àõ‹õX]\Ÿ
+ò]Œà›ö[ô Nà›ö[ô»¬à€€ú›^Hò]Àùö[J
+N¬àYà
+]^
+Hô]\õàãHé¬àYà
+^ö[ò€Y\ âäH	âà^ö[ò€Y\ ãäJHô]\õà^¬à€€ú›ù[Y\öX»Hù[Xô\ä^úô\XŸJ÷◊åNKãWKŸÀàäJN¬àYà
+Sù[Xô\ãö\—ö[ö]Jù[Y\öX JHô]\õà^¬àô]\õà		€ô]»[ùìù[Xô\ëõ‹õX]
+ô[ãUT»ã»X^[][QúòX›[€ëY⁄]ŒàJKôõ‹õX]
+ù[Y\öX _X¬üBÇôù[ò›[€àùZ[[ôT⁄\ôSY\‹ÿYŸJ‹ô\éà‹ô\ã⁄\ôR][\Œà‹ô\í][V◊Kÿ\ô\õà›ö[ôÀõ‹õ\Œà][T›]\‘€X⁄Y\”õ‹õX[^ôY
+Nà›ö[ô»¬à€€ú›ÿ\ì[ôHHÿ\íXY[ôQõ‹î⁄\ôJ‹ô\ãôù[]K‹ô\ãòÿ\äN¬à€€ú›XY\ì[ô\Œà›ö[ô÷◊HH◊N¬àXY\ì[ô\Àú\⁄
+<'Ê•»	ÿÿ\ì[ô_X
+N¬à€€ú›⁄\‹⁄\»H›ö[ô ‹ô\ãò⁄\‹⁄\»œ»àäKùö[J
+N¬àYà
+⁄\‹⁄\ HXY\ì[ô\Àú\⁄
+<'Â%à8.`8.)x. ∏.%∏.,x.!»0≠»	ÿ⁄\‹⁄\ﬂX
+N¬àXY\ì[ô\Àú\⁄
+<'‰„ÿ[H0≠»	€‹ô\ãúÿ[_H0≠»	€‹ô\ãúÿ[T›]\ﬂX
+N¬àXY\ì[ô\Àú\⁄
+<'‰i8.)x..x. x.!8.bx.,à0≠»	€‹ô\ãòù^Y\üX
+N¬à€€ú›⁄\H‹ô\ãú⁄\Àùö[J
+Hœ»àé¬àYà
+⁄\
+HXY\ì[ô\Àú\⁄
+<'Ê®à8.(¯.+x.&∏.`8.(¯.-¯.+H0≠»	‹⁄\X
+N¬à€€ú›‹H›ö[ô ‹ô\ãúÿ[TöXŸHœ»àäKùö[J
+N¬àYà
+‹	âà‹OOHãHäHXY\ì[ô\Àú\⁄
+<'‰≠H8.(¯.,∏.!8.,∏. ∏.,∏.(à0≠»	Ÿõ‹õX]\Ÿ
+‹
+_X
+N¬Çà€€ú›XY\àHXY\ì[ô\Àöõ⁄[äóàäN¬à€€ú›€‹ùYH€‹ù‹ô\í][\—õ‹î⁄\ôJ⁄\ôR][\ N¬à€€ú›ò\ŸS[ô\»H€‹ùYõX\
+
+]
+HOà‹ô\í][T⁄\ôS[ôJ]õ‹õ\ JN¬à€€ú›ÿ\ô\õHÿ\ô\õùö[J
+N¬à€€ú›€‹ö”[ö’H›ö[ô ‹ô\ãõ[ö»œ»àäKùö[J
+N¬à€€ú›[ö–õÿ⁄»Hÿ\ô\õà»∏• 8• 8• 8• 8• 8• 8• 8• º'Â%»8.`8.&¯.-8.%8. x.,∏.(¯.c8.%8.`¯.&x.`x.+x.&◊âÿÿ\ô\õXàà€‹ö”[ö’	âà€‹ö”[ö’OOHà»Çà»∏• 8• 8• 8• 8• 8• 8• 8• º'Â%»8.)x.-8.!¯. x.c8.!¯.,∏.&Wâ›€‹ö”[ö’Xàààé¬Çà][ô\»HÀããòò\ŸS[ô\◊N¬à€€ú›XZŸPõŸHH
+›\éà›ö[ô÷◊JHOà¬àYà
+›\ãõ[ô›OOH
+Hô]\õà∏• 8• 8• 8• 8• 8• 8• 8• º'‰‚»8.(¯.,∏.(∏. x.,∏.(¯.!¯.,∏.&W∏.(∏.,x.!¯.a8.(x.b8.(x.-X¬à€€ú›€Z]YHò\ŸS[ô\Àõ[ô›H›\ãõ[ô›¬àYà
+€Z]Yà
+H¬àô]\õà∏• 8• 8• 8• 8• 8• 8• 8• º'‰‚»8.(¯.,∏.(∏. x.,∏.(¯.!¯.,∏.&H
+	‹€‹ùYõ[ô›JH0≠»8.`x.*∏.%8.!»	ÿ›\ãõ[ô›H8.(¯.,∏.(∏. x.,∏.(◊âÿ›\ãöõ⁄[äóàä_W∏†)à8.`x.)x.,8.+x.-x. H	€€Z]YH8.(¯.,∏.(∏. x.,∏.(»
+8.%8..x.!8.(¯.&∏.`¯.&x.`x.+x.& X¬àBàô]\õà∏• 8• 8• 8• 8• 8• 8• 8• º'‰‚»8.(¯.,∏.(∏. x.,∏.(¯.!¯.,∏.&H
+	‹€‹ùYõ[ô›JWâÿ›\ãöõ⁄[äóàä_X¬àN¬Çà]õŸHHXZŸPõŸJ[ô\ N¬à]\Ÿ»HXY\à
+»õŸH
+»[ö–õÿ⁄Œ¬à⁄[H
+\ŸÀõ[ô›àSëW‘“TëW”PV–“Tî»	âà[ô\Àõ[ô›àJH¬à[ô\»H[ô\Àú€XŸJLJN¬àõŸHHXZŸPõŸJ[ô\ N¬à\Ÿ»HXY\à
+»õŸH
+»[ö–õÿ⁄Œ¬àBàYà
+\ŸÀõ[ô›àSëW‘“TëW”PV–“Tî H¬à\Ÿ»H	€\ŸÀú€XŸJSëW‘“TëW”PV–“Tî»Hç
+Kùö[Q[ô
+
+_W∏†)∏.%x.,x.%8. ∏.bx.+x.!8.)¯.,∏.(X¬àBàô]\õà\ŸŒ¬üBÇôù[ò›[€àõ‹õX[^ôQÿ›[Y[ù[ö ò]Œà›ö[ô Nà›ö[ô»ù[¬à€€ú›^Hò]Àùö[J
+N¬àYà
+]^
+Hô]\õàù[¬à€€ú›\õX]⁄H^õX]⁄
+⁄œŒó◊÷◊ó◊JÀ⁄JN¬àYà
+\õX]⁄ÀñÃJHô]\õà\õX]⁄ÃN¬à€€ú›õ›–Xÿ€›[ùX]⁄H^õX]⁄
+ Œù››◊äO‹⁄\ôWôõ›ÿXÿ€›[ùò€€W÷◊ó◊JÀ⁄JN¬àYà
+õ›–Xÿ€›[ùX]⁄ÀñÃJHô]\õàŒãÀ…Ÿõ›–Xÿ€›[ùX]⁄ÃKúô\XŸJ◊öœŒó◊À⁄Kàä_X¬àô]\õàù[¬üBÇôù[ò›[€à⁄\‹õ›\Ÿ^J⁄\à›ö[ô Nà›ö[ô»¬àô]\õà⁄\ùö[J
+Kù”›Ÿ\êÿ\ŸJ
+N¬üBÇôù[ò›[€àõ€⁄ŸY⁄\ö[\ï⁄Ÿ[ëúõ€RŸ^J⁄\Ÿ^Nà›ö[ô Nà›ö[ô»¬àô]\õà	‘’Qëó—íSTó–ì”“—Q‘“T‘ëQíVI‹⁄\Ÿ^_X¬üBÇôù[ò›[€àõ€⁄ŸY⁄\Ÿ^Qúõ€Qö[\ï⁄Ÿ[äéà›ö[ô Nà›ö[ô»ù[¬àYà
+Yãú›\ù’⁄]
+’Qëó—íSTó–ì”“—Q‘“T‘ëQíV
+JHô]\õàù[¬àô]\õàãú€XŸJ’Qëó—íSTó–ì”“—Q‘“T‘ëQíVõ[ô›
+N¬üBÇôù[ò›[€à\–õ€⁄ŸY⁄\›Yôëö[\äéà›ö[ô Nàõ€€X[à¬àô]\õàãú›\ù’⁄]
+’Qëó—íSTó–ì”“—Q‘“T‘ëQíV
+HàOOH’Qëó—íSTó–ì”“—Q‘“TSëŒ¬üBÇôù[ò›[€àù^Y\ë‹õ›\Ÿ^Jù^Y\éà›ö[ô Nà›ö[ô»¬àô]\õàù^Y\ãùö[J
+Kù”›Ÿ\êÿ\ŸJ
+N¬üBÇôù[ò›[€àõ€⁄ŸYù^Y\ëö[\ï⁄Ÿ[ëúõ€RŸ^Jù^Y\íŸ^Nà›ö[ô Nà›ö[ô»¬àô]\õà	‘’Qëó—íSTó–ì”“—Q–ïVQTó‘ëQíVIÿù^Y\íŸ^_X¬üBÇôù[ò›[€àõ€⁄ŸYù^Y\íŸ^Qúõ€Qö[\ï⁄Ÿ[äéà›ö[ô Nà›ö[ô»ù[¬àYà
+Yãú›\ù’⁄]
+’Qëó—íSTó–ì”“—Q–ïVQTó‘ëQíV
+JHô]\õàù[¬àô]\õàãú€XŸJ’Qëó—íSTó–ì”“—Q–ïVQTó‘ëQíVõ[ô›
+N¬üBÇôù[ò›[€à\–õ€⁄ŸYù^Y\î›Yôëö[\äéà›ö[ô Nàõ€€X[à¬àô]\õàãú›\ù’⁄]
+’Qëó—íSTó–ì”“—Q–ïVQTó‘ëQíV
+N¬üBÇôù[ò›[€à€€⁄\Y[ôQ‹õ›\Ÿ^J[ôNà›ö[ô Nà›ö[ô»¬àô]\õà[ôKùö[J
+Kù”›Ÿ\êÿ\ŸJ
+N¬üBÇôù[ò›[€à€€⁄\Y[ôU⁄Ÿ[ëúõ€RŸ^JŸ^Nà›ö[ô Nà›ö[ô»¬àô]\õà	‘’Qëó—íSTó‘””‘“TQ‘ëQíVI⁄Ÿ^_X¬üBÇôù[ò›[€à€€⁄\Y[ôRŸ^Qúõ€Qö[\ï⁄Ÿ[äéà›ö[ô Nà›ö[ô»ù[¬àYà
+Yãú›\ù’⁄]
+’Qëó—íSTó‘””‘“TQ‘ëQíV
+JHô]\õàù[¬àô]\õàãú€XŸJ’Qëó—íSTó‘””‘“TQ‘ëQíVõ[ô›
+N¬üBÇôù[ò›[€à\‘€€⁄\Y›Yôëö[\äéà›ö[ô Nàõ€€X[à¬àô]\õààOOH’Qëó—íSTó‘””‘“TQ—STHãú›\ù’⁄]
+’Qëó—íSTó‘””‘“TQ‘ëQíV
+N¬üBÇôù[ò›[€à€€[Ÿ[YX\ë‹õ›\Ÿ^J^Nà›ö[ô Nà›ö[ô»¬àô]\õà^Kùö[J
+Kù”›Ÿ\êÿ\ŸJ
+N¬üBÇôù[ò›[€à€€[Ÿ[YX\ï⁄Ÿ[ëúõ€RŸ^JŸ^Nà›ö[ô Nà›ö[ô»¬àô]\õà	‘’Qëó—íSTó‘”””S—S÷QPTó‘ëQíVI⁄Ÿ^_X¬üBÇôù[ò›[€à€€[Ÿ[YX\íŸ^Qúõ€Qö[\ï⁄Ÿ[äéà›ö[ô Nà›ö[ô»ù[¬àYà
+Yãú›\ù’⁄]
+’Qëó—íSTó‘”””S—S÷QPTó‘ëQíV
+JHô]\õàù[¬àô]\õàãú€XŸJ’Qëó—íSTó‘”””S—S÷QPTó‘ëQíVõ[ô›
+N¬üBÇôù[ò›[€à\‘€€[Ÿ[YX\î›Yôëö[\äéà›ö[ô Nàõ€€X[à¬àô]\õààOOH’Qëó—íSTó‘”””S—S÷QPTó—STHãú›\ù’⁄]
+’Qëó—íSTó‘”””S—S÷QPTó‘ëQíV
+N¬üBÇôù[ò›[€à›ö\€€⁄\Y›Yôëö[\ú ô]éàŸ]›ö[ôœäNàŸ]›ö[ôœà¬à€€ú›ô^Hô]»Ÿ]
+ô]äN¬àõ‹à
+€€ú›àŸà\úò^Kôúõ€Jô^
+JH¬àYà
+\‘€€⁄\Y›Yôëö[\ääJHô^ô[]JäN¬àBàô]\õàô^¬üBÇôù[ò›[€à›ö\€€[Ÿ[YX\î›Yôëö[\ú ô]éàŸ]›ö[ôœäNàŸ]›ö[ôœà¬à€€ú›ô^Hô]»Ÿ]
+ô]äN¬àõ‹à
+€€ú›àŸà\úò^Kôúõ€Jô^
+JH¬àYà
+\‘€€[Ÿ[YX\î›Yôëö[\ääJHô^ô[]JäN¬àBàô]\õàô^¬üBÇã äà‘à8.(8.,∏.(∏.`¯.&x.(x.-8.%x.-8.`8.%8.-x.(∏.)»8†%8.*∏.b8.!¯.`x.)x.bx.)»
+»8."∏..8.%8."∏.-8.&»⁄\Y
+ã¬ôù[ò›[€à‹ô\ìX]⁄\‘€€⁄\Y›Yôë[J‹ô\éà‹ô\ã⁄Ÿ[úŒàŸ]›ö[ôœäNàõ€€X[à¬àYà
+‹ô\ãúÿ[T›]\»OOH∏.*∏.b8.!¯.`x.)x.bx.)»äHô]\õàò[ŸN¬àYà
+⁄Ÿ[úÀú⁄^ôHOOH
+Hô]\õàùYN¬à€€ú›ò]»H›ö[ô ‹ô\ãú⁄\Yœ»àäKùö[J
+N¬à€€ú›⁄»H€€⁄\Y[ôQ‹õ›\Ÿ^Jò] N¬à]⁄»Hò[ŸN¬àYà
+⁄Ÿ[úÀö\ ’Qëó—íSTó‘””‘“TQ—STJH	âà\ò] H⁄»HùYN¬àõ‹à
+€€ú›Ÿà\úò^Kôúõ€J⁄Ÿ[ú JH¬à€€ú›»H€€⁄\Y[ôRŸ^Qúõ€Qö[\ï⁄Ÿ[ä
+N¬àYà
+»OOHù[	âàò]»	âà»OOH⁄ H⁄»HùYN¬àBàô]\õà⁄Œ¬üBÇôù[ò›[€à‹ô\ìX]⁄\‘€€[Ÿ[YX\î›Yôë[J‹ô\éà‹ô\ã⁄Ÿ[úŒàŸ]›ö[ôœäNàõ€€X[à¬àYà
+‹ô\ãúÿ[T›]\»OOH∏.*∏.b8.!¯.`x.)x.bx.)»äHô]\õàò[ŸN¬àYà
+⁄Ÿ[úÀú⁄^ôHOOH
+Hô]\õàùYN¬à€€ú›ò]”^HH›ö[ô ‹ô\ãõ[Ÿ[YX\àœ»àäKùö[J
+N¬à€€ú›⁄»H€€[Ÿ[YX\ë‹õ›\Ÿ^Jò]”^JN¬à]⁄»Hò[ŸN¬àYà
+⁄Ÿ[úÀö\ ’Qëó—íSTó‘”””S—S÷QPTó—STJH	âà\ò]”^JH⁄»HùYN¬àõ‹à
+€€ú›Ÿà\úò^Kôúõ€J⁄Ÿ[ú JH¬à€€ú›»H€€[Ÿ[YX\íŸ^Qúõ€Qö[\ï⁄Ÿ[ä
+N¬àYà
+»OOHù[	âàò]”^H	âà»OOH⁄ H⁄»HùYN¬àBàô]\õà⁄Œ¬üBÇôù[ò›[€àòXÿ[ùÿ[S[Ÿ[YX\ï⁄Ÿ[ëúõ€RŸ^JŸ^Nà›ö[ô Nà›ö[ô»¬àô]\õà	‘’Qëó—íSTó’êP–Sï”S—S÷QPTó‘ëQíVI⁄Ÿ^_X¬üBÇôù[ò›[€àòXÿ[ùÿ[S[Ÿ[YX\íŸ^Qúõ€Qö[\ï⁄Ÿ[äéà›ö[ô Nà›ö[ô»ù[¬àYà
+Yãú›\ù’⁄]
+’Qëó—íSTó’êP–Sï”S—S÷QPTó‘ëQíV
+JHô]\õàù[¬àô]\õàãú€XŸJ’Qëó—íSTó’êP–Sï”S—S÷QPTó‘ëQíVõ[ô›
+N¬üBÇôù[ò›[€à\’òXÿ[ùÿ[S[Ÿ[YX\î›Yôëö[\äéà›ö[ô Nàõ€€X[à¬àô]\õààOOH’Qëó—íSTó’êP–Sï”S—S÷QPTó—STHãú›\ù’⁄]
+’Qëó—íSTó’êP–Sï”S—S÷QPTó‘ëQíV
+N¬üBÇôù[ò›[€à›ö\òXÿ[ùÿ[S[Ÿ[YX\î›Yôëö[\ú ô]éàŸ]›ö[ôœäNàŸ]›ö[ôœà¬à€€ú›ô^Hô]»Ÿ]
+ô]äN¬àõ‹à
+€€ú›àŸà\úò^Kôúõ€Jô^
+JH¬àYà
+\’òXÿ[ùÿ[S[Ÿ[YX\î›Yôëö[\ääJHô^ô[]JäN¬àBàô]\õàô^¬üBÇã äà‘à8.(8.,∏.(∏.`¯.&x.(x.-8.%x.-8†%8.*∏.%∏.,∏.&x.,8. ∏.,∏.(à8.)¯.b8.,∏.!»
+»[Ÿ[YX\à
+ã¬ôù[ò›[€à‹ô\ìX]⁄\’òXÿ[ùÿ[S[Ÿ[YX\î›Yôë[J‹ô\éà‹ô\ã⁄Ÿ[úŒàŸ]›ö[ôœäNàõ€€X[à¬àYà
+‹ô\ãúÿ[T›]\»OOH∏.)¯.b8.,∏.!»äHô]\õàò[ŸN¬àYà
+⁄Ÿ[úÀú⁄^ôHOOH
+Hô]\õàùYN¬à€€ú›ò]”^HH›ö[ô ‹ô\ãõ[Ÿ[YX\àœ»àäKùö[J
+N¬à€€ú›⁄»H€€[Ÿ[YX\ë‹õ›\Ÿ^Jò]”^JN¬à]⁄»Hò[ŸN¬àYà
+⁄Ÿ[úÀö\ ’Qëó—íSTó’êP–Sï”S—S÷QPTó—STJH	âà\ò]”^JH⁄»HùYN¬àõ‹à
+€€ú›Ÿà\úò^Kôúõ€J⁄Ÿ[ú JH¬à€€ú›»HòXÿ[ùÿ[S[Ÿ[YX\íŸ^Qúõ€Qö[\ï⁄Ÿ[ä
+N¬àYà
+»OOHù[	âàò]”^H	âà»OOH⁄ H⁄»HùYN¬àBàô]\õà⁄Œ¬üBÇôù[ò›[€à[Ÿ[YX\î€‹ùò[YJò[YNà›ö[ô Nàù[Xô\à¬à€€ú›^Hò[YKùö[J
+N¬àYà
+]^
+Hô]\õà¬à€€ú›MH^õX]⁄
+◊äN_å
+WÃüWã N¬àYà
+M
+Hô]\õàù[Xô\äMÃJN¬à€€ú›LàH^õX]⁄
+◊óÃüWã N¬àYà
+LäH¬à€€ú›^HHù[Xô\äLñÃJN¬àYà
+Sù[Xô\ãö\—ö[ö]J^JJHô]\õà¬àô]\õà^HèH»NL
+»^Hàå
+»^N¬àBàô]\õà¬üBÇôù[ò›[€àõ‹õX[^ôR][T›]\ ò[YNà›ö[ô Nà][T›]\’ò[YH¬à€€ú›^Hò[YKùö[J
+N¬àYà
+]^
+Hô]\õà∏.`8."∏.a¯.!é¬àYà
+^OOHúô\]Y\›YäHô]\õà∏.`8."∏.a¯.!é¬àYà
+^OOHõ‹ô\ôYäHô]\õà∏.*∏.,x.b8.!»é¬àYà
+^OOHúôXYHäHô]\õà∏.(x.-Hé¬àYà
+^OOHúôXŸZ]ôYäHô]\õà∏.(x.,àé¬àYà
+^OOHô\‹⁄]‹›‹ôHà^OOH∏.'x.,∏. x.*∏.`∏.%x.(¯.cà^OOH∏.'x.,∏. x.*∏.`∏.*∏.(¯.cäHô]\õà∏.'x.,∏. x.*∏.`∏.%x.(¯.cé¬àYà
+à^OOHô\‹⁄]⁄[óÿÿ\ààà^OOHö[óÿÿ\ó‹›‹òYŸHàà^OOH∏.'x.,∏. x.(¯.%ààà^OOH∏.'x.,∏. x. x.,x.&∏.(¯.%àÇà
+H¬àô]\õà∏.'x.,∏. x. x.,x.&∏.(¯.%àé¬àBàYà
+^OOHô\‹⁄]à^OOHú›‹ôYà^OOH∏.'x.,∏. HäHô]\õà∏.`8."∏.a¯.!é¬àYà
+^OOHô€ôHà^OOHò€€\]YäHô]\õà∏."8.&àé¬àYà
+USW‘’UT—TÀö[ò€Y\ ^\»][T›]\’ò[YJJHô]\õà^\»][T›]\’ò[YN¬àô]\õà∏.`8."∏.a¯.!é¬üBÇôù[ò›[€àõ‹õX[^ôP\‹⁄Y€ôYJò[YNà›ö[ô»ù[[ôYö[ôY
+Nà›ö[ô»¬àô]\õà›ö[ô ò[YHœ»àäKùö[J
+N¬üBÇôù[ò›[€à\ÿÿ\TôY—^
+Œà›ö[ô Nà›ö[ô»¬àô]\õàÀúô\XŸJ÷Àääœ◊âﬂJ
+_◊WKŸÀó		àäN¬üBÇã äà8.%x.,x.%8."∏.b8.)¯.!¯.%¯.bx.,∏.(à‹X»8.`8.(x.-¯.b8.+x.(x.-x.!8.,»
+8.(∏.,∏.)¯.'∏.+JH8."¯.bx.,¯.`8.&¯.a¯.&x.&∏.)x.a¯.+x. x.%¯.-x.b8.*∏.+x.!»8†%8.`8."∏.b8.&H8†)àì‘ïSëTà8†)àXÃMHì‘ïSëTà8†)àMH
+ã¬ôù[ò›[€àö[Q\Xÿ]UòZ[[ô”[Ÿ[€‹ôù[ä‹XŒà›ö[ô Nà›ö[ô»¬à€€ú›»H‹XÀùö[J
+N¬à€€ú›ôHH◊ä–KVóV–KVòK^åNW^ÕKJWãŸŒ¬à€€ú›[ôXŸ\–ûHHô]»X\›ö[ôÀù[Xô\ñ◊Oä
+N¬à]NàôY—^^X–\úò^Hù[¬à⁄[H
+
+HHôKô^X  JHOOHù[
+H¬à€€ú›€‹ôHVÃWKù’\\êÿ\ŸJ
+N¬à€€ú›\úàH[ôXŸ\–ûKôŸ]
+€‹ô
+Hœ»◊N¬à\úãú\⁄
+Kö[ô^
+N¬à[ôXŸ\–ûKúŸ]
+€‹ô\úäN¬àBà]›]úõ€HHÀõ[ô›¬à[ôXŸ\–ûKôõ‹ëXX⁄
+
+\úäHOà¬àYà
+\úãõ[ô›äHô]\õé¬à€€ú›ö\ú›H\úñÃN¬à€€ú›\››\ùH\úñÿ\úãõ[ô›HWN¬àYà
+\››\ùHö\ú›MäHô]\õé¬à›]úõ€HHX]õZ[ä›]úõ€K\››\ù
+N¬àJN¬àô]\õà›]úõ€HÀõ[ô›»Àú€XŸJ›]úõ€JKùö[Q[ô
+
+HàŒ¬üBÇã äà8.%x.,x.%8.&¯.-x.%¯.bx.,∏.(à‹X»8.%¯.-x.b8."¯.bx.,¯. x.,x.&à[Ÿ[ﬁYX\ãÿ◊ﬁYX\à
+8.`8."∏.b8.&H8†)àU’UàMJH8†%8.a8.(x.b8.`x.%x.,8.!8.,¯.`x.&∏.&àXÃMH8.`8.'∏.(¯.,∏.,8.%x.bx.+x.!¯.(x.-x."∏.b8.+x.!¯.)¯.b8.,∏.!¯.&x.,¯.*¯.&x.bx.,∏.&¯.-H
+ã¬ôù[ò›[€à›ö\òZ[[ô”[Ÿ[YX\ëúõ€T‹X ‹XŒà›ö[ôÀ[Ÿ[YX\îò]Œà›ö[ô Nà›ö[ô»¬à]»H‹XÀùö[J
+N¬à€€ú›ò]»H[Ÿ[YX\îò]Àùö[J
+N¬àYà
+\»\ò] Hô]\õàŒ¬à€€ú›⁄Ÿ[ú»Hô]»Ÿ]›ö[ôœä‹ò]◊JN¬à€€ú›MHò]ÀõX]⁄
+◊äN_å
+JÃüJWã N¬àYà
+M
+H¬à⁄Ÿ[úÀòY
+MÃJN¬à⁄Ÿ[úÀòY
+MÃóJN¬àH[ŸHYà
+◊óÃüIÀù\›
+ò] JH¬à⁄Ÿ[úÀòY
+ò] N¬àBàõ‹à
+€€ú›Ÿà\úò^Kôúõ€J⁄Ÿ[ú Kú€‹ù
+
+KäHOàãõ[ô›HKõ[ô›
+JH¬àYà
+]
+H€€ù[ùYN¬à€€ú›‹XŸYHô]»ôY—^
+…Ÿ\ÿÿ\TôY—^
+
+_IöHäN¬àYà
+‹XŸYù\›
+ JH¬à»HÀúô\XŸJ‹XŸYàäKùö[Q[ô
+
+N¬àúôXZŒ¬àBàBàô]\õàŒ¬üBÇôù[ò›[€à\úŸU\]SY\‹ÿYŸJY\‹ÿYŸNà›ö[ô»ù[[ôYö[ôY
+Nà¬àX›[€ï\Nà›ö[ôŒ¬à€ò[YNà›ö[ôŒ¬àô]’ò[YNà›ö[ôŒ¬àõ›Nà›ö[ôŒ¬à\]YûNà›ö[ôŒ¬üH¬à€€ú›^H›ö[ô Y\‹ÿYŸHœ»àäKùö[J
+N¬à€€ú›X›[€ìX]⁄H^õX]⁄
+◊ó ◊óWJ WK N¬à€€ú›X›[€ï\HHX›[€ìX]⁄ÀñÃWHœ»ù[ö€õ›€àé¬à€€ú›€X]⁄H^õX]⁄
+ Œóü Wõ€Jäè JŒó◊ Œõô]œ_õ›O_ûOJ_	
+K N¬à€€ú›ô]”X]⁄H^õX]⁄
+ Œóü Wõô]œJäè JŒó◊ Œõõ›O_ûOJ_	
+K N¬à€€ú›õ›SX]⁄H^õX]⁄
+ Œóü Wõõ›OJäè JŒó◊ ŒòûOJ_	
+K N¬à€€ú›ûSX]⁄H^õX]⁄
+ Œóü WòûOJääI N¬àô]\õà¬àX›[€ï\Kà€ò[YNà
+€X]⁄ÀñÃWHœ»ãHäKùö[J
+Kàô]’ò[YNà
+ô]”X]⁄ÀñÃWHœ»ãHäKùö[J
+Kàõ›Nà
+õ›SX]⁄ÀñÃWHœ»àäKùö[J
+Kà\]YûNà
+ûSX]⁄ÀñÃWHœ»àäKùö[J
+KàN¬üBÇôù[ò›[€à”‹ô\ëúõ€Pÿ\äàÿ\éàÿ\ãà[ô^àù[Xô\ãà‹ô\í][\–ûPÿ\éàõ€ìù[XõO[ÿö[S‹ô\ïòX⁄⁄[ô“€YTõ‹÷»õ‹ô\í][\–ûPÿ\àóOãà‹ô\ï\]\–ûPÿ\éàõ€ìù[XõO[ÿö[S‹ô\ïòX⁄⁄[ô“€YTõ‹÷»õ‹ô\ï\]\–ûPÿ\àóOÇäNà‹ô\à¬à€€ú›õ›»Hÿ\à\»ÿ\à	à¬à›[ÿ€‹›Œà›ö[ô»ù[Xô\àù[¬àÿ[W‹öXŸW›\ŸŒà›ö[ô»ù[Xô\àù[¬àô\Z\óÿ€‹›Œà›ö[ô»ù[Xô\àù[¬à\ùÿXÿŸ\‹€‹öY\œŒà›ö[ô»ù[Xô\àù[¬àô\Z\óŸ]Z[œŒà›ö[ô»ù[Xô\àù[¬àÿ◊ŸôYOŒà›ö[ô»ù[Xô\àù[¬àN¬à€€ú›ÿ[HH
+ÿ\ãúÿ[W‹›\‹ùœ»àäKùö[J
+HêSé¬à€€ú›⁄\YH
+ÿ\ãú⁄\Yœ»àäKùö[J
+N¬à äàXY\àòYŸH»⁄\[ôNà[ÿ⁄›\8°§àÿ\úÀòõ€⁄ŸY‹⁄\[ôÿ€õH
+õ›⁄\Y
+H
+ã¬à€€ú›õ€⁄ŸY⁄\[ô»H
+ÿ\ãòõ€⁄ŸY‹⁄\[ô»œ»àäKùö[J
+N¬à€€ú›ù^Y\àH
+ÿ\ãòù^Y\àœ»àäKùö[J
+HãHé¬à€€ú››[€‹›ò]»H›ö[ô õ›Àù›[ÿ€‹›œ»àäKùö[J
+N¬à€€ú›ù^TöXŸTò]»H›ö[ô ÿ\ãòù^W‹öXŸHœ»àäKùö[J
+Håé¬à€€ú›^[úŸTò]»H›ö[ô õ›Àúô\Z\óÿ€‹›œ»àäKùö[J
+Håé¬à€€ú›ô\Z\ë]Z[‘ò]»H›ö[ô õ›Àúô\Z\óŸ]Z[»œ»àäKùö[J
+N¬à€€ú›\ùXÿŸ\‹€‹öY\‘ò]»H›ö[ô õ›Àú\ùÿXÿŸ\‹€‹öY\»œ»àäKùö[J
+N¬à€€ú›\ùXÿŸ\‹€‹öY\”[ö»Hõ‹õX[^ôQÿ›[Y[ù[ö \ùXÿŸ\‹€‹öY\‘ò] N¬à€€ú›ÿ—ôYTò]»H›ö[ô õ›Àôÿ◊ŸôYHœ»àäKùö[J
+N¬à€€ú›ÿ›[Y[ù]Z[H‘›ö[ô ÿ\ãôÿ›[Y[ù‹›]\»œ»àäKùö[J
+K›ö[ô ÿ\ãö[ö]X[Ÿÿ›[Y[ùœ»àäKùö[J
+Kÿ—ôYTò]◊Bàôö[\äõ€€X[äBàöõ⁄[äà0≠»äN¬à€€ú›€‹›[ôHBà›[€‹›ò]»	ÿù^TöXŸTò]ﬂJ›[€‹›
+HH	ÿù^TöXŸTò]ﬂJÿ\àöXŸJH
+»	Ÿ^[úŸTò]ﬂJ^[úŸJX¬à äàö[X\ûH€‹›^õ‹àÿ\ôàò]»›[ÿ€‹›»ù^W‹öXŸH[ôH
+à€›\òŸHŸàù]€àÿ\úÿ
+H
+ã¬à€€ú›€‹›]Z[ô\€€ôYH›[€‹›ò]»€‹›[ôN¬à€€ú›\‘⁄\YHõ€€X[ä⁄\Y
+N¬à€€ú›\–õ€⁄ŸY⁄\[ô»Hõ€€X[äõ€⁄ŸY⁄\[ô N¬à€€ú›\–ù^Y\àHõ€€X[ä
+ÿ\ãòù^Y\àœ»àäKùö[J
+JN¬àÀ»‹ô\àòX⁄⁄[ô»›]\»ù[\ŒÇàÀ»8.*∏.b8.!¯.`x.)x.bx.)»H⁄\Y8.(x.-x. ∏.bx.+x.(x..x.)BàÀ»8.(¯.+x.*∏.b8.!»Hõ€⁄ŸY‹⁄\[ô»8.(x.-x. ∏.bx.+x.(x..x.)BàÀ»8."8.+x.!»Hù^Y\à8.(x.-x. ∏.bx.+x.(x..x.)H8.`x.%x.b⁄\Yÿõ€⁄ŸY‹⁄\[ô»8.)¯.b8.,∏.!¬àÀ»8.)¯.b8.,∏.!»H8.a8.(x.b8.(x.-x. ∏.bx.+x.(x..x.)x.%¯.,x.bx.!»ù^Y\ã‹⁄\Yÿõ€⁄ŸY‹⁄\[ô¬à€€ú›ÿ[T›]\Œàÿ[T›]\’ò[YHH\‘⁄\Yà»∏.*∏.b8.!¯.`x.)x.bx.)»Çàà\–õ€⁄ŸY⁄\[ô¬à»∏.(¯.+x.*∏.b8.!»Çàà\–ù^Y\Çà»∏."8.+x.!»Çàà∏.)¯.b8.,∏.!»é¬à€€ú›õ›“YH›ö[ô ÿ\ãúõ›◊⁄Yœ»àäKùö[J
+N¬à€€ú›⁄\‹⁄\—ò[òX⁄»H›ö[ô ÿ\ãò⁄\‹⁄\◊€ù[Xô\àœ»àäKùö[J
+N¬à€€ú›][RŸ^PûTõ›“YHõ›Œâ‹õ›“YX¬à€€ú›][RŸ^PûPÿ\íYHYâ‘›ö[ô ÿ\ãöYœ»àäKùö[J
+_X¬à€€ú›€›\òŸR][\»HÀããä‹ô\í][\–ûPÿ\ñ⁄][RŸ^PûTõ›“YHœ»◊JKããä‹ô\í][\–ûPÿ\ñ⁄][RŸ^PûPÿ\íYHœ»◊JWN¬à€€ú›€›\òŸU\]\»HÀããä‹ô\ï\]\–ûPÿ\ñ⁄][RŸ^PûTõ›“YHœ»◊JKããä‹ô\ï\]\–ûPÿ\ñ⁄][RŸ^PûPÿ\íYHœ»◊JWN¬à€€ú›ŸY[àHô]»Ÿ]›ö[ôœä
+N¬à€€ú›][\Œà‹ô\í][V◊HH◊N¬àõ‹à
+€€ú›][HŸà€›\òŸR][\ H¬à€€ú››]\»Hõ‹õX[^ôR][T›]\ ][Kú›]\ N¬à€€ú›\‹⁄Y€ôYHHõ‹õX[^ôP\‹⁄Y€ôYJ][Kò\‹⁄Y€ôYW‹›YôäN¬à€€ú›íYH›ö[ô 
+][H\»»YŒà[ö€õ›€àJKöYœ»àäKùö[J
+N¬à äà8.+x.(∏.b8.,∏.%x.,x.%8.*¯.(x.,∏.(∏.`8.*¯.%x..¯.`x.%∏.)¯.%x.b8.,∏.!¯. ∏.bx.,∏.(x.`8.(x.-¯.b8.+x.(x.-x.*¯.)x.,∏.(à‹ô\ó⁄][\»8.`8.*¯.(x.-¯.+x.&x."∏.-¯.b8.+H
+8.!8.-x.(∏.c8.`8.%8.-8.(x.%¯.,¯.`¯.*¯.bx.`8.*¯.)x.-¯.+x.`x.%∏.)¯.`8.%8.-x.(∏.) H
+ã¬à€€ú›Ÿ^HHíY»YâŸíYXà	⁄][KõXô[W◊…‹›]\ﬂW◊…ÿ\‹⁄Y€ôY_W◊…⁄][Kõ›]⁄YW‹›\Y\àœ»àüW◊…⁄][Kõ›]⁄YWŸ]WŸ]Hœ»àüX¬àYà
+ŸY[ãö\ Ÿ^JJH€€ù[ùYN¬àŸY[ãòY
+Ÿ^JN¬à][\Àú\⁄
+¬àYà›ö[ô 
+][H\»»YŒà[ö€õ›€àJKöYœ»àäKùö[J
+Hù[à‹ô\ï\⁄“Yà›ö[ô 
+][H\»»‹ô\ó›\⁄◊⁄YŒà[ö€õ›€àJKõ‹ô\ó›\⁄◊⁄Yœ»àäKùö[J
+Hù[àò[YNà][KõXô[àò[YQ[éà›ö[ô 
+][H\»»Xô[Ÿ[èŒà[ö€õ›€àJKõXô[Ÿ[àœ»àäKùö[J
+H[ôYö[ôYà›]\Àà\‹⁄Y€ôYKà äàô]⁄‹ô\í][\–ûPÿ\ú»8.(¯.)¯.(HYWŸ]H
+»›]⁄YWŸ]WŸ]Kõ›H
+»›]⁄YW€õ›H8.`x.)x.bx.)»
+ã¬àYQ]Nà][KôYWŸ]OÀùö[J
+H»][KôYWŸ]Kùö[J
+Kú€XŸJL
+Hà[ôYö[ôYà€ÿ⁄‘›\ù[Yà
+
+
+HOà¬à€€ú›ò]»H›ö[ô 
+][H\»»€ÿ⁄◊‹›\ùﬁ[YŒà[ö€õ›€àJKò€ÿ⁄◊‹›\ùﬁ[Yœ»àäKùö[J
+Kú€XŸJL
+N¬àô]\õà◊óÕKWÃüKWÃüIÀù\›
+ò] H»ò]»à[ôYö[ôY¬àJJ
+Kà›]\–⁄[ôŸY][Yà›]\–⁄[ôŸY][Yúõ€Qí\€ ›ö[ô 
+][H\»»›]\◊ÿ⁄[ôŸYÿ]Œà[ö€õ›€àJKú›]\◊ÿ⁄[ôŸYÿ]œ»àäKùö[J
+JKàõ›Nà][Kõõ›OÀùö[J
+H[ôYö[ôYàõ›Q[éà›ö[ô 
+][H\»»õ›WŸ[èŒà[ö€õ›€àJKõõ›WŸ[àœ»àäKùö[J
+H[ôYö[ôYà€€Ÿà”ëW‘—Uö\ ›]\ Kà›\Y\éà][Kõ›]⁄YW‹›\Y\àœ»[ôYö[ôYà]Nà][Kõ›]⁄YWŸ]WŸ]Hœ»[ôYö[ôYàöXŸNà][Kõ›]⁄YW‹öXŸHOHù[»[ôYö[ôYà›ö[ô ][Kõ›]⁄YW‹öXŸJKàJN¬àBÇà€€ú›\]\—Y\Hô]»Ÿ]›ö[ôœä
+N¬à€€ú›\]\»H€›\òŸU\]\¬àõX\
+
+õ›’\]JHOà¬à€€ú›\úŸYH\úŸU\]SY\‹ÿYŸJ›ö[ô õ›’\]KõY\‹ÿYŸHœ»àäJN¬àô]\õà¬àYà›ö[ô õ›’\]KöYœ»àäKùö[J
+Hù[àX›[€ï\Nà\úŸYòX›[€ï\Kà€ò[YNà\úŸYõ€ò[YKàô]’ò[YNà\úŸYõô]’ò[YKàõ›Nà\úŸYõõ›Kà\]YûNà\úŸYù\]YûH›ö[ô õ›’\]Kúõ€Hœ»àäKùö[J
+HãHãà‹ôX]Y]à›ö[ô õ›’\]Kò‹ôX]Yÿ]œ»àäKùö[J
+HãHãàN¬àJBàôö[\ä
+JHOà¬à€€ú›Ÿ^HH	›KöYœ»àü_	›KòX›[€ï\__	›Kò‹ôX]Y]_	›Kõ€ò[Y__	›Kõô]’ò[Y_X¬àYà
+\]\—Y\ö\ Ÿ^JJHô]\õàò[ŸN¬à\]\—Y\òY
+Ÿ^JN¬àô]\õàùYN¬àJBàú€‹ù
+
+KäHOà
+Kò‹ôX]Y]ãò‹ôX]Y]»HàLJJN¬Çà€€ú›[Ÿ[YX\àH›ö[ô ÿ\ãõ[Ÿ[ﬁYX\àœ»ÿ\ãò◊ﬁYX\àœ»àäKùö[J
+N¬à€€ú›‹X‘ò]»H
+ÿ\ãú‹X»œ»àäKùö[J
+H	ÿÿ\ãòúò[ôœ»àüH	ÿÿ\ãõ[Ÿ[œ»àüXùö[J
+Hï[ö€õ›€à‹X»é¬à€€ú›ÿ\íXY[ô»H›ö\òZ[[ô”[Ÿ[YX\ëúõ€T‹X ö[Q\Xÿ]UòZ[[ô”[Ÿ[€‹ôù[ä‹X‘ò] K[Ÿ[YX\äN¬Çàô]\õà¬àYà’I‹õ›“Yÿ\ãöY⁄\‹⁄\—ò[òX⁄»[ô^
+»_Xàÿ\îõ›“Yàõ›“Yù[àÿ\íYàù[Xô\ãö\—ö[ö]Jù[Xô\äÿ\ãöY
+JH»ù[Xô\äÿ\ãöY
+Hàù[àÿ[Nàÿ[H\»ÿ[Uò[YKà[Ÿ[YX\ãàÿ[T›]\Àà⁄\Yà⁄\Yàãà⁄\àõ€⁄ŸY⁄\[ô»∏.)¯.b8.,∏.!»ãà[öŒàà»ãàù[]Nà›ö[ô ÿ\ãú]W€ù[Xô\àœ»àäKùö[J
+HãHãà]Nà›ö[ô ÿ\ãú]W€ù[Xô\àœ»àäKúô\XŸJ◊ŸÀàäKàÿ\éàÿ\íXY[ôÀà⁄\‹⁄\Œà›ö[ô ÿ\ãò⁄\‹⁄\◊€ù[Xô\àœ»àäKùö[J
+HãHãàù^Y\ãàÿ[TöXŸNà›ö[ô õ›Àúÿ[W‹öXŸW›\Ÿœ»ãHäKà€‹›àö\ú›ù[Xô\ä›[€‹›ò] Kà€‹›úôXZŸ›€éà€‹›[ôKà€‹›]Z[à€‹›]Z[ô\€€ôYà^[úŸNà^[úŸTò]Ààÿ›[Y[ù]Z[àô\Z\ë]Z[Œàô\Z\ë]Z[‘ò]Ààô\Z\ë]Z[àô\Z\ë]Z[‘ò]Àà\ùXÿŸ\‹€‹öY\‘ò]Àà›Œà›ö[ô ÿ\ãúX›\ôHœ»àäKùö[J
+Hà»ãà^[úŸTéà\ùXÿŸ\‹€‹öY\”[öÀà\]\Àà][\ÀàN¬üBÇù\H‹ô\í][Tõ›»H‹ô\í][H	à»ZYà›ö[ô»N¬Çã äà8.&∏.(¯.(¯.%¯.,x.%8.*¯.,x.)¯. ∏.bx.+x.(∏.b8.+x.(∏.`¯.&x.`x.'8.!¯.(¯..x.&¯.%x.,∏.(x.(¯.,∏.(∏. x.,∏.(»8†%8.`∏.*¯.(x.%Sà8.`¯."∏.bHò[YWŸ[à8.%∏.bx.,∏.(x.-H
+ã¬ôù[ò›[€àõ‹õX][Tõ€‹⁄Y]][T›Xù]J][Nà‹ô\í][Tõ›»ù[[ôYö[ôYZS[ôŒàZS[ô Nà›ö[ô»¬àYà
+Z][JHô]\õà∏†%é¬à€€ú›H›ö[ô ][Kõò[YHœ»àäKùö[J
+N¬àYà
+ZS[ô»OOHô[àäH¬à€€ú›[àH›ö\[ô€\⁄›‘ôYìX\öŸ\ú ›ö[ô ][Kõò[YQ[àœ»àäKùö[J
+JKùö[J
+N¬àô]\õà[à∏†%é¬àBàô]\õà∏†%é¬üBÇã äà8."¯.-8.!¯. x.c8. ∏.-∏.bx.&x.`x.(x.b8.`8.'∏.-¯.b8.+x.&x.,x.&∏."∏.-8.&¯.'∏.&x.,x. x.!¯.,∏.&H»8.*∏.%∏.,∏.&x.,8.(¯.,∏.(∏. x.,∏.(»8†%8.a8.(x.b8.(¯.)¯.(HZY
+ã¬ôù[ò›[€à‹ô\í][Tõ›‹’”]ôS‹ô\í][\ õ›‹Œà‹ô\í][Tõ›÷◊JNà‹ô\í][V◊H¬àô]\õàõ›‹ÀõX\
+
+õ› HOà
+¬àYàõ›ÀöYà‹ô\ï\⁄“Yàõ›Àõ‹ô\ï\⁄“Yàò[YNàõ›Àõò[YKàò[YQ[éàõ›Àõò[YQ[ãà›]\Œàõ›Àú›]\Àà\‹⁄Y€ôYNàõ›Àò\‹⁄Y€ôYKàYQ]Nàõ›ÀôYQ]Kà€ÿ⁄‘›\ù[Yàõ›Àò€ÿ⁄‘›\ù[Yà›]\–⁄[ôŸY][Yàõ›Àú›]\–⁄[ôŸY][Yàõ›Nàõ›Àõõ›Kàõ›Q[éàõ›Àõõ›Q[ãà€€Ÿàõ›Àô€€Ÿà›\Y\éàõ›Àú›\Y\ãà]Nàõ›Àô]KàöXŸNàõ›ÀúöXŸKà›ô\ôYNàõ›Àõ›ô\ôYKàJJN¬üBÇã äà8.*∏.(¯..8.&¯.`8."x.'∏.,∏.,8.'¯.-8.)x.%8.c8.%¯.-x.b8.(x.-x.'8.)x.%x.b8.+x."∏.-8.&¯.`x.%∏.&∏.`8.!8.(¯.-¯.b8.+x.!¯.(x.-¯.+H8†%8.)x.%Ÿ]›]H8."¯.bx.,»
+ã¬ôù[ò›[€à‹ô\í][\”]ôU€€ò\î⁄Y€ò]\ôJ][\Œà‹ô\í][V◊JNà›ö[ô»¬àô]\õà	⁄][\Àõ[ô›WY	⁄][\¬àõX\
+
+JHOÇà¬à›ö[ô KöYœ»àäKàKú›]\Àà›ö[ô Kò\‹⁄Y€ôYHœ»àäKùö[J
+Kà›ö[ô KôYQ]Hœ»àäKú€XŸJL
+KàKô€€Ÿ»åHààåãà›ö[ô Kò€ÿ⁄‘›\ù[Yœ»àäKú€XŸJL
+Kà›ö[ô Kú›]\–⁄[ôŸY][Yœ»àäKú€XŸJL
+Kà›ö[ô Kõò[YHœ»àäKùö[J
+KàKöõ⁄[äóYàäBà
+Bàöõ⁄[äóYHä_X¬üBÇã äà8.'¯.-8.)x.%8.c8.%¯.-x.b8.*∏.b8.!»ÿ\K€K€‹ô\ãZ][\À›\]X8†%8.`¯."∏.bx.%x.,x.%8.*∏.-8.&x.`¯."8.)¯.b8.,∏.%x.bx.+x.!¯.(∏.-8.!»TH8.*¯.(¯.-¯.+x.a8.(x.b
+ã¬ôù[ò›[€à‹ô\í][T\ú⁄\›⁄Y€ò]\ôJõ›ŒàX⁄œ‹ô\í][Tõ›Àõò[YHàú›]\»àò\‹⁄Y€ôYHàôYQ]Hàõõ›HèäNà›ö[ô»¬àô]\õàî””ãú›ö[ô⁄YûJ¬àò[YNà›ö[ô õ›Àõò[YHœ»àäKùö[J
+Kà›]\Œàõ›Àú›]\Àà\‹⁄Y€ôYNà›ö[ô õ›Àò\‹⁄Y€ôYHœ»àäKùö[J
+KàYNà›ö[ô õ›ÀôYQ]Hœ»àäKùö[J
+Kú€XŸJL
+Kàõ›Nà›ö[ô õ›Àõõ›Hœ»àäKùö[J
+KàJN¬üBÇã äà8.*¯.)x.,x.!¯.&∏.,x.&x.%¯.-∏. H[ùZŸH8.*∏.,¯.`8.(¯.a¯."8†%8.`x.%¯.(¯. x.`x.%∏.)¯.`8. ∏.bx.,à›]H8.`¯.&x. x.,∏.(¯.c8.%8.%¯.,x.&x.%¯.-H
+8.a8.(x.b8.%x.bx.+x.!¯.(¯.+HôYúô\⁄
+H
+ã¬ôù[ò›[€àY\ôŸR[õ[ôP€X[ôY[ù“][Tõ›‹ à^\›[ôŒà‹ô\í][Tõ›÷◊Kà€X[ôYàX⁄œ[õ[ôQòYùõ›ÀöYàõò[YHàú›]\»àò\‹⁄Y€ôYHàö[úŸ\ùYù\ïZYèñ◊Kà‹ô\ï\⁄“Yúõ€P\Nà›ö[ô»ù[àÿ]ôYŒà\úò^O»‹ô\ó⁄][W⁄Yà›ö[ôŒ»Xô[à›ö[ôŒ»Xô[Ÿ[éà›ö[ô»ù[Oàù[äNà‹ô\í][Tõ›÷◊H¬à€€ú›\⁄‘ô\€€ôYBà›ö[ô ‹ô\ï\⁄“Yúõ€P\Hœ»àäKùö[J
+Hà^\›[ôÀõX\
+
+äHOà›ö[ô ãõ‹ô\ï\⁄“Yœ»àäKùö[J
+JKôö[ô
+õ€€X[äHàù[¬à€€ú›ô^HÀããô^\›[ô◊N¬àõ‹à
+]HH»H€X[ôYõ[ô›»J  H¬à€€ú›òYùH€X[ôY⁄WN¬à€€ú›ò[YHHòYùõò[YKùö[J
+N¬à€€ú›\‹⁄Y€ôYHH›ö[ô òYùò\‹⁄Y€ôYHœ»àäKùö[J
+N¬à€€ú››]\»HòYùú›]\Œ¬à€€ú›X⁄»Hÿ]ôYÀñ⁄WN¬à€€ú›Yúõ€P\HHX⁄œÀõ‹ô\ó⁄][W⁄Y»›ö[ô X⁄Àõ‹ô\ó⁄][W⁄Y
+Kùö[J
+Hààé¬à€€ú›ò[YQ[ëúõ€P\HH›ö[ô X⁄œÀõXô[Ÿ[àœ»àäKùö[J
+N¬à€€ú›õ›Œà‹ô\í][Tõ›»H¬àYàYúõ€P\Hù[à‹ô\ï\⁄“Yà\⁄‘ô\€€ôYàò[YKà›]\Àà\‹⁄Y€ôYKà€€Ÿà”ëW‘—Uö\ ›]\ KàZYà[ùZŸKIŸòYùöYXàããäò[YQ[ëúõ€P\H»»ò[YQ[éàò[YQ[ëúõ€P\HHàﬂJKàN¬àYà
+òYùö[úŸ\ùYù\ïZYOOHSìSëW“Sî—Tï–QïTó—Së
+H¬àô^ú\⁄
+õ› N¬à€€ù[ùYN¬àBà€€ú›YHô^ôö[ô[ô^
+
+äHOàãùZYOOHòYùö[úŸ\ùYù\ïZY
+N¬àYà
+YèH
+Hô^ú‹XŸJY
+»Kõ› N¬à[ŸHô^ú\⁄
+õ› N¬àBàô]\õàô^¬üBÇã äàSà8.%¯.-x.b8.`8. x.a¯.&à÷‹ôYóWx†)ñ÷À‹ôYóWH
+»8.!8.,¯.)¯.b8.,àŸYH›»»8.%x.,∏.(x.(¯..x.&»8†%8.)x.-8.!¯. x.c8.a8.&¯.`x.'8.!¯.(¯..x.&¯.(¯.,∏.(∏. x.,∏.(»
+ã¬ôù[ò›[€à‹ô\í][Q[ô€\⁄⁄]›‘ôYú ¬à^à][Kà€ï[Tõ€‹€X⁄Àà[ö–€\‹Ààõ›‘ÿ‹õ€€\‹Àà\öXSXô[üNà¬à^à›ö[ôŒ¬à][Nà‹ô\í][Tõ›Œ¬à€ï[Tõ€‹€X⁄Œà
+õ›Œà‹ô\í][Tõ› HOàõ⁄Y¬à[ö–€\‹Œà›ö[ôŒ¬àõ›‘ÿ‹õ€€\‹œŒà›ö[ôŒ¬à\öXSXô[Œà›ö[ôŒ¬üJH¬à€€ú›‹ò\ÿ‹õ€H
+[õô\éàôXX›îôXX›õŸJHOÇàõ›‘ÿ‹õ€€\‹»»
+à]à€\‹”ò[YO^‹õ›‘ÿ‹õ€€\‹ﬂHõ€OHô‹õ›\à\öXK[Xô[^ÿ\öXSXô[OÇà⁄[õô\üBàŸ]èÇà
+Hà
+àû⁄[õô\üOœÇà
+N¬Çà€€ú››–ùàH
+Ÿ^Nà›ö[ôÀXô[à›ö[ôÀùê€\‹»H[ö–€\‹ HOà
+àù]€ÇàŸ^O^⁄Ÿ^_Bà\OHòù]€àÇà]K][K\õ€‹[[öœHàÇà€î⁄[ù\ë›€è^ JHOàKú›‹õ‹Yÿ][€ä
+_Bà€ê€X⁄œ^ JHOà¬àKú›‹õ‹Yÿ][€ä
+N¬à€ï[Tõ€‹€X⁄ ][JN¬à_Bà€\‹”ò[YO^ÿùê€\‹ﬂBà]OHï\ÿY›öY]»›‹»õ‹à\»][HÇàÇà€Xô[Bàÿù]€èÇà
+N¬Çà€€ú›X\öŸ\îŸY‹»H\úŸQ[ô€\⁄›‘ôYìX\öŸ\ú ^
+N¬à€€ú›\”X\öŸ\ú»HX\öŸ\îŸY‹Àú€€YJ
+ HOàÀö⁄[ôOOHú›»äN¬Çà€€ú›YÿXﬁT‹]H
+⁄[öŒà›ö[ôÀŸ^TôYö^à›ö[ô HOà¬à€€ú›\ù»H⁄[öÀú‹]
+‘ëTó“USW’SW‘ì”‘’“—Só‘ëQ—V
+N¬àYà
+\ùÀõ[ô›OOHJH¬àô]\õà‹[à€\‹”ò[YOHù⁄]\‹XŸK\ôK]‹ò\úôXZÀ]€‹ô»èûÿ⁄[öﬂO‹‹[èé¬àBàô]\õà\ùÀõX\
+
+\ùJHOà
+àúòY€Y[ùŸ^O^ÿ	⁄Ÿ^TôYö^KI⁄_XOÇà⁄H	HàOOH»
+à‹[à€\‹”ò[YOHù⁄]\‹XŸK\ôK]‹ò\úôXZÀ]€‹ô»èû‹\ùO‹‹[èÇà
+Hà
+à›–ùä	⁄Ÿ^TôYö^K[YÀI⁄_X‘ëTó“USW‘ëQó‘P◊—SäBà
+_Bà—úòY€Y[ùÇà
+JN¬àN¬ÇàYà
+\”X\öŸ\ú H¬àô]\õà‹ò\ÿ‹õ€
+àÇà€X\öŸ\îŸY‹ÀõX\
+
+ŸYÀJHOÇàŸYÀö⁄[ôOOHú›»à»
+à›–ùäZÀI⁄_XŸYÀõXô[
+Bà
+Hà
+àúòY€Y[ùŸ^O^ÿI⁄_XOû€YÿXﬁT‹]
+ŸYÀù^I⁄_X
+_O—úòY€Y[ùÇà
+Bà
+_BàœÇà
+N¬àBÇà€€ú›[î\ù»H^ú‹]
+‘ëTó“USW’SW‘ì”‘’“—Só‘ëQ—V
+N¬à€€ú›\‘›’⁄Ÿ[í[ïò[ú€][€àH[î\ùÀõ[ô›àN¬ÇàYà
+\‘›’⁄Ÿ[í[ïò[ú€][€äH¬àô]\õà‹ò\ÿ‹õ€
+àÇàŸ[î\ùÀõX\
+
+\ùJHOà
+àúòY€Y[ùŸ^O^ÿ[ãI⁄_XOÇà⁄H	HàOOH»
+à‹[à€\‹”ò[YOHù⁄]\‹XŸK\ôK]‹ò\úôXZÀ]€‹ô»èû‹\ùO‹‹[èÇà
+Hà
+à›–ùä‹]I⁄_X‘ëTó“USW‘ëQó‘P◊—SäBà
+_Bà—úòY€Y[ùÇà
+J_BàœÇà
+N¬àBÇà äà8."∏.-¯.b8.+K€õ›H8.`x.&¯.)x.`x.)x.bx.)»8†%8.(x.-x.)x.-8.!¯. x.c8.(¯..x.&¯.`8."x.'∏.,∏.,8.`8.(x.-¯.b8.+x. ∏.bx.+x.!8.)¯.,∏.(x.(x.-HôYà»8.!8.,¯.)¯.b8.,à8.%x.,∏.(x.(¯..x.&¯‡Ó¯.%x.,∏.(x.(8.,∏.'∏‡Ó‹ŸYH›»8†)à
+8.a8.(x.b8.`x.&¯.,ŸYH›»8.%¯.bx.,∏.(∏.`8.(x.-¯.b8.+x.a8.(x.b8.`8. x.-x.b8.(∏.) H
+ã¬àô]\õà‹ò\ÿ‹õ€
+‹[à€\‹”ò[YOHù⁄]\‹XŸK\ôK]‹ò\úôXZÀ]€‹ô»èû›^O‹‹[èäN¬üBÇôù[ò›[€à‹ô\í][Sò[YQöY[⁄][Tõ€‹
+¬à][Kà⁄›”õ›Tõ›ÀàZS[ôÀà]⁄][Kàõ\⁄[ô[ô”ò[YT\ú⁄\›à€ï[Tõ€‹€X⁄Àà€êYù\ìò[YPõ\ãüNà¬à][Nà‹ô\í][Tõ›Œ¬à⁄›”õ›Tõ›Œàõ€€X[é¬àZS[ôŒàZS[ôŒ¬à]⁄][Nà
+\ôŸ]à‹ô\í][Tõ›À]⁄à\ùX[‹ô\í][OäHOàõ⁄Y¬àõ\⁄[ô[ô”ò[YT\ú⁄\›à
+ZYà›ö[ô HOàõ⁄Yõ€Z\ŸOõ⁄Yé¬à€ï[Tõ€‹€X⁄Œà
+õ›Œà‹ô\í][Tõ› HOàõ⁄Y¬à äà8.*¯.)x.,x.!»õ\à8."∏.-¯.b8.+H8†%8.a8.%8.bx. ∏.bx.+x.!8.)¯.,∏.(x.)x.b8.,∏.*∏..8.%8."8.,∏. x."∏.b8.+x.!»
+8.*∏.,¯.*¯.(¯.,x.&∏.&¯.-8.%8.`x.'8.!¯.(¯..x.&¯.`8.(x.-¯.b8.+x.a8.(x.b8.(x.-H8‡#8.%x.,∏.(x.(¯..x.&¯‡#JH
+ã¬à€êYù\ìò[YPõ\èŒà
+ZYà›ö[ôÀô^ò[YNà›ö[ô HOàõ⁄Y¬üJH¬à€€ú›ò[YHH][Kõò[YHœ»àé¬à€€ú›ò[YQ[àH›ö[ô ][Kõò[YQ[àœ»àäKùö[J
+N¬à€€ú›ŸY][ôÀŸ]Y][ô◊HH\ŸT›]Jò[ŸJN¬à€€ú›[ú]ôYàH\ŸTôYèS[ú][[Y[ùù[äù[
+N¬à€€ú›\’[Tõ€‹⁄Ÿ[àH‹ô\í][SXô[€€ùZ[ú’[Tõ€‹
+ò[YJN¬Çà\ŸS^[›]YôôX›
+
+
+HOà¬àYà
+YY][ô Hô]\õé¬à€€ú›[H[ú]ôYãò›\úô[ù¬àYà
+Y[
+Hô]\õé¬à[ôõÿ›\ 
+N¬à€€ú›[àH[ùò[YKõ[ô›¬àûH¬à[úŸ]Ÿ[X›[€îò[ôŸJ[ã[äN¬àHÿ]⁄¬à àY€õ‹ôH
+ã¬àBàKŸY][ô◊JN¬Çà€€ú›⁄[ô€R[ú]€\‹»H€äàõZ[ã]ÀLõ›[ôY^ôÀ]ò[ú‹\ô[ùLKçHKLKçH^\€Hõ€ù[YY][H^\€]KNL›][ôK[õ€ôHõÿ›\ŒòôÀ]⁄]Hõÿ›\Œúö[ôÀLàõÿ›\Œúö[ôÀ\€]KLÃŒ€Nù^VÃM\Hãà⁄›”õ›Tõ›»»ùÀYù[õ^LHò\⁄\ÀL€NõZ[ã]ÀVÕ	WHààôõ^LHò\⁄\ÀLÇà
+N¬à€€ú›ô]öY]‘⁄[€\‹»H€äàôõ^Z[ã]ÀL›\ú€‹ã]^][\ÀXò\Ÿ[[ôHõ›[ôY^ôÀ]ò[ú‹\ô[ùLKçHKLKçH^\€Hõ€ù[YY][H^\€]KNL›][ôK[õ€ôHö[ôÀLHö[ôÀ]ò[ú‹\ô[ù›ô\éòôÀ\€]KMLŒ€Nù^VÃM\Hãà⁄›”õ›Tõ›»»ùÀYù[õ^LHò\⁄\ÀL€NõZ[ã]ÀVÕ	WHààõZ[ã]ÀLõ^LHò\⁄\ÀLÇà
+N¬à€€ú›õ›‘ÿ‹õ€€\‹»H⁄›”õ›Tõ›¬à»ö[õ[ôKYõ^X^]ÀYù[Z[ã]ÀLõ^LHõ^[õ›‹ò\][\ÀXò\Ÿ[[ôHÿ\L›ô\ôõ›À^X]]»›X⁄\[ã^À]ŸXö⁄][›ô\ôõ›À\ÿ‹õ€[ôŒù›X⁄HÇààö[õ[ôKYõ^X^]ÀYù[Z[ã]ÀLõ^[õ›‹ò\][\ÀXò\Ÿ[[ôHÿ\Lé¬à€€ú›[ö–€\‹»Bàö[õ[ôH⁄ö[öÀL›\ú€‹ã\⁄[ù\àõ‹ô\ãLôÀ]ò[ú‹\ô[ùL[Y€ãXò\Ÿ[[ôHõ€ùZ[ö\ö]õ€ù[YY][H^\⁄ﬁKMå[ô\õ[ôHX€‹ò][€ã\⁄ﬁKMX€‹ò][€ãLà[ô\õ[ôK[ŸôúŸ]Là›ô\éù^\⁄ﬁKMÃ›X⁄[X[ö\[][€àX›]ôNù^\⁄ﬁKNé¬ÇàYà
+Z\’[Tõ€‹⁄Ÿ[à	âàZS[ô»OOHô[àà	âàò[YQ[à	âàYY][ô H¬àô]\õà
+à]Çà€\‹”ò[YO^‹ô]öY]‘⁄[€\‹ﬂBà]K[‹ô\ãZ][K[ò[YK\ô]öY]œHàÇàXí[ô^^ÃBà€íŸ^Q›€è^ JHOà¬àYà
+KöŸ^HOOHë[ù\ààKöŸ^HOOHàäH¬àKúô]ô[ùYò][
+
+N¬àŸ]Y][ô ùYJN¬àBà_Bà€ê€X⁄œ^ JHOà¬àYà
+
+Kù\ôŸ]\»S[[Y[ù
+Kò€‹Ÿ\›
+ñŸ]K][K\õ€‹[[ö◊HäJHô]\õé¬àŸ]Y][ô ùYJN¬à_BàÇà‹ô\í][Q[ô€\⁄⁄]›‘ôYú¬à^^€ò[YQ[üBà][O^⁄][_Bà€ï[Tõ€‹€X⁄œ^€€ï[Tõ€‹€X⁄ﬂBà[ö–€\‹œ^€[ö–€\‹ﬂBàõ›‘ÿ‹õ€€\‹œ^‹õ›‘ÿ‹õ€€\‹ﬂBà\öXSXô[Hï\⁄»ò[YHH\»Y]ÇàœÇàŸ]èÇà
+N¬àBÇàYà
+Z\’[Tõ€‹⁄Ÿ[äH¬àô]\õà
+à[ú]àôYè^⁄[ú]ôYüBàY^ÿ‹ô\ãZ][K[ò[YKI⁄][KùZYXBàò[YO^€ò[Y_Bà€ê⁄[ôŸO^ JHOà]⁄][J][K»ò[YNàKù\ôŸ]ùò[YHJ_Bà€êõ\è^ 
+HOà¬à€€ú›ô^H›ö[ô [ú]ôYãò›\úô[ùÀùò[YHœ»ò[YJN¬àõ⁄Yõ\⁄[ô[ô”ò[YT\ú⁄\›
+][KùZY
+N¬àŸ]Y][ô ò[ŸJN¬à€êYù\ìò[YPõ\èÀä][KùZYô^
+N¬à_BàXŸZ€\è^›ZS[ô»OOHô[àà»ï\⁄»ò[YHàà∏."∏.-¯.b8.+x.!¯.,∏.&HüBà€\‹”ò[YO^‹⁄[ô€R[ú]€\‹ﬂBàœÇà
+N¬àBÇàYà
+YY][ô H¬àYà
+ZS[ô»OOHô[àà	âàò[YQ[äH¬àô]\õà
+à]Çà€\‹”ò[YO^‹ô]öY]‘⁄[€\‹ﬂBà]K[‹ô\ãZ][K[ò[YK\ô]öY]œHàÇàXí[ô^^ÃBà€íŸ^Q›€è^ JHOà¬àYà
+KöŸ^HOOHë[ù\ààKöŸ^HOOHàäH¬àKúô]ô[ùYò][
+
+N¬àŸ]Y][ô ùYJN¬àBà_Bà€ê€X⁄œ^ JHOà¬àYà
+
+Kù\ôŸ]\»S[[Y[ù
+Kò€‹Ÿ\›
+ñŸ]K][K\õ€‹[[ö◊HäJHô]\õé¬àŸ]Y][ô ùYJN¬à_BàÇà‹ô\í][Q[ô€\⁄⁄]›‘ôYú¬à^^€ò[YQ[üBà][O^⁄][_Bà€ï[Tõ€‹€X⁄œ^€€ï[Tõ€‹€X⁄ﬂBà[ö–€\‹œ^€[ö–€\‹ﬂBàõ›‘ÿ‹õ€€\‹œ^‹õ›‘ÿ‹õ€€\‹ﬂBà\öXSXô[Hï\⁄»ò[YHH\»Y]ÇàœÇàŸ]èÇà
+N¬àBà€€ú›\ù»Hò[YKú‹]
+‘ëTó“USW’SW‘ì”‘’“—Só‘ëQ—V
+N¬àô]\õà
+à]Çà€\‹”ò[YO^‹ô]öY]‘⁄[€\‹ﬂBà]K[‹ô\ãZ][K[ò[YK\ô]öY]œHàÇàXí[ô^^ÃBà€íŸ^Q›€è^ JHOà¬àYà
+KöŸ^HOOHë[ù\ààKöŸ^HOOHàäH¬àKúô]ô[ùYò][
+
+N¬àŸ]Y][ô ùYJN¬àBà_Bà€ê€X⁄œ^ JHOà¬àYà
+
+Kù\ôŸ]\»S[[Y[ù
+Kò€‹Ÿ\›
+ñŸ]K][K\õ€‹[[ö◊HäJHô]\õé¬àŸ]Y][ô ùYJN¬à_BàÇà]à€\‹”ò[YO^‹õ›‘ÿ‹õ€€\‹ﬂHõ€OHô‹õ›\à\öXK[Xô[^›ZS[ô»OOHô[àà»ï\⁄»ò[YHH\»Y]àà∏."∏.-¯.b8.+x.!¯.,∏.&H8†%8.`x.%x.,8.`8.'∏.-¯.b8.+x.`x. x.bx.a8. àüOÇà‹\ùÀõX\
+
+\ùJHOà
+àúòY€Y[ùŸ^O^ÿ	⁄][KùZYK][KI⁄_XOÇà⁄H	HàOOH»‹[à€\‹”ò[YOHù⁄]\‹XŸK\ôK]‹ò\úôXZÀ]€‹ô»èû‹\ùO‹‹[èààù[Bà⁄H	HàOOHH»
+àù]€Çà\OHòù]€àÇà]K][K\õ€‹[[öœHàÇà€î⁄[ù\ë›€è^ JHOàKú›‹õ‹Yÿ][€ä
+_Bà€ê€X⁄œ^ JHOà¬àKú›‹õ‹Yÿ][€ä
+N¬à€ï[Tõ€‹€X⁄ ][JN¬à_Bà€\‹”ò[YO^€[ö–€\‹ﬂBà]O^›ZS[ô»OOHô[àà»ï\ÿY›öY]»›‹»õ‹à\»][Hàà∏.`8.'∏.-8.b8.(x.(¯..x.&¯.`x.)x.,8.%8..x.(¯..x.&¯.%x.,∏.(x.(¯.,∏.(∏. x.,∏.(¯.&x.-x.bHüBàÇà›ZS[ô»OOHô[àà»‘ëTó“USW‘ëQó‘P◊—Sàà
+\ù‘ëTó“USW’SW‘ì”‘’“—Sä_Bàÿù]€èÇà
+Hàù[Bà—úòY€Y[ùÇà
+J_BàŸ]èÇàŸ]èÇà
+N¬àBÇàô]\õà
+à[ú]àôYè^⁄[ú]ôYüBàY^ÿ‹ô\ãZ][K[ò[YKI⁄][KùZYXBàò[YO^€ò[Y_Bà€ê⁄[ôŸO^ JHOà]⁄][J][K»ò[YNàKù\ôŸ]ùò[YHJ_Bà€êõ\è^ 
+HOà¬à€€ú›ô^H›ö[ô [ú]ôYãò›\úô[ùÀùò[YHœ»ò[YJN¬àõ⁄Yõ\⁄[ô[ô”ò[YT\ú⁄\›
+][KùZY
+N¬àŸ]Y][ô ò[ŸJN¬à€êYù\ìò[YPõ\èÀä][KùZYô^
+N¬à_BàXŸZ€\è^›ZS[ô»OOHô[àà»ï\⁄»ò[YHàà∏."∏.-¯.b8.+x.!¯.,∏.&HüBà€\‹”ò[YO^‹⁄[ô€R[ú]€\‹ﬂBàœÇà
+N¬üBÇôù[ò›[€à‹ô\í][Sõ›QöY[
+¬à][KàZS[ôÀà]⁄][Kàõ\⁄[ô[ô”õ›T\ú⁄\›à€ï[Tõ€‹€X⁄Àà€ïò[ú€]Pÿ\ôàò[ú€]Pÿ\ôù\ﬁKàò[ú€]Pÿ\ô\ÿXõYüNà¬à][Nà‹ô\í][Tõ›Œ¬àZS[ôŒàZS[ôŒ¬à]⁄][Nà
+\ôŸ]à‹ô\í][Tõ›À]⁄à\ùX[‹ô\í][OäHOàõ⁄Y¬àõ\⁄[ô[ô”õ›T\ú⁄\›à
+ZYà›ö[ô HOàõ⁄Yõ€Z\ŸOõ⁄Yé¬à€ï[Tõ€‹€X⁄Œà
+õ›Œà‹ô\í][Tõ› HOàõ⁄Y¬à äà8.&¯..8.b8.(x.`8.%8.-x.(∏.)¯. x.,x.&∏.`x.%∏.&∏.%8.bx.,∏.&x.&∏.&x. x.,∏.(¯.c8.%8†%8.)¯.,∏.!¯.`¯. x.)x.bx.*¯.(x.,∏.(∏.`8.*¯.%x..8.`8.'∏.(¯.,∏.,8.`x.%∏.&∏.&∏.&x.%∏..x. Hÿ‹õ€8.%x.,x.%8.&∏.b8.+x.(à
+ã¬à€ïò[ú€]Pÿ\ôŒà
+
+HOàõ⁄Y¬àò[ú€]Pÿ\ôù\ﬁOŒàõ€€X[é¬àò[ú€]Pÿ\ô\ÿXõYŒàõ€€X[é¬üJH¬à€€ú›ZSõ›HH][Kõõ›Hœ»àé¬à€€ú›õ›Q[àH›ö[ô ][Kõõ›Q[àœ»àäKùö[J
+N¬à€€ú›ŸY][ôÀŸ]Y][ô◊HH\ŸT›]Jò[ŸJN¬à€€ú›[ú]ôYàH\ŸTôYèS[ú][[Y[ùù[äù[
+N¬Çà\ŸS^[›]YôôX›
+
+
+HOà¬àYà
+YY][ô Hô]\õé¬à€€ú›[H[ú]ôYãò›\úô[ù¬àYà
+Y[
+Hô]\õé¬à[ôõÿ›\ 
+N¬à€€ú›[àH[ùò[YKõ[ô›¬àûH¬à[úŸ]Ÿ[X›[€îò[ôŸJ[ã[äN¬àHÿ]⁄¬à àY€õ‹ôH
+ã¬àBàKŸY][ô◊JN¬Çà€€ú›ô]öY]‘⁄[€\‹»Bàôõ^Z[ã]ÀL›\ú€‹ã]^][\À\›\ùõ›[ôY[»ôÀ]⁄]HLàKLKçH^^»õ€ù[YY][H^\€]KN›][ôK[õ€ôHö[ôÀLHö[ôÀ\€]KLåŒ›ô\éòôÀ\€]KMLŒé¬à€€ú›[ú]€\‹»BàõZ[ãZVÃãåç\ô[WHZ[ã]ÀLõ^LHõ›[ôY[»ôÀ]⁄]HLàKLKçH^^»õ€ù[YY][H^\€]KN›][ôK[õ€ôHö[ôÀLHö[ôÀ\€]KLåŒXŸZ€\éù^\€]KM€NõZ[ã]ÀVÃLúô[WHé¬à€€ú›õ›S[ö–€\‹»Bàö[õ[ôH⁄ö[öÀL›\ú€‹ã\⁄[ù\àõ‹ô\ãLôÀ]ò[ú‹\ô[ùL[Y€ãXò\Ÿ[[ôHõ€ùZ[ö\ö]õ€ù[YY][H^\⁄ﬁKMå[ô\õ[ôHX€‹ò][€ã\⁄ﬁKMX€‹ò][€ãLà[ô\õ[ôK[ŸôúŸ]Là›ô\éù^\⁄ﬁKMÃ›X⁄[X[ö\[][€àX›]ôNù^\⁄ﬁKN^^»é¬ÇàYà
+ZS[ô»OOHô[àà	âàõ›Q[à	âàYY][ô H¬àô]\õà
+à]Çà€\‹”ò[YO^‹ô]öY]‘⁄[€\‹ﬂBàXí[ô^^ÃBàõ€OHô‹õ›\Çà\öXK[Xô[Hìõ›H8†%\»Y]ZH^Çà€íŸ^Q›€è^ JHOà¬àYà
+KöŸ^HOOHë[ù\ààKöŸ^HOOHàäH¬àKúô]ô[ùYò][
+
+N¬àŸ]Y][ô ùYJN¬àBà_Bà€ê€X⁄œ^ JHOà¬àYà
+
+Kù\ôŸ]\»S[[Y[ù
+Kò€‹Ÿ\›
+ñŸ]K][K\õ€‹[[ö◊HäJHô]\õé¬àŸ]Y][ô ùYJN¬à_BàÇà‹ô\í][Q[ô€\⁄⁄]›‘ôYú¬à^^€õ›Q[üBà][O^⁄][_Bà€ï[Tõ€‹€X⁄œ^€€ï[Tõ€‹€X⁄ﬂBà[ö–€\‹œ^€õ›S[ö–€\‹ﬂBàœÇàŸ]èÇà
+N¬àBÇà€€ú›ZR[ìõ›HH÷◊LLWLM—óKÀù\›
+ZSõ›JN¬àYà
+ZS[ô»OOHô[àà	âà[õ›Q[à	âàZR[ìõ›H	âàYY][ô H¬à€€ú›ù\ﬁHHõ€€X[äò[ú€]Pÿ\ôù\ﬁJN¬à€€ú›ŸôàHõ€€X[äò[ú€]Pÿ\ô\ÿXõY
+N¬àô]\õà
+à]à€\‹”ò[YOHõZ[ã]ÀL‹XŸK^KLKçHèÇà[ú]àôYè^⁄[ú]ôYüBàò[YO^›ZSõ›_Bà€ê⁄[ôŸO^ JHOà]⁄][J][K»õ›NàKù\ôŸ]ùò[YHJ_Bà€êõ\è^ 
+HOà¬àõ⁄Yõ\⁄[ô[ô”õ›T\ú⁄\›
+][KùZY
+N¬àŸ]Y][ô ò[ŸJN¬à_Bà€ëõÿ›\œ^ 
+HOàŸ]Y][ô ùYJ_BàXŸZ€\èHï\x†)àÇà€\‹”ò[YO^⁄[ú]€\‹ﬂBàœÇà]à€\‹”ò[YOHôõ^õ^]‹ò\][\ÀXŸ[ù\àÿ\LàLçHèÇàù]€Çà\OHòù]€àÇà€ê€X⁄œ^ 
+HOà€ïò[ú€]Pÿ\ôÀä
+_Bà\ÿXõY^ÿù\ﬁHŸôà[€ïò[ú€]Pÿ\ôBà]O^›ZS[ô»OOHô[àà»ïò[ú€]H][Hò[Y\Àõ›\À[ô€‹››[[X\ûH€à\»ÿ\ôàà[ôYö[ôYBà€\‹”ò[YO^ÿ€äàú⁄ö[öÀLõ›[ôYYù[LãçHKLH^VÃLHõ€ù\Ÿ[ZXõ€›X⁄[X[ö\[][€àãàù\ﬁHŸôà[€ïò[ú€]Pÿ\ôà»ò›\ú€‹ã[õ›X[›ŸYôÀ\€]KLå^\€]KMLÇààòôÀXõYKLL^XõYKNLö[ôÀLHö[ôÀXõYKLåŒX›]ôNòôÀXõYKLåÇà
+_BàÇàÿù\ﬁH»ïò[ú€][ô¯†)àààïò[ú€]HSàüBàÿù]€èÇà€\‹”ò[YOHõZ[ã]ÀLõ^LH^VÃLHXY[ôÀ\€ùY»^X[Xô\ãNèÇà[ô€\⁄ö[»\ôHYù\à\»ù[úÀ‹àYù\à[›Hõ\àHõ›H»ÿ]ôKàÿ[YHX›[€à\»^»àüBà‹[à€\‹”ò[YOHôõ€ù\Ÿ[ZXõ€èïò[ú€]HSè‹‹[èà[[àHÿ‹õ€ò\àXõ›ôHH\⁄»\›Çà‹ÇàŸ]èÇàŸ]èÇà
+N¬àBÇàô]\õà
+à[ú]àôYè^⁄[ú]ôYüBàò[YO^›ZSõ›_Bà€ê⁄[ôŸO^ JHOà]⁄][J][K»õ›NàKù\ôŸ]ùò[YHJ_Bà€êõ\è^ 
+HOà¬àõ⁄Yõ\⁄[ô[ô”õ›T\ú⁄\›
+][KùZY
+N¬àŸ]Y][ô ò[ŸJN¬à_Bà€ëõÿ›\œ^ 
+HOàŸ]Y][ô ùYJ_BàXŸZ€\è^›ZS[ô»OOHô[àà»ï\x†)ààà∏.'∏.-8.(x.'∏.c8†)àüBà€\‹”ò[YO^⁄[ú]€\‹ﬂBàœÇà
+N¬üBÇã äà8. ∏.bx.+x.!8.)¯.,∏.(x.*∏.(¯..8.&¯.%x.bx.&x.%¯..8.&K¯."¯.b8.+x.(K¯.`8.+x. x.*∏.,∏.(»8†%8.%x.(¯.)¯."8.)¯.b8.,∏.(x.-x.+x.,x. x.*x.(¯.a8.%¯.(∏.*∏.,¯.*¯.(¯.,x.&∏. ∏.,x.bx.&x.`x.&¯.)H
+ã¬ôù[ò›[€à‹ô\êÿ\î›[[X\ûQöY[“]ôUZJ‹ô\éà‹ô\äNàõ€€X[à¬à€€ú›€‹›H›ö[ô ‹ô\ãò€‹›]Z[‹ô\ãò€‹›úôXZŸ›€à‹ô\ãò€‹›àäKùö[J
+N¬à€€ú›ô\Z\àH›ö[ô ‹ô\ãúô\Z\ë]Z[‹ô\ãúô\Z\ë]Z[»àäKùö[J
+N¬à€€ú›ÿ»H›ö[ô ‹ô\ãôÿ›[Y[ù]Z[àäKùö[J
+N¬àô]\õà÷◊LLWLM—óKÀù\›
+	ÿ€‹›Wâ‹ô\Z\üWâŸÿﬂX
+N¬üBÇò€€ú›‹ô\êÿ\ôHôXX›õY[[ ù[ò›[€à‹ô\êÿ\ô
+¬à‹ô\ãàZS[ôÀà›Yôîõ‹›\ìò[Y\Ààÿ[P\‹⁄Y€ôY\–ûTÿ[Kà⁄\ôPò\ŸU\õà][T›]\”Xô[Àà][T€X⁄Y\”õ‹õKà][T›]\‘õ‹›\ëõ‹êÿ\ôà€€ò\î›Yôëö[\úÀà€€ò\î›]\—ö[\úÀà€ì]ôR][\–⁄[ôŸKà[ôR[òõﬁX›]ôHHò[ŸKüNà¬à‹ô\éà‹ô\é¬àZS[ôŒàZS[ôŒ¬à›Yôîõ‹›\ìò[Y\Œà›ö[ô÷◊N¬à äà8.`8."¯.)x.)x.c8°§à8.'∏.&x.,x. x.!¯.,∏.&x.(¯.,x.&∏.'8.-8.%8."∏.+x.&à8†%8.`¯."∏.bx.%x.,x.bx.!¯.!8.b8.,∏.`8.(¯.-8.b8.(x.%x.+x.&x.`8.'∏.-8.b8.(x.!¯.,∏.&H
+ã¬àÿ[P\‹⁄Y€ôY\–ûTÿ[NàôX€‹ô›ö[ôÀ›ö[ôœé¬à⁄\ôPò\ŸU\õŒà›ö[ô»ù[¬à][T›]\”Xô[œŒà][T›]\”Xô[X\¬à äàYò][
+»8."8.,∏. x‡#8."8.,x.%8. x.,∏.(¯.*∏.%∏.,∏.&x.,8‡#x†%8.!8.)¯.&∏.!8..8.(HYH»8."∏.-8.&¯.(x.,∏.)¯.,x.&x.&x.-x.bH»8.'x.,∏. H»”H
+ã¬à][T€X⁄Y\”õ‹õNà][T›]\‘€X⁄Y\”õ‹õX[^ôY¬à][T›]\‘õ‹›\ëõ‹êÿ\ôà][T›]\’ò[YV◊N¬à äà8.%x.,x.)¯. x.(¯.+x.!¯.`x.%∏.&∏.`8.!8.(¯.-¯.b8.+x.!¯.(x.-¯.+H8†%8."¯.b8.+x.&x.`x.%∏.)¯.`¯.&x. x.,∏.(¯.c8.%8.%¯.-x.b8.a8.(x.b8.%x.(¯.!¯.'∏.&x.,x. x.!¯.,∏.&K¯.*∏.%∏.,∏.&x.,
+8.*¯.)x.,∏.(∏."∏.-8.&¯.%x.b8.+x.`x.%∏.)»H‘äH
+ã¬à€€ò\î›Yôëö[\úŒàŸ]›ö[ôœé¬à€€ò\î›]\—ö[\úŒàŸ]][T›]\—ö[\ïò[YH\[ŸàUSW‘’UT◊—QW’—VOé¬à äà8.`x."8.bx.!¯.`x.(x.b8.`¯.*¯.bx.(¯.)¯.(x.(¯.,∏.(∏. x.,∏.(¯.)x.b8.,∏.*∏..8.%8.`¯.&HX\Y‹ô\ú»8†%8."∏.-8.&¯.&x.,x.&∏.+x.,x.&¯.`8.%8.%x.%¯.,x.&x.%¯.-H
+ã¬à€ì]ôR][\–⁄[ôŸOŒà
+‹ô\íYà›ö[ôÀ][\Œà‹ô\í][V◊JHOàõ⁄Y¬à äà8.`8.&¯.-8.%8. x.,∏.(¯.c8.%8.`x.)x.,8.a8.+∏.a8.)x.%x.c8.!8.-8.)»RH0≠»SëH8.`¯.&x. x.,∏.(¯.c8.%
+ã¬à[ôR[òõﬁX›]ôOŒàõ€€X[é¬üJH¬à€€ú›õ›]\àH\ŸTõ›]\ä
+N¬à€€ú›]ò[YHH\ŸT]ò[YJ
+Hã€K€‹ô\ú»é¬à€€ú›⁄][\ÀŸ]][\◊HH\ŸT›]O‹ô\í][Tõ›÷◊Oä
+
+HOÇà
+‹ô\ãö][\»◊JKõX\
+
+][K[ô^
+HOà
+¬àããö][KàZYà›ö[ô ][KöYœ»àäKùö[J
+H»›ö[ô ][KöY
+Hàõ›ÀI€‹ô\ãöYKI⁄[ô^KI€õ‹õJ][Kõò[YJ_XàJJBà
+N¬à€€ú›‹⁄›–[][\ÀŸ]⁄›–[][\◊HH\ŸT›]Jò[ŸJN¬à\ŸQYôôX›
+
+
+HOà¬àYà
+[ôR[òõﬁX›]ôJHŸ]⁄›–[][\ ùYJN¬àK€[ôR[òõﬁX›]ôWJN¬à äà8. ∏.(∏.,∏.(∏.%8..x.`x.%∏.)¯.%¯.-x.b8.a8.(x.b8.%x.(¯.!¯.%x.,x.)¯. x.(¯.+x.!¯.'∏.&x.,x. x.!¯.,∏.&K¯.*∏.%∏.,∏.&x.,
+8.`∏.*¯.(x.%8.`8.%8.-8.(x."∏.,x.b8.)¯.!8.(¯.,∏.) H
+ã¬à€€ú››€€ò\ì›\ú—^[ôYŸ]€€ò\ì›\ú—^[ôYHH\ŸT›]Jò[ŸJN¬à€€ú›‹⁄›–€‹›Ÿ]⁄›–€‹›HH\ŸT›]Jò[ŸJN¬à€€ú›‹ÿ]ôQ\úõ‹ãŸ]ÿ]ôQ\úõ‹óHH\ŸT›]JàäN¬à äà8.!8.,¯.`x.&x.,8.&x.,¯.`8.(x.-¯.b8.+x.`x.&¯.)x."∏.-¯.b8.+HSà8.a8.(x.b8.a8.%8.bH
+8.(x.-x.a8.%¯.(∏.`¯.&x."∏.-¯.b8.+x.`x.%x.b8.a8.(x.b8.a8.%8.bHXô[Ÿ[äH
+ã¬à€€ú››ò[ú€][€ìõ›XŸKŸ]ò[ú€][€ìõ›XŸWHH\ŸT›]JàäN¬à€€ú›‹ÿ]ö[ô“][UZYŸ]ÿ]ö[ô“][UZYHH\ŸT›]O›ö[ô»ù[äù[
+N¬à€€ú›‹⁄›“[õ[ôR[ùZŸKŸ]⁄›“[õ[ôR[ùZŸWHH\ŸT›]Jò[ŸJN¬à€€ú›⁄[õ[ôU^Ÿ][õ[ôU^HH\ŸT›]JàäN¬à€€ú›⁄[õ[ôR][\ÀŸ][õ[ôR][\◊HH\ŸT›]O[õ[ôQòYùõ›÷◊Oä◊JN¬à€€ú›⁄[õ[ôTÿ]ö[ôÀŸ][õ[ôTÿ]ö[ô◊HH\ŸT›]Jò[ŸJN¬à äà8.&∏.,x.&x.%¯.-∏. x.%¯.-x.)x.,8.`x.%∏.)¯."8.,∏. x.'¯.+x.(¯.c8.(x.&¯.,x.%8."¯.bx.,∏.(à
+ã¬à€€ú›⁄[õ[ôTõ›‘ÿ]ö[ô“YŸ][õ[ôTõ›‘ÿ]ö[ô“YHH\ŸT›]O›ö[ô»ù[äù[
+N¬à€€ú›⁄[õ[ôSY\‹ÿYŸKŸ][õ[ôSY\‹ÿYŸWHH\ŸT›]JàäN¬à€€ú›⁄[õ[ôPZPù\ﬁKŸ][õ[ôPZPù\ﬁWHH\ŸT›]Jò[ŸJN¬à€€ú››ò[ú€]Pÿ\ôù\ﬁKŸ]ò[ú€]Pÿ\ôù\ﬁWHH\ŸT›]Jò[ŸJN¬à äà8.`x.&¯.)x."8.,∏. x.&¯..8.b8.(Hò[ú€]HSà8†%8.`x.*∏.%8.!¯.`8.(x.-¯.b8.+HZS[ôœY[à
+ã¬à€€ú›ÿÿ\î›[[X\ûQ[ãŸ]ÿ\î›[[X\ûQ[óHH\ŸT›]O»€‹›à›ö[ôŒ»ô\Z\éà›ö[ôŒ»ÿ›[Y[ùà›ö[ô»Hù[äù[
+N¬à äà8.`∏.*¯.)x.%8.`x.&¯.)x.%x.+x.&x.`8.&¯.-8.%”‘’
+SäH
+ã¬à€€ú›ÿÿ\î›[[X\ûUò[ú€][ôÀŸ]ÿ\î›[[X\ûUò[ú€][ô◊HH\ŸT›]Jò[ŸJN¬à€€ú›ÿ\î›[[X\ûTô\]Y\›[ëõY⁄ôYàH\ŸTôYäò[ŸJN¬à€€ú›ÿ\î›[[X\ûQ[îôYàH\ŸTôYäÿ\î›[[X\ûQ[äN¬àÿ\î›[[X\ûQ[îôYãò›\úô[ùHÿ\î›[[X\ûQ[é¬à€€ú›ÿ\î›[[X\ûT€›\òŸRŸ^HH\ŸSY[[ à
+
+HOÇà	€‹ô\ãò€‹›]Z[œ»àüWYI€‹ô\ãúô\Z\ë]Z[œ»‹ô\ãúô\Z\ë]Z[»œ»àüWYI€‹ô\ãôÿ›[Y[ù]Z[œ»àüXà€‹ô\ãò€‹›]Z[‹ô\ãôÿ›[Y[ù]Z[‹ô\ãúô\Z\ë]Z[‹ô\ãúô\Z\ë]Z[◊Bà
+N¬à€€ú›⁄[õ[ôP€€\\ôQ[òXõYŸ][õ[ôP€€\\ôQ[òXõYHH\ŸT›]Jò[ŸJN¬à€€ú›‹›–ù\ﬁKŸ]›–ù\ﬁWHH\ŸT›]Jò[ŸJN¬à€€ú›ÿÿ\î›‹ÀŸ]ÿ\î›‹◊HH\ŸT›]O‹ô\î›—[ùûV◊Oä◊JN¬à€€ú›‹›’öY]Ÿ\ì‹[ãŸ]›’öY]Ÿ\ì‹[óHH\ŸT›]Jò[ŸJN¬à€€ú›‹›’öY]Ÿ\í[ô^Ÿ]›’öY]Ÿ\í[ô^HH\ŸT›]J
+N¬à€€ú››’öY]Ÿ\î›ö\ôYàH\ŸTôYèS]ë[[Y[ùù[äù[
+N¬à€€ú›€õ›S‹[ïZYŸ]õ›S‹[ïZYHH\ŸT›]O›ö[ô»ù[äù[
+N¬à€€ú›Ÿ]TX⁄Ÿ\ïZYŸ]]TX⁄Ÿ\ïZYHH\ŸT›]O›ö[ô»ù[äù[
+N¬à€€ú››[Tõ€‹⁄Y]ZYŸ][Tõ€‹⁄Y]ZYHH\ŸT›]O›ö[ô»ù[äù[
+N¬à€€ú››[Tõ€‹][T›‹ÀŸ][Tõ€‹][T›‹◊HH\ŸT›]O‹ô\î›—[ùûV◊Oä◊JN¬à€€ú››[Tõ€‹›‹—ô]⁄Yõ‹ëíYŸ][Tõ€‹›‹—ô]⁄Yõ‹ëíYHH\ŸT›]O›ö[ô»ù[äù[
+N¬à€€ú››[Tõ€‹ÿY[ô‘›‹ÀŸ][Tõ€‹ÿY[ô‘›‹◊HH\ŸT›]Jò[ŸJN¬à€€ú››[Tõ€‹öY]Ÿ\ì‹[ãŸ][Tõ€‹öY]Ÿ\ì‹[óHH\ŸT›]Jò[ŸJN¬à€€ú››[Tõ€‹öY]Ÿ\í[ô^Ÿ][Tõ€‹öY]Ÿ\í[ô^HH\ŸT›]J
+N¬à€€ú›[Tõ€‹öY]Ÿ\î›ö\ôYàH\ŸTôYèS]ë[[Y[ùù[äù[
+N¬à€€ú›[Tõ€‹›ô\õ^TôYàH\ŸTôYèS]ë[[Y[ùù[äù[
+N¬à€€ú›][\‘ôYàH\ŸTôYè‹ô\í][Tõ›÷◊Oä][\ N¬à€€ú›õ›QXõ›[òŸU[Y\ú‘ôYàH\ŸTôYèôX€‹ô›ö[ôÀô]\õï\O\[ŸàŸ][Y[›]èèäﬂJN¬à€€ú›ò[YQXõ›[òŸU[Y\ú‘ôYàH\ŸTôYèôX€‹ô›ö[ôÀô]\õï\O\[ŸàŸ][Y[›]èèäﬂJN¬à€€ú›õ›‘›⁄\QŸ\›\ôTôYàH\ŸTôYè¬àZYà›ö[ôŒ¬à›\ùàù[Xô\é¬à›\ùNàù[Xô\é¬àò\ŸNàù[Xô\é¬à\›ŸôúŸ]àù[Xô\é¬à›\ùY‹[éàõ€€X[é¬à\ŸNàú[ô[ô»àôòYŸ⁄[ô»é¬àHù[äù[
+N¬à€€ú›‹õ›‘›⁄\TŸ]õ›‘›⁄\THH\ŸT›]OôX€‹ô›ö[ôÀù[Xô\èèäﬂJN¬à€€ú›õ›‘›⁄\TôYàH\ŸTôYäõ›‘›⁄\T
+N¬àõ›‘›⁄\TôYãò›\úô[ùHõ›‘›⁄\T¬à€€ú››⁄\QòY‘òYîôYàH\ŸTôYèù[Xô\àù[äù[
+N¬Çà€€ú›õ\⁄›⁄\QòY‘òYàH
+
+HOà¬àYà
+›⁄\QòY‘òYîôYãò›\úô[ùOHù[
+H¬àÿ[òŸ[[ö[X][€ëúò[YJ›⁄\QòY‘òYîôYãò›\úô[ù
+N¬à›⁄\QòY‘òYîôYãò›\úô[ùHù[¬àBàN¬à€€ú›\›\ú⁄\›Y⁄Y–ûUZYôYàH\ŸTôYèôX€‹ô›ö[ôÀ›ö[ôœèäﬂJN¬à€€ú›ÿ[ê]X⁄›‹»Hõ€€X[ä›ö[ô ‹ô\ãòÿ\îõ›“Yœ»àäKùö[J
+H‹ô\ãòÿ\íYOHù[
+N¬Çà€€ú›€ì]ôR][\–⁄[ôŸTôYàH\ŸTôYä€ì]ôR][\–⁄[ôŸJN¬à€ì]ôR][\–⁄[ôŸTôYãò›\úô[ùH€ì]ôR][\–⁄[ôŸN¬Çà\ŸQYôôX›
+
+
+HOà¬à][\‘ôYãò›\úô[ùH][\Œ¬àK⁄][\◊JN¬Çà\ŸQYôôX›
+
+
+HOà¬àŸ]ÿ\î›[[X\ûQ[äù[
+N¬àKÿÿ\î›[[X\ûT€›\òŸRŸ^WJN¬Çà\ŸQYôôX›
+
+
+HOà¬à€€ú›õàH€ì]ôR][\–⁄[ôŸTôYãò›\úô[ù¬àYà
+YõäHô]\õé¬à€€ú›H⁄[ô›ÀúŸ][Y[›]
+
+
+HOà¬àõä‹ô\ãöY‹ô\í][Tõ›‹’”]ôS‹ô\í][\ ][\‘ôYãò›\úô[ù
+JN¬àK
+N¬àô]\õà
+
+HOà¬à€X\ï[Y[›]
+
+N¬àN¬àK⁄][\À‹ô\ãöYJN¬Çà\ŸQYôôX›
+
+
+HOà¬à€€ú›⁄YH‹ô\ãöY¬àô]\õà
+
+HOà¬à€€ú›õàH€ì]ôR][\–⁄[ôŸTôYãò›\úô[ù¬àYà
+YõäHô]\õé¬àõä⁄Y‹ô\í][Tõ›‹’”]ôS‹ô\í][\ ][\‘ôYãò›\úô[ù
+JN¬àN¬àK€‹ô\ãöYJN¬Çà€€ú›€€ò\ëö[\ú‘⁄Y»H	–\úò^Kôúõ€J€€ò\î›Yôëö[\ú Kú€‹ù
+
+Köõ⁄[äóLHä_WL	–\úò^Kôúõ€J€€ò\î›]\—ö[\ú Kú€‹ù
+
+Köõ⁄[äóLHä_X¬à\ŸQYôôX›
+
+
+HOà¬àŸ]€€ò\ì›\ú—^[ôY
+ò[ŸJN¬àK›€€ò\ëö[\ú‘⁄Y◊JN¬Çà\ŸQYôôX›
+
+
+HOà¬à€€ú›õ›U[Y\ú»Hõ›QXõ›[òŸU[Y\ú‘ôYãò›\úô[ù¬à€€ú›ò[YU[Y\ú»Hò[YQXõ›[òŸU[Y\ú‘ôYãò›\úô[ù¬àô]\õà
+
+HOà¬àõ‹à
+€€ú›ŸàÿöôX›ùò[Y\ õ›U[Y\ú JH¬àYà
+
+H€X\ï[Y[›]
+
+N¬àBàõ‹à
+€€ú›ŸàÿöôX›ùò[Y\ ò[YU[Y\ú JH¬àYà
+
+H€X\ï[Y[›]
+
+N¬àBàN¬àK◊JN¬Çà\ŸS^[›]YôôX›
+
+
+HOà¬àŸ]][\ 
+ô]äHOà¬à€€ú›X\YH
+‹ô\ãö][\»◊JKõX\
+
+][K[ô^
+HOà
+¬àããö][KàZYà›ö[ô ][KöYœ»àäKùö[J
+H»›ö[ô ][KöY
+Hàõ›ÀI€‹ô\ãöYKI⁄[ô^KI€õ‹õJ][Kõò[YJ_XàJJN¬à äà8.*¯.)x.,x.!»õ›]\ãúôYúô\⁄8.&∏.,∏.!¯.!8.(¯.,x.bx.!¯.(¯.+x.&∏.`∏.*¯.)x.%8.a8.(x.b8.(x.-Hõ›WŸ[ã€Xô[Ÿ[à
+ò[òX⁄»Ÿ[X›»ô\XÿH8."∏.bx.,äH8†%8.+x.(∏.b8.,∏.`8.'8.,àSà8.%¯.-x.b8.`8.'∏.-8.b8.!¯.`x.&¯.)H
+ã¬à€€ú›ô]êûRYHô]»X\›ö[ôÀ‹ô\í][Tõ›œä
+N¬à€€ú›ô]êûUZYHô]»X\›ö[ôÀ‹ô\í][Tõ›œä
+N¬àõ‹à
+€€ú›àŸàô]äH¬àô]êûUZYúŸ]
+ãùZYäN¬à€€ú›YH›ö[ô ãöYœ»àäKùö[J
+N¬àYà
+Y
+Hô]êûRYúŸ]
+YäN¬àBà€€ú›Y\ôŸYHX\YõX\
+
+õ› HOà¬à€€ú›YH›ö[ô õ›ÀöYœ»àäKùö[J
+N¬à€€ú›€HY»ô]êûRYôŸ]
+Y
+Hàô]êûUZYôŸ]
+õ›ÀùZY
+N¬àYà
+[€
+Hô]\õàõ›Œ¬à€€ú›Ÿ\ùô\ìôHH›ö[ô õ›Àõõ›Q[àœ»àäKùö[J
+N¬à€€ú›Ÿ\ùô\ìHH›ö[ô õ›Àõò[YQ[àœ»àäKùö[J
+N¬àô]\õà¬àããúõ›Ààããä\Ÿ\ùô\ìH	âà›ö[ô €õò[YQ[àœ»àäKùö[J
+H»»ò[YQ[éà€õò[YQ[àHàﬂJKàããä\Ÿ\ùô\ìôH	âà›ö[ô €õõ›Q[àœ»àäKùö[J
+H»»õ›Q[éà€õõ›Q[àHàﬂJKàN¬àJN¬Çà€€ú›ô^⁄Y‹ŒàôX€‹ô›ö[ôÀ›ö[ôœàHﬂN¬àõ‹à
+€€ú›õ›»ŸàY\ôŸY
+H¬àô^⁄Y‹÷‹õ›ÀùZYHH‹ô\í][T\ú⁄\›⁄Y€ò]\ôJõ› N¬àBà\›\ú⁄\›Y⁄Y–ûUZYôYãò›\úô[ùHô^⁄Y‹Œ¬àô]\õàY\ôŸY¬àJN¬àK€‹ô\ãö][\À‹ô\ãöYJN¬Çà€€ú›ô[ÿY›‹»HôXX›ù\ŸPÿ[òX⁄ \ﬁ[ò»
+
+HOà¬àYà
+Xÿ[ê]X⁄›‹ H¬àŸ]ÿ\î›‹ ◊JN¬àô]\õé¬àBà€€ú›Hô]»TìŸX\ò⁄\ò[\ 
+N¬àYà
+‹ô\ãòÿ\îõ›“Y
+HúŸ]
+òÿ\ó‹õ›◊⁄Yã‹ô\ãòÿ\îõ›“Y
+N¬àYà
+‹ô\ãòÿ\íYOHù[
+HúŸ]
+òÿ\ó⁄Yã›ö[ô ‹ô\ãòÿ\íY
+JN¬àûH¬à€€ú›ô\»H]ÿZ]ô]⁄
+	”‘ëTó‘’‘◊”T’–TW‘UO…‹ù‘›ö[ô 
+_X»ÿX⁄NàõõÀ\›‹ôHàJN¬à€€ú›ú€€àH
+]ÿZ]ô\Àöú€€ä
+JH\»¬àÿ\î›‹œŒà‹ô\î›—[ùûV◊N¬àN¬àYà
+\ô\Àõ⁄ Hô]\õé¬àŸ]ÿ\î›‹ \úò^Kö\–\úò^Jú€€ãòÿ\î›‹ H»ú€€ãòÿ\î›‹»à◊JN¬àHÿ]⁄¬à àY€õ‹ôH
+ã¬àBàKÿÿ[ê]X⁄›‹À‹ô\ãòÿ\íY‹ô\ãòÿ\îõ›“YJN¬Çà\ŸQYôôX›
+
+
+HOà¬àõ⁄Yô[ÿY›‹ 
+N¬àK‹ô[ÿY›‹◊JN¬Çà€€ú›\ÿY›‹»H\ﬁ[ò»
+ö[\Œàö[S\›ù[
+HOà¬àYà
+Yö[\œÀõ[ô›Xÿ[ê]X⁄›‹ Hô]\õé¬àŸ]›–ù\ﬁJùYJN¬àŸ]ÿ]ôQ\úõ‹äàäN¬àûH¬à€€ú›õ‹õHHô]»õ‹õQ]J
+N¬àõ‹õKò\[ô
+ù\ôŸ]›\Hãòÿ\àäN¬àYà
+‹ô\ãòÿ\îõ›“Y
+Hõ‹õKò\[ô
+òÿ\ó‹õ›◊⁄Yã‹ô\ãòÿ\îõ›“Y
+N¬àYà
+‹ô\ãòÿ\íYOHù[
+Hõ‹õKò\[ô
+òÿ\ó⁄Yã›ö[ô ‹ô\ãòÿ\íY
+JN¬àõ‹à
+€€ú›ö[HŸà\úò^Kôúõ€Jö[\ JHõ‹õKò\[ô
+ôö[\»ãö[JN¬à€€ú›ô\»H]ÿZ]ô]⁄
+‘ëTó‘’‘◊’T–Q–TW‘U»Y]Ÿàî‘’ãõŸNàõ‹õHJN¬à€€ú›^[ÿYH
+]ÿZ]ô\Àöú€€ä
+JH\»»\úõ‹èŒà›ö[ô»N¬àYà
+\ô\Àõ⁄ Hõ›»ô]»\úõ‹ä^[ÿYô\úõ‹àœ»ô\Àú›]\’^
+N¬à]ÿZ]ô[ÿY›‹ 
+N¬àHÿ]⁄
+JH¬àŸ]ÿ]ôQ\úõ‹äH[ú›[òŸ[Ÿà\úõ‹à»KõY\‹ÿYŸHà∏.+x.,x.&¯.`∏.*¯.)x.%8.(¯..x.&¯.a8.(x.b8.*∏.,¯.`8.(¯.a¯."äN¬àHö[ò[H¬àŸ]›–ù\ﬁJò[ŸJN¬àBàN¬Çà€€ú›[]T›»H\ﬁ[ò»
+›“Yà›ö[ô HOà¬àYà
+\›“Y
+Hô]\õé¬àŸ]›–ù\ﬁJùYJN¬àŸ]ÿ]ôQ\úõ‹äàäN¬àûH¬à€€ú›ô\»H]ÿZ]ô]⁄
+‘ëTó‘’‘◊—SUW–TW‘U¬àY]Ÿàî‘’ãàXY\úŒà»ê€€ù[ùU\Héàò\Xÿ][€ã⁄ú€€ààKàõŸNàî””ãú›ö[ô⁄YûJ»›◊⁄Yà›“YJKàJN¬à€€ú›^[ÿYH
+]ÿZ]ô\Àöú€€ä
+JH\»»\úõ‹èŒà›ö[ô»N¬àYà
+\ô\Àõ⁄ Hõ›»ô]»\úõ‹ä^[ÿYô\úõ‹àœ»ô\Àú›]\’^
+N¬à]ÿZ]ô[ÿY›‹ 
+N¬àHÿ]⁄
+JH¬àŸ]ÿ]ôQ\úõ‹äH[ú›[òŸ[Ÿà\úõ‹à»KõY\‹ÿYŸHà∏.)x.&∏.(¯..x.&¯.a8.(x.b8.*∏.,¯.`8.(¯.a¯."äN¬àHö[ò[H¬àŸ]›–ù\ﬁJò[ŸJN¬àBàN¬Çà€€ú›ò[ú€]Pÿ\î›[[X\ûUöXP\HHôXX›ù\ŸPÿ[òX⁄ à\ﬁ[ò»
+‹œŒà»[ô[ÿY[ôœŒàõ€€X[àJNàõ€Z\ŸOõ€€X[èàOà¬à€€ú›€‹›‹ò»H›ö[ô ‹ô\ãò€‹›]Z[‹ô\ãò€‹›úôXZŸ›€à‹ô\ãò€‹›àäKùö[J
+N¬à€€ú›ô\Z\î‹ò»H›ö[ô ‹ô\ãúô\Z\ë]Z[‹ô\ãúô\Z\ë]Z[»àäKùö[J
+N¬à€€ú›ÿ‘‹ò»H›ö[ô ‹ô\ãôÿ›[Y[ù]Z[àäKùö[J
+N¬àYà
+K÷◊LLWLM—óKÀù\›
+	ÿ€‹›‹òﬂWâ‹ô\Z\î‹òﬂWâŸÿ‘‹òﬂX
+JHô]\õàò[ŸN¬àYà
+ÿ\î›[[X\ûTô\]Y\›[ëõY⁄ôYãò›\úô[ù
+Hô]\õàò[ŸN¬àÿ\î›[[X\ûTô\]Y\›[ëõY⁄ôYãò›\úô[ùHùYN¬à€€ú›⁄›‘[ô[H‹œÀú[ô[ÿY[ô»OOHùYN¬àYà
+⁄›‘[ô[
+HŸ]ÿ\î›[[X\ûUò[ú€][ô ùYJN¬àûH¬à€€ú››[Tô\»H]ÿZ]ô]⁄
+‘ëTó’êP““Së◊’êSî”UW––Tó‘’SSPTñW–TW‘U¬àY]Ÿàî‘’ãàXY\úŒà»ê€€ù[ùU\Héàò\Xÿ][€ã⁄ú€€ààKàõŸNàî””ãú›ö[ô⁄YûJ¬à€‹›Ÿ]Z[à€‹›‹òÀàô\Z\óŸ]Z[àô\Z\î‹òÀàÿ›[Y[ùŸ]Z[àÿ‘‹òÀàJKàJN¬à€€ú››[T^[ÿYH
+]ÿZ]›[Tô\Àöú€€ä
+JH\»¬à⁄œŒàõ€€X[é¬à€‹›Ÿ]Z[Ÿ[èŒà›ö[ôŒ¬àô\Z\óŸ]Z[Ÿ[èŒà›ö[ôŒ¬àÿ›[Y[ùŸ]Z[Ÿ[èŒà›ö[ôŒ¬àN¬àYà
+›[Tô\Àõ⁄»	âà›[T^[ÿYõ⁄»OOHò[ŸJH¬àŸ]ÿ\î›[[X\ûQ[ä¬à€‹›à›ö[ô ›[T^[ÿYò€‹›Ÿ]Z[Ÿ[àœ»àäKùö[J
+Kàô\Z\éà›ö[ô ›[T^[ÿYúô\Z\óŸ]Z[Ÿ[àœ»àäKùö[J
+Kàÿ›[Y[ùà›ö[ô ›[T^[ÿYôÿ›[Y[ùŸ]Z[Ÿ[àœ»àäKùö[J
+KàJN¬àô]\õàùYN¬àBàHÿ]⁄¬à àY€õ‹ôH
+ã¬àHö[ò[H¬àÿ\î›[[X\ûTô\]Y\›[ëõY⁄ôYãò›\úô[ùHò[ŸN¬àYà
+⁄›‘[ô[
+HŸ]ÿ\î›[[X\ûUò[ú€][ô ò[ŸJN¬àBàô]\õàò[ŸN¬àKà¬à‹ô\ãò€‹›]Z[à‹ô\ãò€‹›úôXZŸ›€ãà‹ô\ãò€‹›à‹ô\ãúô\Z\ë]Z[à‹ô\ãúô\Z\ë]Z[Àà‹ô\ãôÿ›[Y[ù]Z[àBà
+N¬Çà€€ú›ò[ú€]Pÿ\ô][\’—[ô€\⁄H\ﬁ[ò»
+
+HOà¬àYà
+ò[ú€]Pÿ\ôù\ﬁJHô]\õé¬àYà
+‹ô\ï\⁄“Y—õ‹êÿ\ôõ[ô›OOH
+H¬àŸ]ÿ]ôQ\úõ‹äàZS[ô»OOHô[àÇà»êÿ[õõ›ò[ú€]H\»ÿ\ôY]à][\»\ôHõ›[öŸY»[à‹ô\à\⁄ÀàûHÿ]ö[ô»Hõ›»‹àô[ÿY[ôÀàÇàà∏.(∏.,x.!¯.`x.&¯.)x. x.,∏.(¯.c8.%8.&x.-x.bx.a8.(x.b8.a8.%8.bNà8.(¯.,∏.(∏. x.,∏.(¯.(∏.,x.!¯.a8.(x.b8.'8..x. H‹ô\à\⁄»8†%8.)x.+x.!¯.&∏.,x.&x.%¯.-∏. x.`x.%∏.)¯.*¯.(¯.-¯.+x.(¯.-x.`8.'¯.(¯."∏.*¯.&x.bx.,àÇà
+N¬àô]\õé¬àBàŸ]ò[ú€]Pÿ\ôù\ﬁJùYJN¬àŸ]ÿ]ôQ\úõ‹äàäN¬àûH¬à€€ú›ò[ú€]YûRYàôX€‹ô›ö[ôÀ›ö[ôœàHﬂN¬à€€ú›õ›Uò[ú€]YûRYàôX€‹ô›ö[ôÀ›ö[ôœàHﬂN¬àõ‹à
+€€ú›\⁄“YŸà‹ô\ï\⁄“Y—õ‹êÿ\ô
+H¬à€€ú›ô\»H]ÿZ]ô]⁄
+‘ëTó“UST◊’êSî”UW––Të–TW‘U¬àY]Ÿàî‘’ãàXY\úŒà»ê€€ù[ùU\Héàò\Xÿ][€ã⁄ú€€ààKà‹ôY[ùX[Œàúÿ[YK[‹öY⁄[àãàõŸNàî””ãú›ö[ô⁄YûJ»‹ô\ó›\⁄◊⁄Yà\⁄“YJKàJN¬à€€ú›^[ÿYH
+]ÿZ]ô\Àöú€€ä
+JH\»¬à\úõ‹èŒà›ö[ôŒ¬à\]YŒàù[Xô\é¬àò[ú€]YûRYŒàôX€‹ô›ö[ôÀ›ö[ôœé¬àõ›Uò[ú€]YûRYŒàôX€‹ô›ö[ôÀ›ö[ôœé¬àN¬àYà
+\ô\Àõ⁄ Hõ›»ô]»\úõ‹ä^[ÿYô\úõ‹àœ»ô\Àú›]\’^
+N¬àÿöôX›ò\‹⁄Y€äò[ú€]YûRY^[ÿYùò[ú€]YûRYœ»ﬂJN¬àÿöôX›ò\‹⁄Y€äõ›Uò[ú€]YûRY^[ÿYõõ›Uò[ú€]YûRYœ»ﬂJN¬àBàYà
+ÿöôX›öŸ^\ ò[ú€]YûRY
+Kõ[ô›àÿöôX›öŸ^\ õ›Uò[ú€]YûRY
+Kõ[ô›à
+H¬àŸ]][\ 
+ô]äHOÇàô]ãõX\
+
+õ› HOà¬à€€ú›YH›ö[ô õ›ÀöYœ»àäKùö[J
+N¬à€€ú›ò[YQ[àHY»›ö[ô ò[ú€]YûRY⁄YHœ»àäKùö[J
+Hààé¬à€€ú›õ›Q[àHY»›ö[ô õ›Uò[ú€]YûRY⁄YHœ»àäKùö[J
+Hààé¬àYà
+[ò[YQ[à	âà[õ›Q[äHô]\õàõ›Œ¬àô]\õà¬àããúõ›Ààããäò[YQ[à»»ò[YQ[àHàﬂJKàããäõ›Q[à»»õ›Q[àHàﬂJKàN¬àJBà
+N¬àBÇàûH¬à]ÿZ]ò[ú€]Pÿ\î›[[X\ûUöXP\J
+N¬àHÿ]⁄¬à à›[[X\ûHSà‹[€ò[8†%][HXô[»›[\]Y
+ã¬àBÇàõ›]\ãúôYúô\⁄
+
+N¬àHÿ]⁄
+JH¬àŸ]ÿ]ôQ\úõ‹äH[ú›[òŸ[Ÿà\úõ‹à»KõY\‹ÿYŸHà∏.`x.&¯.)x.(¯.,∏.(∏. x.,∏.(¯.a8.(x.b8.*∏.,¯.`8.(¯.a¯."äN¬àHö[ò[H¬àŸ]ò[ú€]Pÿ\ôù\ﬁJò[ŸJN¬àBàN¬Çà€€ú›‹[î›’öY]Ÿ\àH
+[ô^àù[Xô\äHOà¬àYà
+[ô^[ô^èHÿ\î›‹Àõ[ô›
+Hô]\õé¬àŸ]›’öY]Ÿ\í[ô^
+[ô^
+N¬àŸ]›’öY]Ÿ\ì‹[äùYJN¬àN¬Çà€€ú›€‹ŸT›’öY]Ÿ\àH
+
+HOàŸ]›’öY]Ÿ\ì‹[äò[ŸJN¬Çà\ŸQYôôX›
+
+
+HOà¬àYà
+\›’öY]Ÿ\ì‹[äHô]\õé¬à€€ú›[H›’öY]Ÿ\î›ö\ôYãò›\úô[ù¬àYà
+Y[
+Hô]\õé¬à€€ú›YùH›’öY]Ÿ\í[ô^
+à[ò€Y[ù⁄Y¬à[úÿ‹õ€ »YùôZ]ö[‹éàò]]»àJN¬àK‹›’öY]Ÿ\ì‹[ã›’öY]Ÿ\í[ô^JN¬Çà\ŸQYôôX›
+
+
+HOà¬àYà
+][Tõ€‹öY]Ÿ\ì‹[äHô]\õé¬à€€ú›[H[Tõ€‹öY]Ÿ\î›ö\ôYãò›\úô[ù¬àYà
+Y[
+Hô]\õé¬à€€ú›YùH[Tõ€‹öY]Ÿ\í[ô^
+à[ò€Y[ù⁄Y¬à[úÿ‹õ€ »YùôZ]ö[‹éàò]]»àJN¬àK›[Tõ€‹öY]Ÿ\ì‹[ã[Tõ€‹öY]Ÿ\í[ô^JN¬Çà€€ú››Yôì‹[€ú»H\ŸSY[[ 
+
+HOà¬à€€ú›ò[Y\»Hô]»Ÿ]›ö[ôœä
+N¬àõ‹à
+€€ú›àŸà›Yôîõ‹›\ìò[Y\ H¬à€€ú›H›ö[ô äKùö[J
+N¬àYà
+	âàZ\‘›Yôîõ‹›\ìò[YQ^€YY
+
+JHò[Y\ÀòY
+
+N¬àBàõ‹à
+€€ú›õ›»Ÿà][\ H¬à€€ú›àH›ö[ô õ›Àò\‹⁄Y€ôYHœ»àäKùö[J
+N¬àYà
+à	âàZ\‘›Yôîõ‹›\ìò[YQ^€YY
+äJHò[Y\ÀòY
+äN¬àBàô]\õà\úò^Kôúõ€Jò[Y\ Kú€‹ù
+
+KäHOàKõÿÿ[P€€\\ôJãô[àäJN¬àK⁄][\À›Yôîõ‹›\ìò[Y\◊JN¬Çà äà8.`8.'∏.-8.b8.(x.!¯.,∏.&H
+SëH[ùZŸJNà8."8.,x.&∏.!8..x.b8.%x.,∏.(x.`8."¯.)x.)x.c8. ∏.+x.!¯.(¯.%à8°§à8.a8.(x.b8.(x.-x.!8.b8.+x.(∏.`¯."∏.bx."∏.-¯.b8.+x.`x.(¯. x.`¯.&x.(¯.,∏.(∏."∏.-¯.b8.+x.'∏.&x.,x. x.!¯.,∏.&H
+ã¬à€€ú›Yò][[ùZŸP\‹⁄Y€ôYHH\ŸSY[[ 
+
+HOà¬à€€ú›X\YHô\€€ôTÿ[T›Yôëõ‹ì‹ô\ä‹ô\ãúÿ[Kÿ[P\‹⁄Y€ôY\–ûTÿ[JN¬àYà
+X\Y	âà›Yôîõ‹›\ìò[Y\Àú€€YJ
+äHOààOOHX\Y
+JHô]\õàX\Y¬àõ‹à
+€€ú›àŸà›Yôîõ‹›\ìò[Y\ H¬à€€ú›H›ö[ô äKùö[J
+N¬àYà
+	âàZ\‘›Yôîõ‹›\ìò[YQ^€YY
+
+JHô]\õà¬àBàô]\õààé¬àK€‹ô\ãúÿ[Kÿ[P\‹⁄Y€ôY\–ûTÿ[K›Yôîõ‹›\ìò[Y\◊JN¬Çà€€ú›»][T›Yôëö[\úŒà€€ò\í][T›Yôëö[\ú»HH\ŸSY[[ à
+
+HOà‹]›Yôëö[\ú €€ò\î›Yôëö[\ú Kà›€€ò\î›Yôëö[\ú◊Bà
+N¬à€€ú›€€ò\ì[ôQö[\êX›]ôHBà€€ò\í][T›Yôëö[\úÀú⁄^ôHà€€ò\î›]\—ö[\úÀú⁄^ôHà¬à€€ú›€€ò\ëYUŸ^P⁄\€XﬁHH][T€X⁄Y\”õ‹õKôYUŸ^N¬à€€ú›][\‘ÿ€‹YH\ŸSY[[ 
+
+HOà¬àYà
+]€€ò\ì[ôQö[\êX›]ôJHô]\õà][\Œ¬àô]\õà][\Àôö[\ä
+õ› HOÇà][SX]⁄\’€€ò\ì[ôQö[\ú”][Jõ›À€€ò\í][T›Yôëö[\úÀ€€ò\î›]\—ö[\úÀ€€ò\ëYUŸ^P⁄\€XﬁJBà
+N¬àK¬à][\Àà€€ò\ì[ôQö[\êX›]ôKà€€ò\í][T›Yôëö[\úÀà€€ò\î›]\—ö[\úÀà€€ò\ëYUŸ^P⁄\€XﬁKàJN¬Çà€€ú›][\”›]⁄YU€€ò\ëö[\àH\ŸSY[[ 
+
+HOà¬àYà
+]€€ò\ì[ôQö[\êX›]ôJHô]\õà◊H\»‹ô\í][Tõ›÷◊N¬àô]\õà][\Àôö[\äà
+õ› HOÇàZ][SX]⁄\’€€ò\ì[ôQö[\ú”][Jõ›À€€ò\í][T›Yôëö[\úÀ€€ò\î›]\—ö[\úÀ€€ò\ëYUŸ^P⁄\€XﬁJBà
+N¬àK¬à][\Àà€€ò\ì[ôQö[\êX›]ôKà€€ò\í][T›Yôëö[\úÀà€€ò\î›]\—ö[\úÀà€€ò\ëYUŸ^P⁄\€XﬁKàJN¬Çà€€ú››\ô\‹’€€ò\ì›\ú»Bà€€ò\ì[ôQö[\êX›]ôH	âà]€€ò\ì›\ú—^[ôY	âà][\”›]⁄YU€€ò\ëö[\ãõ[ô›à¬à€€ú›][\—YôôX›]ôHH›\ô\‹’€€ò\ì›\ú»»][\‘ÿ€‹Yà][\Œ¬Çà€€ú›»ÿZ][ôÀ€ôKX›]ôR][\ÀY[ë€ôR][\»HH\ŸSY[[ 
+
+HOà¬à€€ú›ô^ÿZ][ôŒà‹ô\í][Tõ›÷◊HH◊N¬à€€ú›ô^€ôNà‹ô\í][Tõ›÷◊HH◊N¬à€€ú›ô^X›]ôR][\Œà‹ô\í][Tõ›÷◊HH◊N¬à€€ú›ô^Y[ë€ôR][\Œà‹ô\í][Tõ›÷◊HH◊N¬Çàõ‹à
+€€ú›][HŸà][\—YôôX›]ôJH¬àYà
+–RUSë◊‘—Uö\ ][Kú›]\ JHô^ÿZ][ôÀú\⁄
+][JN¬àYà
+][Kô€€Ÿ”ëW‘—Uö\ ][Kú›]\ JHô^€ôKú\⁄
+][JN¬àYà
+][Kú›]\»OOH∏."8.&àäHô^Y[ë€ôR][\Àú\⁄
+][JN¬à[ŸHô^X›]ôR][\Àú\⁄
+][JN¬àBÇàô]\õà¬àÿZ][ôŒàô^ÿZ][ôÀà€ôNàô^€ôKàX›]ôR][\Œàô^X›]ôR][\ÀàY[ë€ôR][\Œàô^Y[ë€ôR][\ÀàN¬àK⁄][\—YôôX›]ôWJN¬à äà8.`8.)x.-¯.+x. x.'∏.&x.,x. x.!¯.,∏.&H»8.*¯.(¯.-¯.+x. x.(¯.+x.!¯.*∏.%∏.,∏.&x.,8.`8.&¯.a¯.&x‡#8."8.&∏‡#H8†%8.`x.*∏.%8.!¯.`x.%∏.)¯."8.&∏.`¯.&x.(¯.,∏.(∏. x.,∏.(¯.*¯.)x.,x. H8.a8.(x.b8."¯.b8.+x.&x.*¯.)x.,x.!¯.&¯..8.b8.(x."¯.b8.+x.&x.!¯.,∏.&x."8.&à
+ã¬à€€ú›⁄›—€ôTõ›‹“[ìXZ[ì\›Bà€€ò\í][T›Yôëö[\úÀú⁄^ôHà€€ò\î›]\—ö[\úÀö\ ∏."8.&àäN¬à äà8.!8.!¯.)x.,¯.%8.,x.&∏.`x.%∏.)¯.%x.,∏.(x. ∏.bx.+x.(x..x.)x.`8.%8.-8.(H8†%8.a8.(x.b8.`8.(¯.-x.(∏.!¯.%x.,∏.(x.*∏.%∏.,∏.&x.,8.`8.)¯.)x.,∏.`8.&¯.)x.-x.b8.(∏.&x.*∏.%∏.,∏.&x.,8.`¯.&x. x.,∏.(¯.c8.%
+ã¬à€€ú›€€\\ôR][\»Bà⁄›—€ôTõ›‹“[ìXZ[ì\›⁄›–[][\»»][\—YôôX›]ôHàX›]ôR][\Œ¬à€€ú›[€ôHH€ôKõ[ô›èH][\—YôôX›]ôKõ[ô›	âà][\—YôôX›]ôKõ[ô›à¬à€€ú›⁄\ôPÿ\ô\õH\ŸSY[[ 
+
+HOà¬à€€ú›ò\ŸHHô\€€ôT⁄\ôP\ò\ŸJ⁄\ôPò\ŸU\õ
+N¬àô]\õàùZ[‹ô\ïòX⁄⁄[ô‘⁄\ôS‹[ï\õ
+‹ô\ãöYò\ŸJN¬àK€‹ô\ãöY⁄\ôPò\ŸU\õJN¬à€€ú›[ôT⁄\ôU^H\ŸSY[[ à
+
+HOàùZ[[ôT⁄\ôSY\‹ÿYŸJ‹ô\ã][\À⁄\ôPÿ\ô\õ][T€X⁄Y\”õ‹õJKà€‹ô\ã][\À⁄\ôPÿ\ô\õ][T€X⁄Y\”õ‹õWBà
+N¬à€€ú›[ôT⁄\ôU\õH\ŸSY[[ à
+
+HOàŒãÀ€[ôKõYK‘ã€\ŸÀ›^œ…Ÿ[ò€ŸUTíP€€\€ô[ù
+[ôT⁄\ôU^
+_Xà€[ôT⁄\ôU^Bà
+N¬à€€ú›‹ô\ï\⁄“Y—õ‹êÿ\ôH\ŸSY[[ 
+
+HOà¬à€€ú›Y»Hô]»Ÿ]›ö[ôœä
+N¬àõ‹à
+€€ú›õ›»Ÿà][\ H¬à€€ú›YH›ö[ô õ›Àõ‹ô\ï\⁄“Yœ»àäKùö[J
+N¬àYà
+Y
+HYÀòY
+Y
+N¬àBàô]\õà\úò^Kôúõ€JY N¬àK⁄][\◊JN¬à€€ú››]\”Xô[[êÿ\ôH
+›à][T›]\’ò[YJNà›ö[ô»Oà¬àYà
+ZS[ô»OOHô[àäH¬àô]\õà\‹^R][T›]\”Xô[
+›ZS[ô N¬àBà€€ú››\›€HH›ö[ô ][T›]\”Xô[œÀñ‹›Hœ»àäKùö[J
+N¬àYà
+›\›€H	âà›\›€HOOH›
+Hô]\õà›\›€N¬àô]\õà\‹^R][T›]\”Xô[
+›ZS[ô N¬àN¬à€€ú››]\”‹[€ú—õ‹ïò[YHH
+ò[YNà][T›]\’ò[YJNà][T›]\’ò[YV◊HOà¬à€€ú›ò\ŸHH][T›]\‘õ‹›\ëõ‹êÿ\ôõ[ô›»][T›]\‘õ‹›\ëõ‹êÿ\ôàÀããíUSW‘’UT◊”‘ëTóN¬àô]\õàò\ŸKö[ò€Y\ ò[YJH»ò\ŸHà›ò[YKããòò\ŸWN¬àN¬Çà€€ú›€X\ìõ›QXõ›[òŸHH
+ZYà›ö[ô HOà¬à€€ú›[Y\ú»Hõ›QXõ›[òŸU[Y\ú‘ôYãò›\úô[ù¬à€€ú›H[Y\ú÷›ZYN¬àYà
+
+H€X\ï[Y[›]
+
+N¬à[]H[Y\ú÷›ZYN¬àN¬Çà€€ú›€X\ìò[YQXõ›[òŸHH
+ZYà›ö[ô HOà¬à€€ú›[Y\ú»Hò[YQXõ›[òŸU[Y\ú‘ôYãò›\úô[ù¬à€€ú›H[Y\ú÷›ZYN¬àYà
+
+H€X\ï[Y[›]
+
+N¬à[]H[Y\ú÷›ZYN¬àN¬Çà€€ú›€‹ŸT›⁄\Tõ›‹»H
+
+HOà¬àõ\⁄›⁄\QòY‘òYä
+N¬àõ›‘›⁄\QŸ\›\ôTôYãò›\úô[ùHù[¬àŸ]õ›‘›⁄\T
+ﬂJN¬àN¬Çà€€ú›\ú⁄\›][HH\ﬁ[ò»
+ô]í][Nà‹ô\í][Tõ›Àô^][Nà‹ô\í][Tõ› HOà¬à€€ú›⁄Y»H‹ô\í][T\ú⁄\›⁄Y€ò]\ôJô^][JN¬à€€ú›ô]î⁄Y»H\›\ú⁄\›Y⁄Y–ûUZYôYãò›\úô[ù€ô^][KùZYN¬à€€ú›ò[YUö[HH›ö[ô ô^][Kõò[YHœ»àäKùö[J
+N¬à€€ú›õ›Uö[HH›ö[ô ô^][Kõõ›Hœ»àäKùö[J
+N¬à äà8. x.,∏.(¯.`x.&¯.)HSà8.+x.(∏..x.b8.%¯.-x.b8.&¯..8.b8.(Hò[ú€]HSà»8.(8.,∏.*x.,àRH8†%ÿ]ôH8.+x.(∏.b8.,∏.!¯.`8.%8.-x.(∏.)¯.a8.(x.b8.(∏.-8.!¯."¯.bx.,¯.%∏.bx.,∏. ∏.bx.+x.(x..x.)x.`8.*¯.(x.-¯.+x.&x.`8.%8.-8.(H
+ã¬àYà
+ô]î⁄Y»OOH[ôYö[ôY	âàô]î⁄Y»OOH⁄Y Hô]\õé¬àŸ]ÿ]ö[ô“][UZY
+ô^][KùZY
+N¬àŸ]ÿ]ôQ\úõ‹äàäN¬àŸ]ò[ú€][€ìõ›XŸJàäN¬àûH¬à€€ú›ô\»H]ÿZ]ô]⁄
+ãÿ\K€K€‹ô\ãZ][\À›\]Hã¬àY]Ÿàî‘’ãàXY\úŒà»ê€€ù[ùU\Héàò\Xÿ][€ã⁄ú€€ààKà‹ôY[ùX[Œàúÿ[YK[‹öY⁄[àãàõŸNàî””ãú›ö[ô⁄YûJ¬à‹ô\ó⁄][W⁄Yàô^][KöYœ»ù[à‹ô\ó›\⁄◊⁄Yàô^][Kõ‹ô\ï\⁄“Yœ»ù[àÿ\ó‹õ›◊⁄Yà‹ô\ãòÿ\îõ›“Yàÿ\ó⁄Yà‹ô\ãòÿ\íYà][W€ò[YNàô^][Kõò[YKà][W‹›]\Œàô^][Kú›]\Àà\‹⁄Y€ôYW‹›Yôéàô^][Kò\‹⁄Y€ôYHù[àYWŸ]Nàô^][KôYQ]Hù[àõ›Nàô^][Kõõ›Hù[à\]YÿûNàõ[ÿö[KXÿ\ôãà äàò[ŸHHÿ]ôH8.`8.(¯.a¯.)Œ»8.`¯.*¯.bx.`8.(¯.-x.(∏. HTH8.`x.&¯.)x.`x.(∏. H
+ò[ú€]HSà»ò[ú€]KXÿ\ô»ò[ú€]KX[
+H
+ã¬àò[ú€]Nàò[ŸKàJKàJN¬à€€ú›^[ÿYH
+]ÿZ]ô\Àöú€€ä
+JH\»¬à\úõ‹èŒà›ö[ôŒ¬à‹ô\ó⁄][W⁄YŒà›ö[ô»ù[¬à‹ô\ó›\⁄◊⁄YŒà›ö[ô»ù[¬à›]\◊ÿ⁄[ôŸYÿ]Œà›ö[ô»ù[¬àXô[Ÿ[èŒà›ö[ô»ù[¬àõ›WŸ[èŒà›ö[ô»ù[¬àò[ú€][€ó‹›]\œŒàõõ◊⁄Ÿ^\»àôòZ[Yé¬àõ›W›ò[ú€][€ó‹›]\œŒàõõ◊⁄Ÿ^\»àôòZ[Yé¬àN¬àYà
+\ô\Àõ⁄ Hõ›»ô]»\úõ‹ä^[ÿYô\úõ‹àœ»ô\Àú›]\’^
+N¬à\›\ú⁄\›Y⁄Y–ûUZYôYãò›\úô[ù€ô^][KùZYHH⁄YŒ¬à€€ú›Ÿ^VHHŸ^Pò[ô⁄€⁄÷[Y
+
+N¬à€€ú›ô]î€€ÿ⁄»H][T€X⁄Y\”õ‹õKòûT›]\÷‹ô]í][Kú›]\»\»][T›]\’ò[YWN¬à€€ú›ô^€€ÿ⁄»H][T€X⁄Y\”õ‹õKòûT›]\÷€ô^][Kú›]\»\»][T›]\’ò[YWN¬à€€ú›[ù\ôY›‹ôQ\‹⁄]€ÿ⁄»Bàõ€€X[äô^€€ÿ⁄œÀú›‹ôQ\‹⁄]€ÿ⁄ H	âàPõ€€X[äô]î€€ÿ⁄œÀú›‹ôQ\‹⁄]€ÿ⁄ N¬à€€ú›ò[YQ[ëúõ€TŸ\ùô\àH›ö[ô ^[ÿYõXô[Ÿ[àœ»àäKùö[J
+N¬à€€ú›õ›Q[ëúõ€TŸ\ùô\àBà^[ÿYõõ›WŸ[àOOH[ôYö[ôYà»^[ÿYõõ›WŸ[àOHù[	âà›ö[ô ^[ÿYõõ›WŸ[äKùö[J
+Bà»›ö[ô ^[ÿYõõ›WŸ[äKùö[J
+Bàà[ôYö[ôYàà[ôYö[ôY¬à€€ú›»H^[ÿYùò[ú€][€ó‹›]\Œ¬à€€ú›ù»H^[ÿYõõ›W›ò[ú€][€ó‹›]\Œ¬à€€ú›Xô[⁄»Hõ€€X[äò[YQ[ëúõ€TŸ\ùô\à[ò[YUö[HK÷◊LLWLM—óKÀù\›
+ò[YUö[JJN¬à€€ú›õ›S⁄»Hõ€€X[äõ›Q[ëúõ€TŸ\ùô\à[õ›Uö[HK÷◊LLWLM—óKÀù\›
+õ›Uö[JJN¬àYà
+Xô[⁄»	âàõ›S⁄ H¬àŸ]ò[ú€][€ìõ›XŸJàäN¬àH[ŸHYà
+»OOHõõ◊⁄Ÿ^\»àù»OOHõõ◊⁄Ÿ^\»äH¬àŸ]ò[ú€][€ìõ›XŸJàZS[ô»OOHô[àÇà»ë[ô€\⁄ò[Y\À€õ›\»ôYY—SRSíW–TW“—VH‹à‘ì‘W–TW“—VH€àHŸ\ùô\à
+ô[ùãõÿÿ[‹àô\òŸ[[ùäKàÇàà∏.%x.,x.bx.!»—SRSíW–TW“—VH8.*¯.(¯.-¯.+H‘ì‘W–TW“—VH8.&∏.&x.`8."¯.-8.(¯.c8.'¯.`8.)¯.+x.(¯.c
+ô[ùãõÿÿ[»ô\òŸ[
+H8.%∏.-∏.!¯."8.,8.`x.&¯.)x."∏.-¯.b8.+x.`x.)x.,8.*¯.(x.,∏.(∏.`8.*¯.%x..8.`8.&¯.a¯.&x.(8.,∏.*x.,∏.+x.,x.!¯. x.)8.*x.a8.%8.bHÇà
+N¬àH[ŸHYà
+»OOHôòZ[Yàù»OOHôòZ[YäH¬àŸ]ò[ú€][€ìõ›XŸJàZS[ô»OOHô[àÇà»ê€›[õ›ò[ú€]H\»Xô[‹àõ›Kàô]ûH‹à⁄X⁄»TH][›H»Ÿ\ùô\àŸ‹ÀàÇàà∏.`x.&¯.)x."∏.-¯.b8.+x.*¯.(¯.-¯.+x.*¯.(x.,∏.(∏.`8.*¯.%x..8.a8.(x.b8.*∏.,¯.`8.(¯.a¯."8†%8.)x.+x.!¯.`¯.*¯.(x.b8.*¯.(¯.-¯.+x.`8."∏.a¯.!8.`∏.!8.)¯.%x.,àTH»Ÿ»8.`8."¯.-8.(¯.c8.'¯.`8.)¯.+x.(¯.cÇà
+N¬àH[ŸH¬àŸ]ò[ú€][€ìõ›XŸJàäN¬àBàŸ]][\ 
+›\úô[ù
+HOÇà›\úô[ùõX\
+
+ÿ[ôY]JHOà¬àYà
+ÿ[ôY]KùZYOOHô^][KùZY
+Hô]\õàÿ[ôY]N¬à]Y\ôŸYà‹ô\í][Tõ›»H¬àããòÿ[ôY]KàYà^[ÿYõ‹ô\ó⁄][W⁄Yœ»ÿ[ôY]KöYœ»ù[à‹ô\ï\⁄“Yà^[ÿYõ‹ô\ó›\⁄◊⁄Yœ»ÿ[ôY]Kõ‹ô\ï\⁄“Yœ»ù[àããäò[YQ[ëúõ€TŸ\ùô\à»»ò[YQ[éàò[YQ[ëúõ€TŸ\ùô\àHàﬂJKàããä^[ÿYõõ›WŸ[àOOH[ôYö[ôYà»»õ›Q[éàõ›Q[ëúõ€TŸ\ùô\àBààﬂJKàN¬à€€ú››]\“\€»H›ö[ô ^[ÿYú›]\◊ÿ⁄[ôŸYÿ]œ»àäKùö[J
+N¬àYà
+›]\“\€ H¬à€€ú›[YH›]\–⁄[ôŸY][Yúõ€Qí\€ ›]\“\€ N¬àYà
+[Y
+HY\ôŸYH»ããõY\ôŸY›]\–⁄[ôŸY][Yà[YN¬àH[ŸHYà
+ô]í][Kú›]\»OOHô^][Kú›]\ H¬àY\ôŸYH»ããõY\ôŸY›]\–⁄[ôŸY][YàY\ôŸYú›]\–⁄[ôŸY][Yœ»Ÿ^Pò[ô⁄€⁄÷[Y
+
+HN¬àH[ŸHYà
+T›ö[ô ô]í][KöYœ»àäKùö[J
+H	âà›ö[ô ^[ÿYõ‹ô\ó⁄][W⁄Yœ»àäKùö[J
+JH¬àY\ôŸYH»ããõY\ôŸY›]\–⁄[ôŸY][YàY\ôŸYú›]\–⁄[ôŸY][Yœ»Ÿ^Pò[ô⁄€⁄÷[Y
+
+HN¬àBàYà
+[ô^€€ÿ⁄œÀú›‹ôQ\‹⁄]€ÿ⁄ Hô]\õàY\ôŸY¬à€€ú›ô^€ÿ⁄»H[ù\ôY›‹ôQ\‹⁄]€ÿ⁄»»Ÿ^VHàY\ôŸYò€ÿ⁄‘›\ù[Yœ»Ÿ^VN¬àô]\õà»ããõY\ôŸY€ÿ⁄‘›\ù[Yàô^€ÿ⁄»N¬àJBà
+N¬àHÿ]⁄
+\úõ‹äH¬àŸ]][\ 
+›\úô[ù
+HOà›\úô[ùõX\
+
+ÿ[ôY]JHOà
+ÿ[ôY]KùZYOOHô]í][KùZY»ô]í][Hàÿ[ôY]JJJN¬àŸ]ÿ]ôQ\úõ‹ä\úõ‹à[ú›[òŸ[Ÿà\úõ‹à»\úõ‹ãõY\‹ÿYŸHà∏.&∏.,x.&x.%¯.-∏. x.a8.(x.b8.*∏.,¯.`8.(¯.a¯."äN¬àHö[ò[H¬àŸ]ÿ]ö[ô“][UZY
+
+›\úô[ù
+HOà
+›\úô[ùOOHô^][KùZY»ù[à›\úô[ù
+JN¬àBàN¬Çà äàõ\⁄8.(¯.,8.*¯.)¯.b8.,∏.!¯.'∏.-8.(x.'∏.c8.*¯.(x.,∏.(∏.`8.*¯.%x..
+Xõ›[òŸH»õ\à»8.&¯.-8.%8.`x.%∏.&äH
+ã¬à€€ú›õ\⁄[ô[ô”õ›T\ú⁄\›H\ﬁ[ò»
+ZYà›ö[ô HOà¬à€X\ìõ›QXõ›[òŸJZY
+N¬à€€ú›]ôHH][\‘ôYãò›\úô[ùôö[ô
+
+õ› HOàõ›ÀùZYOOHZY
+N¬àYà
+[]ôJHô]\õé¬à]ÿZ]\ú⁄\›][J]ôK]ôJN¬àN¬Çà äàõ\⁄8.(¯.,8.*¯.)¯.b8.,∏.!¯.'∏.-8.(x.'∏.c8."∏.-¯.b8.+x.!¯.,∏.&H
+Xõ›[òŸH»õ\äH
+ã¬à€€ú›õ\⁄[ô[ô”ò[YT\ú⁄\›H\ﬁ[ò»
+ZYà›ö[ô HOà¬à€X\ìò[YQXõ›[òŸJZY
+N¬à€€ú›]ôHH][\‘ôYãò›\úô[ùôö[ô
+
+õ› HOàõ›ÀùZYOOHZY
+N¬àYà
+[]ôJHô]\õé¬à]ÿZ]\ú⁄\›][J]ôK]ôJN¬àN¬Çà€€ú›]⁄][HH
+\ôŸ]à‹ô\í][Tõ›À]⁄à\ùX[‹ô\í][OäHOà¬à€€ú›ZYH\ôŸ]ùZY¬à€€ú›]⁄Ÿ^\»HÿöôX›öŸ^\ ]⁄
+N¬à€€ú›\”õ›S€õTÿ]ôHH]⁄Ÿ^\Àõ[ô›OOHH	âà]⁄Ÿ^\÷ÃHOOHõõ›Hé¬à€€ú›\”ò[YS€õTÿ]ôHH]⁄Ÿ^\Àõ[ô›OOHH	âà]⁄Ÿ^\÷ÃHOOHõò[YHé¬à€€ú›ò\ŸPôYõ‹ôT]⁄H][\‘ôYãò›\úô[ùôö[ô
+
+äHOàãùZYOOHZY
+Hœ»\ôŸ]¬à€€ú›ô^›]\–ôYõ‹ôT]⁄H
+]⁄ú›]\»œ»ò\ŸPôYõ‹ôT]⁄ú›]\ H\»][T›]\’ò[YN¬à€€ú›ô^\–ôYõ‹ôT]⁄à‹ô\í][Tõ›»H¬àããòò\ŸPôYõ‹ôT]⁄àããú]⁄à›]\Œàô^›]\–ôYõ‹ôT]⁄à€€Ÿà”ëW‘—Uö\ ô^›]\–ôYõ‹ôT]⁄
+Kàããä]⁄ú›]\»OHù[	âà]⁄ú›]\»OOHò\ŸPôYõ‹ôT]⁄ú›]\»»»›]\–⁄[ôŸY][YàŸ^Pò[ô⁄€⁄÷[Y
+
+HHàﬂJKàN¬àYà
+‹ô\í][T\ú⁄\›⁄Y€ò]\ôJò\ŸPôYõ‹ôT]⁄
+HOOH‹ô\í][T\ú⁄\›⁄Y€ò]\ôJô^\–ôYõ‹ôT]⁄
+JH¬àô]\õé¬àBÇà€‹ŸT›⁄\Tõ›‹ 
+N¬ÇàYà
+\”õ›S€õTÿ]ôJH¬à€X\ìõ›QXõ›[òŸJZY
+N¬àŸ]][\ 
+ô]äHOà¬à€€ú›ò\ŸHHô]ãôö[ô
+
+äHOàãùZYOOHZY
+Hœ»\ôŸ]¬à€€ú›ô^›]\»H
+]⁄ú›]\»œ»ò\ŸKú›]\ H\»][T›]\’ò[YN¬à€€ú›ô^à‹ô\í][Tõ›»H¬àããòò\ŸKàããú]⁄à›]\Œàô^›]\Àà€€Ÿà”ëW‘—Uö\ ô^›]\ Kàããä]⁄ú›]\»OHù[	âà]⁄ú›]\»OOHò\ŸKú›]\»»»›]\–⁄[ôŸY][YàŸ^Pò[ô⁄€⁄÷[Y
+
+HHàﬂJKàN¬àô]\õàô]ãõX\
+
+][JHOà
+][KùZYOOHZY»ô^à][JJN¬àJN¬àõ›QXõ›[òŸU[Y\ú‘ôYãò›\úô[ù›ZYHHŸ][Y[›]
+
+
+HOà¬à[]Hõ›QXõ›[òŸU[Y\ú‘ôYãò›\úô[ù›ZYN¬à€€ú›]ôHH][\‘ôYãò›\úô[ùôö[ô
+
+õ› HOàõ›ÀùZYOOHZY
+N¬àYà
+]ôJHõ⁄Y\ú⁄\›][J]ôK]ôJN¬àKé
+N¬àô]\õé¬àBÇàYà
+\”ò[YS€õTÿ]ôJH¬à€X\ìò[YQXõ›[òŸJZY
+N¬àŸ]][\ 
+ô]äHOà¬à€€ú›ò\ŸHHô]ãôö[ô
+
+äHOàãùZYOOHZY
+Hœ»\ôŸ]¬à€€ú›ô^›]\»H
+]⁄ú›]\»œ»ò\ŸKú›]\ H\»][T›]\’ò[YN¬à€€ú›ô^à‹ô\í][Tõ›»H¬àããòò\ŸKàããú]⁄à›]\Œàô^›]\Àà€€Ÿà”ëW‘—Uö\ ô^›]\ Kàããä]⁄ú›]\»OHù[	âà]⁄ú›]\»OOHò\ŸKú›]\»»»›]\–⁄[ôŸY][YàŸ^Pò[ô⁄€⁄÷[Y
+
+HHàﬂJKàN¬àô]\õàô]ãõX\
+
+][JHOà
+][KùZYOOHZY»ô^à][JJN¬àJN¬àò[YQXõ›[òŸU[Y\ú‘ôYãò›\úô[ù›ZYHHŸ][Y[›]
+
+
+HOà¬à[]Hò[YQXõ›[òŸU[Y\ú‘ôYãò›\úô[ù›ZYN¬à€€ú›]ôHH][\‘ôYãò›\úô[ùôö[ô
+
+õ› HOàõ›ÀùZYOOHZY
+N¬àYà
+]ôJHõ⁄Y\ú⁄\›][J]ôK]ôJN¬àKé
+N¬àô]\õé¬àBÇà€X\ìò[YQXõ›[òŸJZY
+N¬à€X\ìõ›QXõ›[òŸJZY
+N¬à€€ú›ò\ŸQX\õHH][\‘ôYãò›\úô[ùôö[ô
+
+äHOàãùZYOOHZY
+Hœ»\ôŸ]¬à€€ú›ô^›]\—X\õHH
+]⁄ú›]\»œ»ò\ŸQX\õKú›]\ H\»][T›]\’ò[YN¬à€€ú›ô^\—X\õNà‹ô\í][Tõ›»H¬àããòò\ŸQX\õKàããú]⁄à›]\Œàô^›]\—X\õKà€€Ÿà”ëW‘—Uö\ ô^›]\—X\õJKàããä]⁄ú›]\»OHù[	âà]⁄ú›]\»OOHò\ŸQX\õKú›]\»»»›]\–⁄[ôŸY][YàŸ^Pò[ô⁄€⁄÷[Y
+
+HHàﬂJKàN¬àYà
+‹ô\í][T\ú⁄\›⁄Y€ò]\ôJò\ŸQX\õJHOOH‹ô\í][T\ú⁄\›⁄Y€ò]\ôJô^\—X\õJJH¬àô]\õé¬àBà]ô]î€ò\à‹ô\í][Tõ›»ù[Hù[¬à]ô^õ›Œà‹ô\í][Tõ›»ù[Hù[¬à äà8.&∏.,x.!¯.!8.,x.&∏.`¯.*¯.bH\]\à8.(¯.,x.&x.%¯.,x.&x.%¯.-H8†%8.a8.(x.b8.!¯.,x.bx.&Hô]î€ò\€ô^õ›»8.+x.,∏."8.(∏.,x.!»ù[8.`x.)x.bx.)»\ú⁄\›8.a8.(x.b8.%∏..x. x.`8.(¯.-x.(∏. H
+ôXX›Nò]⁄[ô H
+ã¬àõ\⁄ﬁ[ò 
+
+HOà¬àŸ]][\ 
+ô]äHOà¬à€€ú›ò\ŸHHô]ãôö[ô
+
+äHOàãùZYOOHZY
+Hœ»\ôŸ]¬à€€ú›ô^›]\»H
+]⁄ú›]\»œ»ò\ŸKú›]\ H\»][T›]\’ò[YN¬à€€ú›ô^à‹ô\í][Tõ›»H¬àããòò\ŸKàããú]⁄à›]\Œàô^›]\Àà€€Ÿà”ëW‘—Uö\ ô^›]\ Kàããä]⁄ú›]\»OHù[	âà]⁄ú›]\»OOHò\ŸKú›]\»»»›]\–⁄[ôŸY][YàŸ^Pò[ô⁄€⁄÷[Y
+
+HHàﬂJKàN¬àô]î€ò\H»ããòò\ŸHN¬àô^õ›»Hô^¬àô]\õàô]ãõX\
+
+][JHOà
+][KùZYOOHZY»ô^à][JJN¬àJN¬àJN¬àYà
+ô]î€ò\	âàô^õ› Hõ⁄Y\ú⁄\›][Jô]î€ò\ô^õ› N¬àN¬Çà€€ú›\]T›]\»H
+ZYà›ö[ôÀ›]\Œà›ö[ô HOà¬àYà
+›]\»OOH’UT◊–P’S”ó”ì’JH¬àõ⁄Yõ\⁄[ô[ô”ò[YT\ú⁄\›
+ZY
+N¬àŸ]õ›S‹[ïZY
+ZY
+N¬àô]\õé¬àBà€€ú››\úô[ùH][\‘ôYãò›\úô[ùôö[ô
+
+][JHOà][KùZYOOHZY
+N¬àYà
+X›\úô[ù
+Hô]\õé¬àYà
+›\úô[ùú›]\»OOH›]\ Hô]\õé¬à]⁄][J›\úô[ù»›]\Œà›]\»\»][T›]\’ò[YHJN¬àN¬Çà€€ú›\]P\‹⁄Y€ôYHH
+ZYà›ö[ôÀ\‹⁄Y€ôYNà›ö[ô HOà¬à€€ú››\úô[ùH][\‘ôYãò›\úô[ùôö[ô
+
+][JHOà][KùZYOOHZY
+N¬àYà
+X›\úô[ù
+Hô]\õé¬à€€ú›ô^\‹⁄Y€ôYHH›ö[ô \‹⁄Y€ôYHœ»àäKùö[J
+N¬àYà
+›ö[ô ›\úô[ùò\‹⁄Y€ôYHœ»àäKùö[J
+HOOHô^\‹⁄Y€ôYJHô]\õé¬à]⁄][J›\úô[ù»\‹⁄Y€ôYNàô^\‹⁄Y€ôYHJN¬àN¬Çà€€ú›[ôQYQ]TX⁄ŸYH
+ZYà›ö[ôÀ\€’ò[YNà›ö[ô HOà¬à€€ú›õ›»H][\Àôö[ô
+
+][JHOà][KùZYOOHZY
+N¬àYà
+\õ› H¬àŸ]]TX⁄Ÿ\ïZY
+ù[
+N¬àô]\õé¬àBà€€ú›õ‹õX[^ôYH\€’ò[YKú€XŸJL
+N¬àYà
+õ›ÀôYQ]OÀú€XŸJL
+HOOHõ‹õX[^ôY
+H¬àŸ]]TX⁄Ÿ\ïZY
+ù[
+N¬àô]\õé¬àBà]⁄][Jõ›À»YQ]Nàõ‹õX[^ôY]Nàõ‹õX[^ôYJN¬àŸ]]TX⁄Ÿ\ïZY
+ù[
+N¬àN¬Çà€€ú›[Tõ€‹⁄Y]][HH\ŸSY[[ 
+
+HOà¬àYà
+][Tõ€‹⁄Y]ZY
+Hô]\õàù[¬àô]\õà][\Àôö[ô
+
+äHOàãùZYOOH[Tõ€‹⁄Y]ZY
+Hœ»ù[¬àK⁄][\À[Tõ€‹⁄Y]ZYJN¬Çà€€ú›€‹ŸU[Tõ€‹⁄Y]HôXX›ù\ŸPÿ[òX⁄ 
+
+HOà¬àŸ][Tõ€‹⁄Y]ZY
+ù[
+N¬àŸ][Tõ€‹][T›‹ ◊JN¬àŸ][Tõ€‹›‹—ô]⁄Yõ‹ëíY
+ù[
+N¬àŸ][Tõ€‹öY]Ÿ\ì‹[äò[ŸJN¬àŸ][Tõ€‹ÿY[ô‘›‹ ò[ŸJN¬àK◊JN¬Çà€€ú›ÿY[Tõ€‹][T›‹»HôXX›ù\ŸPÿ[òX⁄ \ﬁ[ò»
+
+HOà¬à€€ú›][RYH›ö[ô [Tõ€‹⁄Y]][OÀöYœ»àäKùö[J
+N¬àYà
+Z][RYXÿ[ê]X⁄›‹ Hô]\õé¬àŸ][Tõ€‹ÿY[ô‘›‹ ùYJN¬àŸ]ÿ]ôQ\úõ‹äàäN¬àûH¬à€€ú›Hô]»TìŸX\ò⁄\ò[\ 
+N¬àYà
+‹ô\ãòÿ\îõ›“Y
+HúŸ]
+òÿ\ó‹õ›◊⁄Yã‹ô\ãòÿ\îõ›“Y
+N¬àYà
+‹ô\ãòÿ\íYOHù[
+HúŸ]
+òÿ\ó⁄Yã›ö[ô ‹ô\ãòÿ\íY
+JN¬à€€ú›ô\»H]ÿZ]ô]⁄
+	”‘ëTó‘’‘◊”T’–TW‘UO…‹ù‘›ö[ô 
+_X»ÿX⁄NàõõÀ\›‹ôHàJN¬à€€ú›ú€€àH
+]ÿZ]ô\Àöú€€ä
+JH\»¬àÿ\î›‹œŒà‹ô\î›—[ùûV◊N¬à][T›‹–ûR][RYŒàôX€‹ô›ö[ôÀ‹ô\î›—[ùûV◊Oé¬à\úõ‹èŒà›ö[ôŒ¬àN¬àYà
+\ô\Àõ⁄ Hõ›»ô]»\úõ‹äú€€ãô\úõ‹àœ»ô\Àú›]\’^
+N¬à€€ú›\›Hú€€ãö][T›‹–ûR][RYÀñ⁄][RYHœ»◊N¬àŸ][Tõ€‹][T›‹ \úò^Kö\–\úò^J\›
+H»\›à◊JN¬àŸ][Tõ€‹›‹—ô]⁄Yõ‹ëíY
+][RY
+N¬àHÿ]⁄
+JH¬àŸ]ÿ]ôQ\úõ‹äH[ú›[òŸ[Ÿà\úõ‹à»KõY\‹ÿYŸHà∏.`∏.*¯.)x.%8.(¯..x.&¯.a8.(x.b8.*∏.,¯.`8.(¯.a¯."äN¬àHö[ò[H¬àŸ][Tõ€‹ÿY[ô‘›‹ ò[ŸJN¬àBàK›[Tõ€‹⁄Y]][K‹ô\ãòÿ\îõ›“Y‹ô\ãòÿ\íYÿ[ê]X⁄›‹◊JN¬Çà\ŸQYôôX›
+
+
+HOà¬àYà
+][Tõ€‹⁄Y]ZYXÿ[ê]X⁄›‹ Hô]\õé¬à€€ú›][RYH›ö[ô [Tõ€‹⁄Y]][OÀöYœ»àäKùö[J
+N¬àYà
+Z][RY
+Hô]\õé¬àõ⁄YÿY[Tõ€‹][T›‹ 
+N¬àK›[Tõ€‹⁄Y]ZY[Tõ€‹⁄Y]][OÀöYÿ[ê]X⁄›‹ÀÿY[Tõ€‹][T›‹◊JN¬Çà€€ú›\”ZŸ[R[XYŸQö[HH\ŸPÿ[òX⁄ à
+éàö[JNàõ€€X[àOÇà\[Ÿàãú⁄^ôHOOHõù[Xô\àà	âÇàãú⁄^ôHà	âÇà
+◊ö[XYŸWÀ⁄Kù\›
+ãù\JHà◊äôﬂúYﬂúﬂŸXú⁄YüZXﬂZYüõ\
+I⁄Kù\›
+›ö[ô ãõò[YHœ»àäJJKà◊Bà
+N¬Çà äà8.`8.)¯.)x.,∏.(x.-x."8.,∏. Hö[\»8.&8.(¯.(¯.(x.%8.,à8.`x.)x.,8. x.(¯.$¯.-x.)x.,∏. x."8.,∏. x.%¯.-x.b8.(x.,∏.`8.*¯.)x.-¯.+x.`8."x.'∏.,∏.,]Uò[úŸô\ãö][\»
+ã¬à€€ú›ÿ]\í[XYŸQö[\—úõ€Q]Uò[úŸô\àH\ŸPÿ[òX⁄ 
+à]Uò[úŸô\àù[
+Nàö[V◊HOà¬àYà
+Y
+Hô]\õà◊N¬à€€ú›úõ€Qö[\»H\úò^Kôúõ€Jôö[\»œ»◊JKôö[\ä\”ZŸ[R[XYŸQö[JN¬àYà
+úõ€Qö[\Àõ[ô›à
+Hô]\õàúõ€Qö[\Œ¬à€€ú›öXR][\Œàö[V◊HH◊N¬à€€ú›][\»Hö][\Œ¬àYà
+Z][\œÀõ[ô›
+Hô]\õà◊N¬àõ‹à
+]HH»H][\Àõ[ô›»J  H¬à€€ú›]H][\÷⁄WN¬àYà
+]ö⁄[ôOOHôö[HäH€€ù[ùYN¬à€€ú›àH]ôŸ]\—ö[J
+N¬àYà
+YèÀú⁄^ôJH€€ù[ùYN¬à€€ú›Z[YR[ùH	⁄]ù\HàüH	Ÿãù\HàüX¬àYà
+\”ZŸ[R[XYŸQö[JäH◊ö[XYŸWÀ⁄Kù\›
+Z[YR[ùùö[J
+JJHöXR][\Àú\⁄
+äN¬àBàô]\õàöXR][\Œ¬àK⁄\”ZŸ[R[XYŸQö[WJN¬Çà€€ú›ÿ]\í[XYŸQö[\—úõ€P€\õÿ\ôH\ŸPÿ[òX⁄ 
+Ÿà]Uò[úŸô\àù[
+Nàö[V◊HOà¬àYà
+XŸ
+Hô]\õà◊N¬à€€ú›úõ€Qö[\»H\úò^Kôúõ€JŸôö[\»œ»◊JKôö[\ä\”ZŸ[R[XYŸQö[JN¬àYà
+úõ€Qö[\Àõ[ô›à
+Hô]\õàúõ€Qö[\Œ¬à€€ú››]àö[V◊HH◊N¬à€€ú›][\»HŸö][\Œ¬àYà
+Z][\œÀõ[ô›
+Hô]\õà◊N¬àõ‹à
+]HH»H][\Àõ[ô›»J  H¬à€€ú›]H][\÷⁄WN¬àYà
+]ö⁄[ôOOHôö[HäH€€ù[ùYN¬à€€ú›àH]ôŸ]\—ö[J
+N¬àYà
+YèÀú⁄^ôJH€€ù[ùYN¬àYà
+\”ZŸ[R[XYŸQö[JäH◊ö[XYŸWÀ⁄Kù\›
+	⁄]ù\HàüXùö[J
+JJH›]ú\⁄
+äN¬àBàô]\õà›]¬àK⁄\”ZŸ[R[XYŸQö[WJN¬Çà€€ú›\ÿY[Tõ€‹][T›‹»H\ﬁ[ò»
+ö[\Œà]\òXõOö[Oàö[S\›ù[[ôYö[ôY
+HOà¬à€€ú›][RYH›ö[ô [Tõ€‹⁄Y]][OÀöYœ»àäKùö[J
+N¬à€€ú›\›Hö[\»OHù[»◊Hà\úò^Kôúõ€Jö[\»\»]\òXõOö[OäN¬à€€ú›X⁄ŸYH\›ôö[\ä\”ZŸ[R[XYŸQö[JN¬àYà
+\X⁄ŸYõ[ô›Z][RYXÿ[ê]X⁄›‹ Hô]\õé¬àŸ]›–ù\ﬁJùYJN¬àŸ]ÿ]ôQ\úõ‹äàäN¬àûH¬à€€ú›õ‹õHHô]»õ‹õQ]J
+N¬àõ‹õKò\[ô
+ù\ôŸ]›\Hãö][HäN¬àõ‹õKò\[ô
+õ‹ô\ó⁄][W⁄Yã][RY
+N¬àYà
+‹ô\ãòÿ\îõ›“Y
+Hõ‹õKò\[ô
+òÿ\ó‹õ›◊⁄Yã‹ô\ãòÿ\îõ›“Y
+N¬àYà
+‹ô\ãòÿ\íYOHù[
+Hõ‹õKò\[ô
+òÿ\ó⁄Yã›ö[ô ‹ô\ãòÿ\íY
+JN¬àõ‹à
+€€ú›ö[HŸàX⁄ŸY
+Hõ‹õKò\[ô
+ôö[\»ãö[JN¬à€€ú›ô\»H]ÿZ]ô]⁄
+‘ëTó‘’‘◊’T–Q–TW‘U»Y]Ÿàî‘’ãõŸNàõ‹õHJN¬à€€ú›^[ÿYH
+]ÿZ]ô\Àöú€€ä
+JH\»»\úõ‹èŒà›ö[ô»N¬àYà
+\ô\Àõ⁄ Hõ›»ô]»\úõ‹ä^[ÿYô\úõ‹àœ»ô\Àú›]\’^
+N¬à]ÿZ]ÿY[Tõ€‹][T›‹ 
+N¬àHÿ]⁄
+JH¬àŸ]ÿ]ôQ\úõ‹äH[ú›[òŸ[Ÿà\úõ‹à»KõY\‹ÿYŸHà∏.+x.,x.&¯.`∏.*¯.)x.%8.(¯..x.&¯.a8.(x.b8.*∏.,¯.`8.(¯.a¯."äN¬àHö[ò[H¬àŸ]›–ù\ﬁJò[ŸJN¬àBàN¬Çà äà8.`8.(x.-¯.b8.+x.)x.,∏. x."8.,∏. HSëH8.a8.%8.bx.)x.-8.!¯. x.c8.(¯..x.&¯.`x.%¯.&x.a8.'¯.)x.c8†%8.`¯.*¯.bx.`8."¯.-8.(¯.c8.'¯.`8.)¯.+x.(¯.c8.%8.-∏.!»
+8.*¯.)x.&à”‘î H
+ã¬à€€ú›\ÿY[Tõ€‹][T›‹—úõ€U\õ»H\ﬁ[ò»
+\õŒà›ö[ô÷◊JHOà¬à€€ú›][RYH›ö[ô [Tõ€‹⁄Y]][OÀöYœ»àäKùö[J
+N¬à€€ú›\›H\úò^Kôúõ€Jô]»Ÿ]
+\õÀõX\
+
+JHOàKùö[J
+JKôö[\äõ€€X[äJJN¬àYà
+[\›õ[ô›Z][RYXÿ[ê]X⁄›‹ Hô]\õé¬àŸ]›–ù\ﬁJùYJN¬àŸ]ÿ]ôQ\úõ‹äàäN¬àûH¬à€€ú›ô\»H]ÿZ]ô]⁄
+‘ëTó‘’‘◊—ëU“’Tì–TW‘U¬àY]Ÿàî‘’ãàXY\úŒà»ê€€ù[ùU\Héàò\Xÿ][€ã⁄ú€€ààKàõŸNàî””ãú›ö[ô⁄YûJ¬à\ôŸ]›\Nàö][Hãà‹ô\ó⁄][W⁄Yà][RYàÿ\ó‹õ›◊⁄Yà‹ô\ãòÿ\îõ›“Yàÿ\ó⁄Yà‹ô\ãòÿ\íYà\õŒà\›àJKàJN¬à€€ú›^[ÿYH
+]ÿZ]ô\Àöú€€ä
+JH\»»\úõ‹èŒà›ö[ô»N¬àYà
+\ô\Àõ⁄ Hõ›»ô]»\úõ‹ä^[ÿYô\úõ‹àœ»ô\Àú›]\’^
+N¬à]ÿZ]ÿY[Tõ€‹][T›‹ 
+N¬àHÿ]⁄
+JH¬àŸ]ÿ]ôQ\úõ‹äH[ú›[òŸ[Ÿà\úõ‹à»KõY\‹ÿYŸHà∏.`∏.*¯.)x.%8.(¯..x.&¯."8.,∏. x.)x.-8.!¯. x.c8.a8.(x.b8.*∏.,¯.`8.(¯.a¯."äN¬àHö[ò[H¬àŸ]›–ù\ﬁJò[ŸJN¬àBàN¬Çà€€ú›\ÿY[Tõ€‹›‹”]\›ôYàH\ŸTôYä\ÿY[Tõ€‹][T›‹ N¬à\ÿY[Tõ€‹›‹”]\›ôYãò›\úô[ùH\ÿY[Tõ€‹][T›‹Œ¬Çà äà8."8.,x.&∏.)¯.,∏.!¯.(¯..x.&¯.`x.(x.bHõÿ›\»8.a8.(x.b8.+x.(∏..x.b8.`¯.&x. x.)x.b8.+x.!»8†%8.`¯."∏.bHÿ\\ôH
+»8.)x.,∏. x.)¯.,∏.!¯.%¯.,x.bx.!¯."8.+x.(x.-¯.%
+ã¬à\ŸQYôôX›
+
+
+HOà¬àYà
+][Tõ€‹⁄Y]ZY
+Hô]\õé¬à€€ú›][RYH›ö[ô [Tõ€‹⁄Y]][OÀöYœ»àäKùö[J
+N¬àYà
+Z][RYXÿ[ê]X⁄›‹ Hô]\õé¬Çà€€ú›€êÿ\\ôT\›HH
+]éà€\õÿ\ô]ô[ù
+HOà¬à€€ú›\›Hÿ]\í[XYŸQö[\—úõ€P€\õÿ\ô
+]ãò€\õÿ\ô]JN¬àYà
+[\›õ[ô›
+Hô]\õé¬à]ãúô]ô[ùYò][
+
+N¬à]ãú›‹õ‹Yÿ][€ä
+N¬àõ⁄Y\ÿY[Tõ€‹›‹”]\›ôYãò›\úô[ù
+\›
+N¬àN¬Çàÿ›[Y[ùòY]ô[ù\›[ô\äú\›Hã€êÿ\\ôT\›KùYJN¬à]Y]YSZX‹õ›\⁄ 
+
+HOà¬à[Tõ€‹›ô\õ^TôYãò›\úô[ùÀôõÿ›\ »ô]ô[ùÿ‹õ€àùYHJN¬àJN¬Çàô]\õà
+
+HOàÿ›[Y[ùúô[[›ôQ]ô[ù\›[ô\äú\›Hã€êÿ\\ôT\›KùYJN¬àK›[Tõ€‹⁄Y]ZY[Tõ€‹⁄Y]][OÀöYÿ[ê]X⁄›‹Àÿ]\í[XYŸQö[\—úõ€P€\õÿ\ôJN¬Çà€€ú›€ï[Tõ€‹⁄Y]òY”›ô\àH
+NàôXX›ëòY—]ô[ù
+HOà¬à€€ú›][RYH›ö[ô [Tõ€‹⁄Y]][OÀöYœ»àäKùö[J
+N¬àYà
+Z][RYXÿ[ê]X⁄›‹»›–ù\ﬁJHô]\õé¬à äà8.`¯.*¯.bx.`8.&¯.-8.%8.(¯.,x.&∏. x.,∏.(»õ‹8.`8.(x.-¯.b8.+x.`8.&¯.a¯.&x.a8.'¯.)x.c
+8.'8..x.bx.`¯."∏.bx.)x.,∏. x."8.,∏. x.`8.%8.*∏. x.c8.%¯.a¯.+x.&À¯.`x.%¯.a¯.&∏.+x.-¯.b8.&JH
+ã¬àKúô]ô[ùYò][
+
+N¬àûH¬àKô]Uò[úŸô\ãôõ‹YôôX›Hò€‹Hé¬àHÿ]⁄¬à àY€õ‹ôH
+ã¬àBàN¬Çà€€ú›€ï[Tõ€‹⁄Y]õ‹H
+NàôXX›ëòY—]ô[ù
+HOà¬à€€ú›][RYH›ö[ô [Tõ€‹⁄Y]][OÀöYœ»àäKùö[J
+N¬àYà
+Z][RYXÿ[ê]X⁄›‹»›–ù\ﬁJHô]\õé¬àKúô]ô[ùYò][
+
+N¬à€€ú›ö[\»Hÿ]\í[XYŸQö[\—úõ€Q]Uò[úŸô\äKô]Uò[úŸô\äN¬àYà
+ö[\Àõ[ô›
+H¬àõ⁄Y\ÿY[Tõ€‹][T›‹ ö[\ N¬àô]\õé¬àBà€€ú›\õ»H^òX›[XYŸU\õ—úõ€Q]Uò[úŸô\äKô]Uò[úŸô\äN¬àYà
+\õÀõ[ô›
+H¬àõ⁄Y\ÿY[Tõ€‹][T›‹—úõ€U\õ \õ N¬àBàN¬Çà€€ú›[]U[Tõ€‹][T›»H\ﬁ[ò»
+›“Yà›ö[ô HOà¬àYà
+\›“Y
+Hô]\õé¬àŸ]›–ù\ﬁJùYJN¬àŸ]ÿ]ôQ\úõ‹äàäN¬àûH¬à€€ú›ô\»H]ÿZ]ô]⁄
+‘ëTó‘’‘◊—SUW–TW‘U¬àY]Ÿàî‘’ãàXY\úŒà»ê€€ù[ùU\Héàò\Xÿ][€ã⁄ú€€ààKàõŸNàî””ãú›ö[ô⁄YûJ»›◊⁄Yà›“YJKàJN¬à€€ú›^[ÿYH
+]ÿZ]ô\Àöú€€ä
+JH\»»\úõ‹èŒà›ö[ô»N¬àYà
+\ô\Àõ⁄ Hõ›»ô]»\úõ‹ä^[ÿYô\úõ‹àœ»ô\Àú›]\’^
+N¬à]ÿZ]ÿY[Tõ€‹][T›‹ 
+N¬àHÿ]⁄
+JH¬àŸ]ÿ]ôQ\úõ‹äH[ú›[òŸ[Ÿà\úõ‹à»KõY\‹ÿYŸHà∏.)x.&∏.(¯..x.&¯.a8.(x.b8.*∏.,¯.`8.(¯.a¯."äN¬àHö[ò[H¬àŸ]›–ù\ﬁJò[ŸJN¬àBàN¬Çà€€ú›‹][õ[ôU^⁄]€€\\ôHH
+
+HOà¬àŸ][õ[ôP€€\\ôQ[òXõY
+ùYJN¬à€€ú›⁄›[ŸY\[õ[ôU\⁄”[ôHH
+ò]”[ôNà›ö[ô Nàõ€€X[àOà¬à€€ú›[ôHHò]”[ôKùö[J
+N¬àYà
+[[ôJHô]\õàò[ŸN¬Çà€€ú›Y[ù[€ú»H[ôKõX]⁄
+– ÀŸ Hœ»◊N¬à€€ú›€‹ô€›[ùH[ôKú‹]
+◊ À Kôö[\äõ€€X[äKõ[ô›¬à äà8.&∏.(¯.(¯.%¯.,x.%8.`x.%¯.a¯. x."∏.-¯.b8.+H
+8.`8."∏.b8.&HHà H
+ã¬àYà
+Y[ù[€úÀõ[ô›èHà	âàY[ù[€úÀõ[ô›
+ààèH€‹ô€›[ù
+Hô]\õàò[ŸN¬àYà
+Y[ù[€úÀõ[ô›èHH	âà€‹ô€›[ùHäHô]\õàò[ŸN¬Çà äà8.&∏.(¯.(¯.%¯.,x.%8.*¯.,x.)¯.(¯.%ã¯.%¯.,8.`8.&∏.-x.(∏.&x.%¯.-x.b8.`x.&¯.,8.(x.,∏. x.,x.&∏. ∏.bx.+x.!8.)¯.,∏.(HSëH
+ã¬à€€ú›\’ZT]SZŸHH÷¯. Kx.+ó^ÃKﬂVÀW◊O◊ÃKKÀù\›
+[ôJN¬à€€ú›\’ôZX€T‹X’⁄Ÿ[àBà ëUìﬂì‘ïSëTüSVíQ”ﬂêSë—TüSPVï——UU’PìV◊◊ÀWO––Pü“SëTüìP“ﬂ“U_‘êV_‘ëV_êSüëPüPTüTüPV_ïSüïSUQﬂ—T–’ì’üP K⁄Kù\›
+à[ôBà
+N¬àYà
+\’ZT]SZŸH	âà\’ôZX€T‹X’⁄Ÿ[äHô]\õàò[ŸN¬à äà8.&∏.(¯.(¯.%¯.,x.%8.%¯.-x.b8.`8.&¯.a¯.&x.`8.)x. ∏.%¯.,8.`8.&∏.-x.(∏.&x.)x.bx.)¯.&H
+ã¬àYà
+◊ñÃNW^ÃüV¯. Kx.+ó^ÃKﬂVÀW◊O÷ÃNW^ÃKI⁄Kù\›
+[ôJJHô]\õàò[ŸN¬à äà8.&∏.(¯.(¯.%¯.,x.%⁄\‹⁄\»»íSà
+ã¬à€€ú›\–⁄\‹⁄\“Ÿ^]€‹ôH ⁄\‹⁄\ﬂö[ü8.`8.)x. ∏.%∏.,x.!ﬂ8.%x.,x.)¯.%∏.,x.! K⁄Kù\›
+[ôJN¬à€€ú›\”€ô’ö[ï⁄Ÿ[àH÷ÿK^åNKW^ÃLK⁄Kù\›
+[ôJN¬àYà
+\–⁄\‹⁄\“Ÿ^]€‹ô\”€ô’ö[ï⁄Ÿ[äHô]\õàò[ŸN¬Çà äà8."∏.-¯.b8.+K¯.`∏.&x.bx.%x.(8.,∏.*x.,∏.+x.,x.!¯. x.)8.*x.)x.+x.(∏.aà8.`8."∏.b8.&Hò[Z»
+ã¬àYà
+◊ñÿK^êKVóVÿK^êKVåNHÀW^ÃåüIÀù\›
+[ôJJHô]\õàò[ŸN¬Çàô]\õàùYN¬àN¬ÇàŸ][õ[ôR][\ à[õ[ôU^àú‹]
+óàäBàõX\
+
+[ôJHOà[ôKùö[J
+JBàôö[\ä⁄›[ŸY\[õ[ôU\⁄”[ôJBàõX\
+
+ò[YK[ô^
+HOà¬à€€ú›\Xÿ]HH][\Àú€€YJ
+€
+HOàõ‹õJ€õò[YJKö[ò€Y\ õ‹õJò[YJJHõ‹õJò[YJKö[ò€Y\ õ‹õJ€õò[YJJJN¬àô]\õà¬àYà	€‹ô\ãöYK[ô]ÀI⁄[ô^Xàò[YKà\Xÿ]KàŸ[X›YàY\Xÿ]Kà\‹⁄Y€ôYNàYò][[ùZŸP\‹⁄Y€ôYKà›]\Œà∏.`8."∏.a¯.!à\»][T›]\’ò[YKà[úŸ\ùYù\ïZYàSìSëW“Sî—Tï–QïTó—SëàN¬àJBà
+N¬àN¬Çà€€ú›‹][õ[ôU^ò]»H
+
+HOà¬àŸ][õ[ôP€€\\ôQ[òXõY
+ò[ŸJN¬àŸ][õ[ôR][\ à[õ[ôU^àú‹]
+óàäBàõX\
+
+[ôJHOà[ôKùö[J
+JBàôö[\äõ€€X[äBàõX\
+
+ò[YK[ô^
+HOà
+¬àYà	€‹ô\ãöYK\ò]ÀI⁄[ô^Xàò[YKà\Xÿ]Nàò[ŸKàŸ[X›YàùYKà\‹⁄Y€ôYNàYò][[ùZŸP\‹⁄Y€ôYKà›]\Œà∏.`8."∏.a¯.!à\»][T›]\’ò[YKà[úŸ\ùYù\ïZYàSìSëW“Sî—Tï–QïTó—SëàJJBà
+N¬àN¬Çà€€ú›ZP\‹⁄\›[õ[ôU^H\ﬁ[ò»
+
+HOà¬àYà
+Z[õ[ôU^ùö[J
+H[õ[ôPZPù\ﬁJHô]\õé¬àŸ][õ[ôPZPù\ﬁJùYJN¬àŸ][õ[ôSY\‹ÿYŸJàäN¬àûH¬à€€ú›ô\»H]ÿZ]ô]⁄
+ãÿ\K€K€‹ô\ãZ[ùZŸKÿZK\‹]ã¬àY]Ÿàî‘’ãàXY\úŒà»ê€€ù[ùU\Héàò\Xÿ][€ã⁄ú€€ààKàõŸNàî””ãú›ö[ô⁄YûJ¬à^à[õ[ôU^à^\›[ô◊⁄][\Œà][\ÀõX\
+
+äHOà›ö[ô ãõò[YHœ»àäKùö[J
+JKôö[\äõ€€X[äKàJKàJN¬à€€ú›^[ÿYH
+]ÿZ]ô\Àöú€€ä
+JH\»»\úõ‹èŒà›ö[ôŒ»[ô\œŒà›ö[ô÷◊HN¬àYà
+\ô\Àõ⁄ Hõ›»ô]»\úõ‹ä^[ÿYô\úõ‹àœ»ô\Àú›]\’^
+N¬à€€ú›[ô\»H\úò^Kö\–\úò^J^[ÿYõ[ô\ H»^[ÿYõ[ô\»à◊N¬àYà
+[ô\Àõ[ô›OOH
+H¬àŸ][õ[ôSY\‹ÿYŸJêRH8.a8.(x.b8.'∏.&∏.(¯.,∏.(∏. x.,∏.(¯.!¯.,∏.&x."8.,∏. x. ∏.bx.+x.!8.)¯.,∏.(x.&x.-x.bHäN¬àô]\õé¬àBàŸ][õ[ôU^
+[ô\Àöõ⁄[äóàäJN¬à äà8.%x.b8.+x.%8.bx.)¯.(à‹]
+»8.`8.%¯.-x.(∏.&∏. ∏.+x.!¯.`8.%8.-8.(x.`8.'∏.-¯.b8.+x.%¯.,»⁄X⁄ÿõﬁ8.`¯.*¯.bx.`8.)x.(à
+ã¬à]Y]YSZX‹õ›\⁄ 
+
+HOà‹][õ[ôU^⁄]€€\\ôJ
+JN¬àHÿ]⁄
+JH¬àŸ][õ[ôSY\‹ÿYŸJH[ú›[òŸ[Ÿà\úõ‹à»KõY\‹ÿYŸHàêRH8."∏.b8.)¯.(∏.`x.(∏. x.a8.(x.b8.*∏.,¯.`8.(¯.a¯."äN¬àHö[ò[H¬àŸ][õ[ôPZPù\ﬁJò[ŸJN¬àBàN¬Çà€€ú›ô[[›ôR[õ[ôR][HH
+Yà›ö[ô HOà¬àŸ][õ[ôR][\ 
+ô]äHOàô]ãôö[\ä
+][JHOà][KöYOOHY
+JN¬àN¬Çà€€ú›\]R[õ[ôR][HH
+àYà›ö[ôÀà]⁄à\ùX[X⁄œ[õ[ôQòYùõ›Àõò[YHàú›]\»àò\‹⁄Y€ôYHàúŸ[X›YèèÇà
+HOà¬àŸ][õ[ôR][\ 
+ô]äHOÇàô]ãõX\
+
+õ› HOà¬àYà
+õ›ÀöYOOHY
+Hô]\õàõ›Œ¬à€€ú›ô^ò[YHH]⁄õò[YHOOH[ôYö[ôY»]⁄õò[YHàõ›Àõò[YN¬à€€ú›ô^H»ããúõ›Àããú]⁄ò[YNàô^ò[YHN¬à€€ú›ö[[YYHô^ò[YKùö[J
+N¬à€€ú›\Xÿ]HBà[õ[ôP€€\\ôQ[òXõY	âÇàö[[YYõ[ô›à	âÇà][\Àú€€YJ
+€
+HOàõ‹õJ€õò[YJKö[ò€Y\ õ‹õJö[[YY
+JHõ‹õJö[[YY
+Kö[ò€Y\ õ‹õJ€õò[YJJJN¬à€€ú›Ÿ[X›YBà]⁄úŸ[X›YOOH[ôYö[ôYà»]⁄úŸ[X›Yàà]⁄õò[YHOOH[ôYö[ôYà»[õ[ôP€€\\ôQ[òXõYà»Y\Xÿ]Bààõ›ÀúŸ[X›Yààõ›ÀúŸ[X›Y¬àô]\õà»ããõô^\Xÿ]KŸ[X›YN¬àJBà
+N¬àN¬Çà€€ú›\⁄[\R[õ[ôR][HH
+[úŸ\ùYù\ïZYà›ö[ô»HSìSëW“Sî—Tï–QïTó—Së
+HOà¬àŸ][õ[ôR][\ 
+ô]äHOà¬àããúô]ãà¬àYà	€‹ô\ãöYK[X[ùX[I—]Kõõ› 
+_KI”X]úò[ô€J
+Kù‘›ö[ô ÕäKú€XŸJãJ_Xàò[YNààãà\Xÿ]Nàò[ŸKàŸ[X›YàùYKà\‹⁄Y€ôYNàYò][[ùZŸP\‹⁄Y€ôYKà›]\Œà∏.`8."∏.a¯.!à\»][T›]\’ò[YKà[úŸ\ùYù\ïZYàKàJN¬àN¬Çà äà8.`x.%¯.(¯. x.`x.%∏.)¯.)¯.b8.,∏.!¯.`¯.%x.bx.`x.%∏.)¯.(¯.,∏.(∏. x.,∏.(¯.%¯.-x.b8.*∏.,x.b8.!¯."8.,∏. x.&¯.,x.%8."¯.bx.,∏.(à
+ã¬à€€ú›‹[í[ùZŸP[ôY[\Tõ›»H
+Yù\í][UZYà›ö[ô HOà¬àŸ]⁄›–[][\ ùYJN¬àŸ]⁄›“[õ[ôR[ùZŸJùYJN¬à\⁄[\R[õ[ôR][JYù\í][UZY
+N¬àN¬Çà€€ú›Y[õ[ôR][\’”‹ô\àH\ﬁ[ò»
+
+HOà¬àYà
+Z[õ[ôR][\Àõ[ô›
+Hô]\õé¬à€€ú›€X[ôYH[õ[ôR][\¬àõX\
+
+][JHOà
+»ããö][Kò[YNà][Kõò[YKùö[J
+HJJBàôö[\ä
+][JHOà][Kõò[YKõ[ô›à	âà][KúŸ[X›Y
+N¬àYà
+X€X[ôYõ[ô›
+Hô]\õé¬àûH¬àŸ][õ[ôTÿ]ö[ô ùYJN¬àŸ][õ[ôSY\‹ÿYŸJàäN¬à€€ú›ô\»H]ÿZ]ô]⁄
+ãÿ\K€K€‹ô\ãZ[ùZŸK‹ÿ]ôHã¬àY]Ÿàî‘’ãàXY\úŒà»ê€€ù[ùU\Héàò\Xÿ][€ã⁄ú€€ààKàõŸNàî””ãú›ö[ô⁄YûJ¬àÿ\ó‹õ›◊⁄Yà‹ô\ãòÿ\îõ›“Yàÿ\ó⁄Yà‹ô\ãòÿ\íYàù[‹]Nà‹ô\ãôù[]Kàÿ\ó€Xô[à‹ô\ãòÿ\ãà][\Œà€X[ôYõX\
+
+][JHOà
+¬àXô[à][Kõò[YKà›]\Œà][Kú›]\Àà\‹⁄Y€ôYW‹›Yôéà][Kò\‹⁄Y€ôYHù[àJJKàJKàJN¬à€€ú›^[ÿYH
+]ÿZ]ô\Àöú€€ä
+JH\»¬à\úõ‹èŒà›ö[ôŒ¬à‹ô\ó›\⁄◊⁄YŒà›ö[ôŒ¬àÿ]ôYŒà\úò^O»‹ô\ó⁄][W⁄Yà›ö[ôŒ»Xô[à›ö[ôŒ»Xô[Ÿ[éà›ö[ô»ù[Oé¬àN¬àYà
+\ô\Àõ⁄ Hõ›»ô]»\úõ‹ä^[ÿYô\úõ‹àœ»ô\Àú›]\’^
+N¬à€€ú›\⁄“YH›ö[ô ^[ÿYõ‹ô\ó›\⁄◊⁄Yœ»àäKùö[J
+Hù[¬à€€ú›ÿ]ôY\›H\úò^Kö\–\úò^J^[ÿYúÿ]ôY
+H»^[ÿYúÿ]ôYàù[¬àŸ]][\ 
+ô]äHOà¬à€€ú›ô]ïZY»Hô]»Ÿ]
+ô]ãõX\
+
+äHOàãùZY
+JN¬à€€ú›Y\ôŸYHY\ôŸR[õ[ôP€X[ôY[ù“][Tõ›‹ ô]ã€X[ôY\⁄“Yÿ]ôY\›
+N¬àõ‹à
+€€ú›õ›»ŸàY\ôŸY
+H¬àYà
+\ô]ïZYÀö\ õ›ÀùZY
+JH¬à\›\ú⁄\›Y⁄Y–ûUZYôYãò›\úô[ù‹õ›ÀùZYHH‹ô\í][T\ú⁄\›⁄Y€ò]\ôJõ› N¬àBàBàô]\õàY\ôŸY¬àJN¬àŸ][õ[ôR][\ ◊JN¬àŸ][õ[ôU^
+àäN¬àŸ]⁄›“[õ[ôR[ùZŸJò[ŸJN¬àŸ]⁄›–[][\ ò[ŸJN¬àõ›]\ãúôYúô\⁄
+
+N¬àHÿ]⁄
+\úõ‹äH¬àŸ][õ[ôSY\‹ÿYŸJ\úõ‹à[ú›[òŸ[Ÿà\úõ‹à»\úõ‹ãõY\‹ÿYŸHà∏.&∏.,x.&x.%¯.-∏. x.a8.(x.b8.*∏.,¯.`8.(¯.a¯."äN¬àHö[ò[H¬àŸ][õ[ôTÿ]ö[ô ò[ŸJN¬àBàN¬Çà äà8.&∏.,x.&x.%¯.-∏. x.`x.!8.b8.`x.%∏.)¯.`8.%8.-x.(∏.)¯."8.,∏. x.'¯.+x.(¯.c8.(x.%¯.-x.b8.`8.&¯.-8.%8."8.,∏. x.&¯.,x.%8."¯.bx.,∏.(à8†%8.a8.(x.b8.%x.bx.+x.!¯.(¯.+x.&¯..8.b8.(x.(¯.)¯.(x.%8.bx.,∏.&x.)x.b8.,∏.!»
+ã¬à€€ú›ÿ]ôT⁄[ô€R[õ[ôQòYùõ›»H\ﬁ[ò»
+õ›Œà[õ[ôQòYùõ› HOà¬à€€ú›ò[YHHõ›Àõò[YKùö[J
+N¬àYà
+[ò[YJH¬àŸ][õ[ôSY\‹ÿYŸJZS[ô»OOHô[àà»ë[ù\àH\⁄»ò[YHôYõ‹ôHÿ]ö[ôÀààà∏. x.(¯.+x. x."∏.-¯.b8.+x.!¯.,∏.&x. x.b8.+x.&x. x.%8.&∏.,x.&x.%¯.-∏. HäN¬àô]\õé¬àBà€€ú›€X[ôYàX⁄œ[õ[ôQòYùõ›ÀöYàõò[YHàú›]\»àò\‹⁄Y€ôYHàö[úŸ\ùYù\ïZYèñ◊HH¬à»ããúõ›Àò[YHKàN¬àûH¬àŸ][õ[ôTõ›‘ÿ]ö[ô“Y
+õ›ÀöY
+N¬àŸ][õ[ôSY\‹ÿYŸJàäN¬à€€ú›ô\»H]ÿZ]ô]⁄
+ãÿ\K€K€‹ô\ãZ[ùZŸK‹ÿ]ôHã¬àY]Ÿàî‘’ãàXY\úŒà»ê€€ù[ùU\Héàò\Xÿ][€ã⁄ú€€ààKàõŸNàî””ãú›ö[ô⁄YûJ¬àÿ\ó‹õ›◊⁄Yà‹ô\ãòÿ\îõ›“Yàÿ\ó⁄Yà‹ô\ãòÿ\íYàù[‹]Nà‹ô\ãôù[]Kàÿ\ó€Xô[à‹ô\ãòÿ\ãà][\Œà€X[ôYõX\
+
+][JHOà
+¬àXô[à][Kõò[YKà›]\Œà][Kú›]\Àà\‹⁄Y€ôYW‹›Yôéà][Kò\‹⁄Y€ôYHù[àJJKàJKàJN¬à€€ú›^[ÿYH
+]ÿZ]ô\Àöú€€ä
+JH\»¬à\úõ‹èŒà›ö[ôŒ¬à‹ô\ó›\⁄◊⁄YŒà›ö[ôŒ¬àÿ]ôYŒà\úò^O»‹ô\ó⁄][W⁄Yà›ö[ôŒ»Xô[à›ö[ôŒ»Xô[Ÿ[éà›ö[ô»ù[Oé¬àN¬àYà
+\ô\Àõ⁄ Hõ›»ô]»\úõ‹ä^[ÿYô\úõ‹àœ»ô\Àú›]\’^
+N¬à€€ú›\⁄“YH›ö[ô ^[ÿYõ‹ô\ó›\⁄◊⁄Yœ»àäKùö[J
+Hù[¬à€€ú›ÿ]ôY\›H\úò^Kö\–\úò^J^[ÿYúÿ]ôY
+H»^[ÿYúÿ]ôYàù[¬àŸ]][\ 
+ô]äHOà¬à€€ú›ô]ïZY»Hô]»Ÿ]
+ô]ãõX\
+
+äHOàãùZY
+JN¬à€€ú›Y\ôŸYHY\ôŸR[õ[ôP€X[ôY[ù“][Tõ›‹ ô]ã€X[ôY\⁄“Yÿ]ôY\›
+N¬àõ‹à
+€€ú›àŸàY\ôŸY
+H¬àYà
+\ô]ïZYÀö\ ãùZY
+JH¬à\›\ú⁄\›Y⁄Y–ûUZYôYãò›\úô[ù‹ãùZYHH‹ô\í][T\ú⁄\›⁄Y€ò]\ôJäN¬àBàBàô]\õàY\ôŸY¬àJN¬àŸ][õ[ôR][\ 
+ô]äHOà¬à€€ú›ô^Hô]ãôö[\ä
+äHOàãöYOOHõ›ÀöY
+N¬àYà
+ô^õ[ô›OOH
+H¬àŸ]⁄›“[õ[ôR[ùZŸJò[ŸJN¬àŸ]⁄›–[][\ ò[ŸJN¬àBàô]\õàô^¬àJN¬àõ›]\ãúôYúô\⁄
+
+N¬àHÿ]⁄
+\úõ‹äH¬àŸ][õ[ôSY\‹ÿYŸJ\úõ‹à[ú›[òŸ[Ÿà\úõ‹à»\úõ‹ãõY\‹ÿYŸHà∏.&∏.,x.&x.%¯.-∏. x.a8.(x.b8.*∏.,¯.`8.(¯.a¯."äN¬àHö[ò[H¬àŸ][õ[ôTõ›‘ÿ]ö[ô“Y
+ù[
+N¬àBàN¬Çà€€ú›\‹⁄Y€ôYTŸ[X›‹[€ú»H
+\‹⁄Y€ôYNà›ö[ô HOà¬à€€ú›»Hô]»Ÿ]›ö[ôœä
+N¬àõ‹à
+€€ú›àŸà›Yôì‹[€ú H¬à€€ú›H›ö[ô äKùö[J
+N¬àYà
+
+HÀòY
+
+N¬àBà€€ú›HH›ö[ô \‹⁄Y€ôYHœ»àäKùö[J
+N¬àYà
+JHÀòY
+JN¬àô]\õà\úò^Kôúõ€J Kú€‹ù
+
+JHOàõÿÿ[P€€\\ôJKô[àäJN¬àN¬Çà€€ú›[ôQ[]R][HH\ﬁ[ò»
+][Nà‹ô\í][Tõ› HOà¬àYà
+\[Ÿà⁄[ô›»OOHù[ôYö[ôYà	âà]⁄[ô›Àò€€ôö\õJ∏.)x.&∏.(¯.,∏.(∏. x.,∏.(¯.&x.-x.bO»äJHô]\õé¬à€‹ŸT›⁄\Tõ›‹ 
+N¬à€X\ìò[YQXõ›[òŸJ][KùZY
+N¬à€X\ìõ›QXõ›[òŸJ][KùZY
+N¬àYà
+õ›S‹[ïZYOOH][KùZY
+HŸ]õ›S‹[ïZY
+ù[
+N¬àYà
+Z][KöY
+H¬àŸ]][\ 
+ô]äHOàô]ãôö[\ä
+äHOàãùZYOOH][KùZY
+JN¬àô]\õé¬àBàŸ]ÿ]ö[ô“][UZY
+][KùZY
+N¬àŸ]ÿ]ôQ\úõ‹äàäN¬àûH¬à€€ú›ô\»H]ÿZ]ô]⁄
+ãÿ\K€K€‹ô\ãZ][\ÀŸ[]Hã¬àY]Ÿàî‘’ãàXY\úŒà»ê€€ù[ùU\Héàò\Xÿ][€ã⁄ú€€ààKàõŸNàî””ãú›ö[ô⁄YûJ¬à‹ô\ó⁄][W⁄Yà][KöYà‹ô\ó›\⁄◊⁄Yà][Kõ‹ô\ï\⁄“Yœ»ù[àÿ\ó‹õ›◊⁄Yà‹ô\ãòÿ\îõ›“Yàÿ\ó⁄Yà‹ô\ãòÿ\íYà\]YÿûNàõ[ÿö[KXÿ\ôãàJKàJN¬à€€ú›^[ÿYH
+]ÿZ]ô\Àöú€€ä
+JH\»»\úõ‹èŒà›ö[ô»N¬àYà
+\ô\Àõ⁄ Hõ›»ô]»\úõ‹ä^[ÿYô\úõ‹àœ»ô\Àú›]\’^
+N¬àŸ]][\ 
+ô]äHOàô]ãôö[\ä
+äHOàãùZYOOH][KùZY
+JN¬àõ›]\ãúôYúô\⁄
+
+N¬àHÿ]⁄
+JH¬àŸ]ÿ]ôQ\úõ‹äH[ú›[òŸ[Ÿà\úõ‹à»KõY\‹ÿYŸHà∏.)x.&∏.a8.(x.b8.*∏.,¯.`8.(¯.a¯."äN¬àHö[ò[H¬àŸ]ÿ]ö[ô“][UZY
+
+›\äHOà
+›\àOOH][KùZY»ù[à›\äJN¬àBàN¬Çà€€ú›€îõ›‘⁄[ù\ë›€àH
+NàôXX›î⁄[ù\ë]ô[ùZYà›ö[ô HOà¬àYà
+Kòù]€àOOH
+Hô]\õé¬à€€ú›HKù\ôŸ]¬àYà
+à[ú›[òŸ[ŸàS[ú][[Y[ùà[ú›[òŸ[ŸàSŸ[X›[[Y[ùà[ú›[òŸ[ŸàS^\ôXQ[[Y[ùà[ú›[òŸ[ŸàS‹[€ë[[Y[ùà[ú›[òŸ[ŸàSù]€ë[[Y[ùà
+H¬àô]\õé¬àBàYà
+[ú›[òŸ[ŸàS[[Y[ù	âàò€‹Ÿ\›
+ñŸ]K[‹ô\ãZ][K[ò[YK\ô]öY]◊HäJHô]\õé¬à€€ú›ò]»Hõ›‘›⁄\TôYãò›\úô[ù›ZYHœ»¬à€€ú›ò\ŸQúõ€T›]HHX]õZ[äX]õX^
+T’“TW‘ì’◊”Qï”‘Só‘ò] JN¬àõ›‘›⁄\QŸ\›\ôTôYãò›\úô[ùH¬àZYà›\ùàKò€Y[ùà›\ùNàKò€Y[ùKàò\ŸNàò\ŸQúõ€T›]Kà\›ŸôúŸ]àò\ŸQúõ€T›]Kà›\ùY‹[éàò\ŸQúõ€T›]Hà\ŸNàú[ô[ô»ãàN¬àN¬Çà€€ú›€îõ›‘⁄[ù\ì[›ôHH
+NàôXX›î⁄[ù\ë]ô[ùZYà›ö[ô HOà¬à€€ú›»Hõ›‘›⁄\QŸ\›\ôTôYãò›\úô[ù¬àYà
+Y»ÀùZYOOHZY
+Hô]\õé¬ÇàYà
+Àú\ŸHOOHú[ô[ô»äH¬à€€ú›HKò€Y[ùHÀú›\ù¬à€€ú›HHKò€Y[ùHHÀú›6Îû˝∂âûÀk∫wµÁZ[ô N¬àô]\õàÿ[S⁄»	âàÿ[T›]\”⁄»	âàôZX€S⁄Œ¬àJN¬à]òXÿ[ù€›[ùH¬à][Ÿ[YX\ë[\HH¬à€€ú›[Ÿ[YX\ìX\Hô]»X\›ö[ôÀ»Xô[à›ö[ôŒ»€›[ùàù[Xô\àOä
+N¬àõ‹à
+€€ú›‹ô\àŸàò\ŸQö[\ôY
+H¬àYà
+‹ô\ãúÿ[T›]\»OOH∏.)¯.b8.,∏.!»äH€€ù[ùYN¬àòXÿ[ù€›[ù
+œHN¬à€€ú›^HH›ö[ô ‹ô\ãõ[Ÿ[YX\àœ»àäKùö[J
+N¬àYà
+[^JH[Ÿ[YX\ë[\H
+œHN¬à[ŸH¬à€€ú›»H€€[Ÿ[YX\ë‹õ›\Ÿ^J^JN¬à€€ú›ô]àH[Ÿ[YX\ìX\ôŸ]
+ N¬àYà
+\ô]äH[Ÿ[YX\ìX\úŸ]
+À»Xô[à^K€›[ùàHJN¬à[ŸHô]ãò€›[ù
+œHN¬àBàBà€€ú›[Ÿ[YX\îõ›[ôŒà»Ÿ^Nà›ö[ôŒ»Xô[à›ö[ôŒ»⁄Ÿ[éà›ö[ôŒ»€›[ùàù[Xô\àV◊HH◊N¬à[Ÿ[YX\ìX\ôõ‹ëXX⁄
+
+ãŸ^JHOà¬à[Ÿ[YX\îõ›[ôÀú\⁄
+»Ÿ^KXô[àãõXô[⁄Ÿ[éàòXÿ[ùÿ[S[Ÿ[YX\ï⁄Ÿ[ëúõ€RŸ^JŸ^JK€›[ùàãò€›[ùJN¬àJN¬à[Ÿ[YX\îõ›[ôÀú€‹ù
+
+KäHOàãò€›[ùHKò€›[ùKõXô[õÿÿ[P€€\\ôJãõXô[ùã»Ÿ[ú⁄]]ö]Nàòò\ŸHàJJN¬àô]\õà»òXÿ[ù€›[ù[Ÿ[YX\ë[\K[Ÿ[YX\îõ›[ô»N¬àK€X\Y‹ô\úÀö[\ö[ô‘ÿ[Qö[\úÀö[\ö[ô‘ÿ[T›]\—ö[\úÀö[\ö[ô’ôZX€TŸX\ò⁄õ‹ëö[\ö[ô◊JN¬Çà€€ú›€€⁄\Y[PX›]ôHH\ŸSY[[ 
+
+HOà¬àõ‹à
+€€ú›àŸà\úò^Kôúõ€J›Yôëö[\ú JHYà
+\‘€€⁄\Y›Yôëö[\ääJHô]\õàùYN¬àô]\õàò[ŸN¬àK‹›Yôëö[\ú◊JN¬à€€ú›€€[Ÿ[YX\ë[PX›]ôHH\ŸSY[[ 
+
+HOà¬àõ‹à
+€€ú›àŸà\úò^Kôúõ€J›Yôëö[\ú JHYà
+\‘€€[Ÿ[YX\î›Yôëö[\ääJHô]\õàùYN¬àô]\õàò[ŸN¬àK‹›Yôëö[\ú◊JN¬à€€ú›òXÿ[ùÿ[S[Ÿ[YX\ë[PX›]ôHH\ŸSY[[ 
+
+HOà¬àõ‹à
+€€ú›àŸà\úò^Kôúõ€J›Yôëö[\ú JHYà
+\’òXÿ[ùÿ[S[Ÿ[YX\î›Yôëö[\ääJHô]\õàùYN¬àô]\õàò[ŸN¬àK‹›Yôëö[\ú◊JN¬Çà äà8."∏.-8.&¯. x.(¯.+x.!Œàõ‹›\à8."8.,∏. x.`8."¯.-8.(¯.c8.'¯.`8.)¯.+x.(¯.c
+»\‹⁄Y€ôYH8."8.,∏. x. ∏.bx.+x.(x..x.)x.%¯.-x.b8.(∏.,x.!¯.a8.(x.b8.+x.(∏..x.b8.`¯.&Hõ‹›\à8†%8.a8.(x.b8.`¯.*¯.bx.*¯.&x.bx.,∏.`8.)¯.a¯.&∏.)¯.b8.,∏.!¯.`8.(x.-¯.b8.+x.(∏.,x.!¯.a8.(x.b8.`8.!8.(∏.`8.&¯.-8.%8."8.,x.%8. x.,∏.(¯.'∏.&x.,x. x.!¯.,∏.&H
+ã¬à€€ú››Yôëö[\ê⁄\ò[Y\»H\ŸSY[[ 
+
+HOà¬à€€ú›ŸY[àHô]»Ÿ]›ö[ôœä
+N¬à€€ú››]à›ö[ô÷◊HH◊N¬à€€ú›\⁄H
+ò]Œà›ö[ô HOà¬à€€ú›Hò]Àùö[J
+N¬àYà
+]ŸY[ãö\ 
+H\‘›Yôîõ‹›\ìò[YQ^€YY
+
+JHô]\õé¬àŸY[ãòY
+
+N¬à›]ú\⁄
+
+N¬àN¬àõ‹à
+€€ú›àŸà›Yôîõ‹›\äH\⁄
+äN¬à€€ú›úõ€Q]HHÿöôX›öŸ^\ ›Yôê\‹⁄Y€ôYR][P€›[ùÀòûP\‹⁄Y€ôYJN¬àúõ€Q]Kú€‹ù
+
+KäHOà¬à€€ú›ÿHH›Yôê\‹⁄Y€ôYR][P€›[ùÀòûP\‹⁄Y€ôYVÿWHœ»¬à€€ú›ÿàH›Yôê\‹⁄Y€ôYR][P€›[ùÀòûP\‹⁄Y€ôYVÿóHœ»¬àYà
+ÿàOOHÿJHô]\õàÿàHÿN¬àô]\õàKõÿÿ[P€€\\ôJãô[àã»Ÿ[ú⁄]]ö]Nàòò\ŸHàJN¬àJN¬àõ‹à
+€€ú›àŸàúõ€Q]JH\⁄
+äN¬àô]\õà›]¬àK‹›Yôîõ‹›\ã›Yôê\‹⁄Y€ôYR][P€›[ù◊JN¬Çà äà8."∏.-8.&¯.'∏.&x.,x. x.!¯.,∏.&x.%¯.-x.b8.`x.*∏.%8.!»8†%8."¯.b8.+x.&x.`8.(x.-¯.b8.+x."8.,¯.&x.)¯.&x.(¯.,∏.(∏. x.,∏.(»H
+ã¬à€€ú››Yôëö[\ê⁄\ò[Y\’ö\⁄XõHH\ŸSY[[ à
+
+HOà›Yôëö[\ê⁄\ò[Y\Àôö[\ä
+ HOà
+›Yôê\‹⁄Y€ôYR][P€›[ùÀòûP\‹⁄Y€ôYV‹◊Hœ»
+Hà
+Kà‹›Yôëö[\ê⁄\ò[Y\À›Yôê\‹⁄Y€ôYR][P€›[ù◊Bà
+N¬Çà€€ú›õ\⁄][T›]\‘ôYú’‘Ÿ\ùô\àHôXX›ù\ŸPÿ[òX⁄ à\ﬁ[ò»
+õ‹›\éà][T›]\’ò[YV◊KXô[Œà][T›]\”Xô[X\€X⁄Y\‘‹\úŸNàôX€‹ô›ö[ôÀ[ö€õ›€èäHOà¬àûH¬à€€ú›ô\»H]ÿZ]ô]⁄
+USW‘’UT◊‘ëQî◊–TW‘U¬àY]ŸàîUãàXY\úŒà»ê€€ù[ùU\Héàò\Xÿ][€ã⁄ú€€ààKàõŸNàî””ãú›ö[ô⁄YûJ»õ‹›\ãXô[À€X⁄Y\Œà€X⁄Y\‘‹\úŸHJKàÿX⁄NàõõÀ\›‹ôHãàJN¬àô]\õàô\Àõ⁄Œ¬àHÿ]⁄¬àô]\õàò[ŸN¬àBàKà◊Bà
+N¬Çà€€ú›\ú⁄\›][T›]\‘ôYú»HôXX›ù\ŸPÿ[òX⁄ à
+õ‹›\éà][T›]\’ò[YV◊KXô[Œà][T›]\”Xô[X\€X⁄Y\”õ‹õNà][T›]\‘€X⁄Y\”õ‹õX[^ôY
+HOà¬à€€ú›€X⁄Y\‘‹\úŸHHõ‹õX[^ôY][T€X⁄Y\’‘›‹ôYú€€ä€X⁄Y\”õ‹õJN¬à‹ö]R][T›]\‘õ‹›\ï‘›‹òYŸJõ‹›\äN¬à‹ö]R][T›]\”Xô[’‘›‹òYŸJXô[ N¬à‹ö]R][T›]\‘€X⁄Y\‘‹\úŸU‘›‹òYŸJ€X⁄Y\‘‹\úŸJN¬àõ⁄Yõ\⁄][T›]\‘ôYú’‘Ÿ\ùô\äõ‹›\ãXô[À€X⁄Y\‘‹\úŸJN¬àKàŸõ\⁄][T›]\‘ôYú’‘Ÿ\ùô\óBà
+N¬Çà€€ú›õ\⁄›Yôîõ‹›\ï‘Ÿ\ùô\àHôXX›ù\ŸPÿ[òX⁄ à\ﬁ[ò»
+ò[Y\Œà›ö[ô÷◊Kÿ[Wÿ\‹⁄Y€ôY\ŒàôX€‹ô›ö[ôÀ›ö[ôœäHOà¬àûH¬à€€ú›ô\»H]ÿZ]ô]⁄
+’Qëó‘ì‘’Tó–TW‘U¬àY]ŸàîUãàXY\úŒà»ê€€ù[ùU\Héàò\Xÿ][€ã⁄ú€€ààKàõŸNàî””ãú›ö[ô⁄YûJ»ò[Y\Àÿ[Wÿ\‹⁄Y€ôY\»JKàÿX⁄NàõõÀ\›‹ôHãàJN¬àô]\õàô\Àõ⁄Œ¬àHÿ]⁄¬àô]\õàò[ŸN¬àBàKà◊Bà
+N¬Çà€€ú›ÿ⁄Y[T›Yôîõ‹›\î\ú⁄\›HôXX›ù\ŸPÿ[òX⁄ à
+ò[Y\Œà›ö[ô÷◊Kÿ[Wÿ\‹⁄Y€ôY\ŒàôX€‹ô›ö[ôÀ›ö[ôœäHOà¬à‹ö]T›Yôîõ‹›\ï‘›‹òYŸJò[Y\ N¬à‹ö]Tÿ[P\‹⁄Y€ôY\’‘›‹òYŸJÿ[Wÿ\‹⁄Y€ôY\ N¬àYà
+›Yôîõ‹›\î\ú⁄\›[Y\îôYãò›\úô[ù
+H€X\ï[Y[›]
+›Yôîõ‹›\î\ú⁄\›[Y\îôYãò›\úô[ù
+N¬à›Yôîõ‹›\î\ú⁄\›[Y\îôYãò›\úô[ùHŸ][Y[›]
+
+
+HOà¬à›Yôîõ‹›\î\ú⁄\›[Y\îôYãò›\úô[ùHù[¬àõ⁄Yõ\⁄›Yôîõ‹›\ï‘Ÿ\ùô\äò[Y\Àÿ[Wÿ\‹⁄Y€ôY\ N¬àKL
+N¬àKàŸõ\⁄›Yôîõ‹›\ï‘Ÿ\ùô\óBà
+N¬Çà\ŸS^[›]YôôX›
+
+
+HOà¬à›Yôîõ‹›\îôYãò›\úô[ùH›Yôîõ‹›\é¬àK‹›Yôîõ‹›\óJN¬Çà\ŸS^[›]YôôX›
+
+
+HOà¬àÿ[P\‹⁄Y€ôY\‘ôYãò›\úô[ùHÿ[P\‹⁄Y€ôY\Œ¬àK‹ÿ[P\‹⁄Y€ôY\◊JN¬Çà\ŸQYôôX›
+
+
+HOà¬à€€ú›X»Hô]»Xõ‹ù€€ùõ€\ä
+N¬à]ÿ[òŸ[YHò[ŸN¬Çà
+\ﬁ[ò»
+
+HOà¬à€€ú›ÿÿ[HôXY›Yôîõ‹›\ëúõ€T›‹òYŸJ
+N¬à€€ú›ÿÿ[\‹⁄Y€ôY\»HôXYÿ[P\‹⁄Y€ôY\—úõ€T›‹òYŸJ
+N¬àûH¬à€€ú›ô\»H]ÿZ]ô]⁄
+’Qëó‘ì‘’Tó–TW‘U»ÿX⁄NàõõÀ\›‹ôHã⁄Y€ò[àXÀú⁄Y€ò[JN¬à€€ú›ú€€àH
+]ÿZ]ô\Àöú€€ä
+JH\»¬àò[Y\œŒà[ö€õ›€é¬àÿ[Wÿ\‹⁄Y€ôY\œŒà[ö€õ›€é¬à\úõ‹èŒà›ö[ôŒ¬àN¬àYà
+ÿ[òŸ[Y
+Hô]\õé¬à€€ú›Ÿ\ùô\ìò[Y\»Hõ‹õX[^ôT›Yôîõ‹›\ìò[Y\ ú€€ãõò[Y\ N¬à€€ú›Ÿ\ùô\ê\‹⁄Y€ôY\”X\Hõ‹õX[^ôTÿ[P\‹⁄Y€ôY\”X\
+ú€€ãúÿ[Wÿ\‹⁄Y€ôY\ N¬à€€ú›Ÿ\ùô\í\–\‹⁄Y€ôY\»HÿöôX›öŸ^\ Ÿ\ùô\ê\‹⁄Y€ôY\”X\
+Kõ[ô›à¬à€€ú›Y\ôŸY\‹⁄Y€ôY\»H
+àŸ\ùô\í\–\‹⁄Y€ôY\»»Ÿ\ùô\ê\‹⁄Y€ôY\”X\àõ‹õX[^ôTÿ[P\‹⁄Y€ôY\”X\
+ÿÿ[\‹⁄Y€ôY\ Bà
+H\»ôX€‹ô›ö[ôÀ›ö[ôœé¬ÇàYà
+\ô\Àõ⁄ H¬àYà
+ô\Àú›]\»OOHL H¬àŸ]›Yôîõ‹›\äÿÿ[
+N¬àŸ]ÿ[P\‹⁄Y€ôY\ õ‹õX[^ôTÿ[P\‹⁄Y€ôY\”X\
+ÿÿ[\‹⁄Y€ôY\ H\»ôX€‹ô›ö[ôÀ›ö[ôœäN¬àô]\õé¬àBàŸ]›Yôîõ‹›\äÿÿ[õ[ô›»ÿÿ[àŸ\ùô\ìò[Y\ N¬àŸ]ÿ[P\‹⁄Y€ôY\ à
+ÿöôX›öŸ^\ ÿÿ[\‹⁄Y€ôY\ Kõ[ô›àà»õ‹õX[^ôTÿ[P\‹⁄Y€ôY\”X\
+ÿÿ[\‹⁄Y€ôY\ BààŸ\ùô\í\–\‹⁄Y€ôY\¬à»Ÿ\ùô\ê\‹⁄Y€ôY\”X\ààﬂJH\»ôX€‹ô›ö[ôÀ›ö[ôœÇà
+N¬àô]\õé¬àBÇàYà
+Ÿ\ùô\ìò[Y\Àõ[ô›OOH	âàÿÿ[õ[ô›à
+H¬à€€ú›ŸYY\‹⁄Y€ôY\»Hõ‹õX[^ôTÿ[P\‹⁄Y€ôY\”X\
+ÿÿ[\‹⁄Y€ôY\ H\»ôX€‹ô›ö[ôÀ›ö[ôœé¬àûH¬à]ÿZ]ô]⁄
+’Qëó‘ì‘’Tó–TW‘U¬àY]ŸàîUãàXY\úŒà»ê€€ù[ùU\Héàò\Xÿ][€ã⁄ú€€ààKàõŸNàî””ãú›ö[ô⁄YûJ»ò[Y\Œàÿÿ[ÿ[Wÿ\‹⁄Y€ôY\ŒàŸYY\‹⁄Y€ôY\»JKàÿX⁄NàõõÀ\›‹ôHãà⁄Y€ò[àXÀú⁄Y€ò[àJN¬àHÿ]⁄¬à àY€õ‹ôH
+ã¬àBàYà
+Xÿ[òŸ[Y
+H¬àŸ]›Yôîõ‹›\äÿÿ[
+N¬àŸ]ÿ[P\‹⁄Y€ôY\ ŸYY\‹⁄Y€ôY\ N¬à‹ö]T›Yôîõ‹›\ï‘›‹òYŸJÿÿ[
+N¬à‹ö]Tÿ[P\‹⁄Y€ôY\’‘›‹òYŸJŸYY\‹⁄Y€ôY\ N¬àBàô]\õé¬àBÇàYà
+Xÿ[òŸ[Y
+H¬àŸ]›Yôîõ‹›\äŸ\ùô\ìò[Y\ N¬àŸ]ÿ[P\‹⁄Y€ôY\ Y\ôŸY\‹⁄Y€ôY\ N¬à‹ö]T›Yôîõ‹›\ï‘›‹òYŸJŸ\ùô\ìò[Y\ N¬à‹ö]Tÿ[P\‹⁄Y€ôY\’‘›‹òYŸJY\ôŸY\‹⁄Y€ôY\ N¬ÇàYà
+àŸ\ùô\ìò[Y\Àõ[ô›à	âÇà\Ÿ\ùô\í\–\‹⁄Y€ôY\»	âÇàÿöôX›öŸ^\ õ‹õX[^ôTÿ[P\‹⁄Y€ôY\”X\
+ÿÿ[\‹⁄Y€ôY\ JKõ[ô›àà
+H¬àûH¬à]ÿZ]ô]⁄
+’Qëó‘ì‘’Tó–TW‘U¬àY]ŸàîUãàXY\úŒà»ê€€ù[ùU\Héàò\Xÿ][€ã⁄ú€€ààKàõŸNàî””ãú›ö[ô⁄YûJ»ò[Y\ŒàŸ\ùô\ìò[Y\Àÿ[Wÿ\‹⁄Y€ôY\ŒàY\ôŸY\‹⁄Y€ôY\»JKàÿX⁄NàõõÀ\›‹ôHãà⁄Y€ò[àXÀú⁄Y€ò[àJN¬àHÿ]⁄¬à àY€õ‹ôH
+ã¬àBàBàBàHÿ]⁄¬àYà
+Xÿ[òŸ[Y
+H¬àŸ]›Yôîõ‹›\äôXY›Yôîõ‹›\ëúõ€T›‹òYŸJ
+JN¬àŸ]ÿ[P\‹⁄Y€ôY\ ôXYÿ[P\‹⁄Y€ôY\—úõ€T›‹òYŸJ
+JN¬àBàBàJJ
+N¬Çàô]\õà
+
+HOà¬àÿ[òŸ[YHùYN¬àXÀòXõ‹ù
+
+N¬àN¬àK◊JN¬Çà\ŸQYôôX›
+
+
+HOà¬à€€ú›X»Hô]»Xõ‹ù€€ùõ€\ä
+N¬à]ÿ[òŸ[YHò[ŸN¬Çà
+\ﬁ[ò»
+
+HOà¬à€€ú›ÿÿ[õ‹›\àHôXY][T›]\‘õ‹›\ëúõ€T›‹òYŸJ
+N¬à€€ú›ÿÿ[Xô[»HôXY][T›]\”Xô[—úõ€T›‹òYŸJ
+N¬à€€ú›ÿÿ[àHôXY][T›]\‘€X⁄Y\—úõ€T›‹òYŸSõ‹õX[^ôY
+
+Hœ»Yò][][T›]\‘€X⁄Y\”õ‹õX[^ôY
+
+N¬à€€ú›ÿÿ[î‹\úŸHHõ‹õX[^ôY][T€X⁄Y\’‘›‹ôYú€€äÿÿ[äN¬àûH¬à€€ú›ô\»H]ÿZ]ô]⁄
+USW‘’UT◊‘ëQî◊–TW‘U»ÿX⁄NàõõÀ\›‹ôHã⁄Y€ò[àXÀú⁄Y€ò[JN¬à€€ú›ú€€àH
+]ÿZ]ô\Àöú€€ä
+JH\»»õ‹›\èŒà[ö€õ›€é»Xô[œŒà[ö€õ›€é»€X⁄Y\œŒà[ö€õ›€àN¬àYà
+ÿ[òŸ[Y
+Hô]\õé¬Çà€€ú›Ÿ\ùô\îõ‹›\àHõ‹õX[^ôR][T›]\‘õ‹›\äú€€ãúõ‹›\äN¬à€€ú›Y\ôŸYõ‹›\àHŸ\ùô\îõ‹›\é¬à€€ú›Ÿ\ùô\ìXô[»Hõ‹õX[^ôR][T›]\”Xô[ ú€€ãõXô[ N¬à€€ú›Ÿ\ùô\îàHõ‹õX[^ôR][T›]\‘€X⁄Y\‘ò] ú€€ãú€X⁄Y\ N¬à€€ú›Ÿ\ùô\îî‹\úŸHHõ‹õX[^ôY][T€X⁄Y\’‘›‹ôYú€€äŸ\ùô\îäN¬à€€ú›Yò][î‹\úŸHHûﬂHé¬ÇàYà
+\ô\Àõ⁄ H¬àYà
+ô\Àú›]\»OOHL H¬àŸ]][T›]\‘õ‹›\äÿÿ[õ‹›\äN¬àŸ]][T›]\”Xô[ ÿÿ[Xô[ N¬àŸ]][T›]\‘€X⁄Y\”õ‹õX[^ôY
+ÿÿ[äN¬àô]\õé¬àBàŸ]][T›]\‘õ‹›\äÿÿ[õ‹›\ãõ[ô›»ÿÿ[õ‹›\ààY\ôŸYõ‹›\äN¬àŸ]][T›]\”Xô[ ÿöôX›öŸ^\ ÿÿ[Xô[ Kõ[ô›»ÿÿ[Xô[»àŸ\ùô\ìXô[ N¬àŸ]][T›]\‘€X⁄Y\”õ‹õX[^ôY
+ÿÿ[äN¬àô]\õé¬àBÇà€€ú›Ÿ\ùô\í\–›\›€HBàŸ\ùô\îõ‹›\ãõ[ô›àÿöôX›öŸ^\ Ÿ\ùô\ìXô[ Kõ[ô›àî””ãú›ö[ô⁄YûJŸ\ùô\îî‹\úŸJHOOHYò][î‹\úŸN¬à€€ú›ÿÿ[\–›\›€HBà
+ÿÿ[õ‹›\ãõ[ô›à	âàÿÿ[õ‹›\ãöõ⁄[äüäHOOHUSW‘’UT◊”‘ëTãöõ⁄[äüäJHàÿöôX›öŸ^\ ÿÿ[Xô[ Kõ[ô›ààî””ãú›ö[ô⁄YûJÿÿ[î‹\úŸJHOOHYò][î‹\úŸN¬àYà
+\Ÿ\ùô\í\–›\›€H	âàÿÿ[\–›\›€JH¬àûH¬à]ÿZ]ô]⁄
+USW‘’UT◊‘ëQî◊–TW‘U¬àY]ŸàîUãàXY\úŒà»ê€€ù[ùU\Héàò\Xÿ][€ã⁄ú€€ààKàõŸNàî””ãú›ö[ô⁄YûJ¬àõ‹›\éàÿÿ[õ‹›\ãàXô[Œàÿÿ[Xô[Àà€X⁄Y\Œàÿÿ[î‹\úŸKàJKàÿX⁄NàõõÀ\›‹ôHãà⁄Y€ò[àXÀú⁄Y€ò[àJN¬àHÿ]⁄¬à àY€õ‹ôH
+ã¬àBàYà
+Xÿ[òŸ[Y
+H¬àŸ]][T›]\‘õ‹›\äÿÿ[õ‹›\äN¬àŸ]][T›]\”Xô[ ÿÿ[Xô[ N¬àŸ]][T›]\‘€X⁄Y\”õ‹õX[^ôY
+ÿÿ[äN¬à‹ö]R][T›]\‘õ‹›\ï‘›‹òYŸJÿÿ[õ‹›\äN¬à‹ö]R][T›]\”Xô[’‘›‹òYŸJÿÿ[Xô[ N¬à‹ö]R][T›]\‘€X⁄Y\‘‹\úŸU‘›‹òYŸJÿÿ[î‹\úŸJN¬àBàô]\õé¬àBÇàYà
+Xÿ[òŸ[Y
+H¬àŸ]][T›]\‘õ‹›\äY\ôŸYõ‹›\äN¬àŸ]][T›]\”Xô[ Ÿ\ùô\ìXô[ N¬àŸ]][T›]\‘€X⁄Y\”õ‹õX[^ôY
+Ÿ\ùô\îäN¬à‹ö]R][T›]\‘õ‹›\ï‘›‹òYŸJY\ôŸYõ‹›\äN¬à‹ö]R][T›]\”Xô[’‘›‹òYŸJŸ\ùô\ìXô[ N¬à‹ö]R][T›]\‘€X⁄Y\‘‹\úŸU‘›‹òYŸJŸ\ùô\îî‹\úŸJN¬àBàHÿ]⁄¬àYà
+Xÿ[òŸ[Y
+H¬àŸ]][T›]\‘õ‹›\äÿÿ[õ‹›\äN¬àŸ]][T›]\”Xô[ ÿÿ[Xô[ N¬àŸ]][T›]\‘€X⁄Y\”õ‹õX[^ôY
+ÿÿ[äN¬àBàBàJJ
+N¬Çàô]\õà
+
+HOà¬àÿ[òŸ[YHùYN¬àXÀòXõ‹ù
+
+N¬àN¬àK◊JN¬Çà\ŸQYôôX›
+
+
+HOà¬àô]\õà
+
+HOà¬àYà
+›Yôîõ‹›\î\ú⁄\›[Y\îôYãò›\úô[ù
+H€X\ï[Y[›]
+›Yôîõ‹›\î\ú⁄\›[Y\îôYãò›\úô[ù
+N¬àN¬àK◊JN¬Çà€€ú›Y›Yôï‘õ‹›\àHôXX›ù\ŸPÿ[òX⁄ à
+ò[YNà›ö[ô HOà¬à€€ú›Hò[YKùö[J
+N¬àYà
+]\‘›Yôîõ‹›\ìò[YQ^€YY
+
+JHô]\õé¬àŸ]›Yôîõ‹›\ä
+ô]äHOà¬àYà
+ô]ãö[ò€Y\ 
+JHô]\õàô]é¬à€€ú›ô^HÀããúô]ãN¬àÿ⁄Y[T›Yôîõ‹›\î\ú⁄\›
+ô^ÿ[P\‹⁄Y€ôY\‘ôYãò›\úô[ù
+N¬àô]\õàô^¬àJN¬àKà‹ÿ⁄Y[T›Yôîõ‹›\î\ú⁄\›Bà
+N¬Çà€€ú›ô[[›ôT›Yôëúõ€Tõ‹›\àHôXX›ù\ŸPÿ[òX⁄ à
+ò[YNà›ö[ô HOà¬àŸ]›Yôîõ‹›\ä
+ô]äHOà¬à€€ú›ô^ò[Y\»Hô]ãôö[\ä
+äHOààOOHò[YJN¬àŸ]ÿ[P\‹⁄Y€ôY\ 
+ô]ìX\
+HOà¬à€€ú›€X[ôYH»ããúô]ìX\N¬àõ‹à
+€€ú›»ŸàÿöôX›öŸ^\ €X[ôY
+JH¬àYà
+€X[ôY⁄◊HOOHò[YJH[]H€X[ôY⁄◊N¬àBà€€ú›ô^\‹⁄Y€ôY\»Hõ‹õX[^ôTÿ[P\‹⁄Y€ôY\”X\
+€X[ôY
+H\»ôX€‹ô›ö[ôÀ›ö[ôœé¬àÿ⁄Y[T›Yôîõ‹›\î\ú⁄\›
+ô^ò[Y\Àô^\‹⁄Y€ôY\ N¬àô]\õàô^\‹⁄Y€ôY\Œ¬àJN¬àô]\õàô^ò[Y\Œ¬àJN¬àKà‹ÿ⁄Y[T›Yôîõ‹›\î\ú⁄\›Bà
+N¬Çà€€ú›Ÿ]ÿ[P\‹⁄Y€ôYQõ‹ê€ŸHHôXX›ù\ŸPÿ[òX⁄ à
+ÿ[P€ŸNà›ö[ôÀ\‹⁄Y€ôYSò[YNà›ö[ô HOà¬àŸ]ÿ[P\‹⁄Y€ôY\ 
+ô]äHOà¬à€€ú›ô^H»ããúô]àN¬à€€ú›H\‹⁄Y€ôYSò[YKùö[J
+N¬àYà
+]
+H[]Hô^‹ÿ[P€ŸWN¬à[ŸHô^‹ÿ[P€ŸWHH¬à€€ú›õ‹õX[^ôYHõ‹õX[^ôTÿ[P\‹⁄Y€ôY\”X\
+ô^
+H\»ôX€‹ô›ö[ôÀ›ö[ôœé¬àÿ⁄Y[T›Yôîõ‹›\î\ú⁄\›
+›Yôîõ‹›\îôYãò›\úô[ùõ‹õX[^ôY
+N¬àô]\õàõ‹õX[^ôY¬àJN¬àKà‹ÿ⁄Y[T›Yôîõ‹›\î\ú⁄\›Bà
+N¬Çà€€ú›YXõR][T›]\Ÿ\»H\ŸSY[[ 
+
+HOà¬àYà
+][T›]\‘õ‹›\ãõ[ô›OOH
+Hô]\õàÀããíUSW‘’UT—T◊N¬àô]\õàUSW‘’UT—TÀôö[\ä
+ HOàZ][T›]\‘õ‹›\ãö[ò€Y\  JN¬àK⁄][T›]\‘õ‹›\óJN¬Çà€€ú›][T›]\‘õ‹›\ëYôôX›]ôHH\ŸSY[[ à
+
+HOàYôôX›]ôR][T›]\‘õ‹›\ä][T›]\‘õ‹›\äKà⁄][T›]\‘õ‹›\óBà
+N¬Çà€€ú›Y][T›]\’‘õ‹›\àHôXX›ù\ŸPÿ[òX⁄ à
+›à][T›]\’ò[YJHOà¬àŸ]][T›]\‘õ‹›\ä
+ô]äHOà¬àYà
+ô]ãö[ò€Y\ ›
+JHô]\õàô]é¬à€€ú›ô^HÀããúô]ã›N¬à\ú⁄\›][T›]\‘ôYú ô^][T›]\”Xô[À][T›]\‘€X⁄Y\”õ‹õX[^ôY
+N¬àô]\õàô^¬àJN¬àKà⁄][T›]\”Xô[À][T›]\‘€X⁄Y\”õ‹õX[^ôY\ú⁄\›][T›]\‘ôYú◊Bà
+N¬Çà€€ú›ô[[›ôR][T›]\—úõ€Tõ‹›\àHôXX›ù\ŸPÿ[òX⁄ à
+›à][T›]\’ò[YJHOà¬àŸ]][T›]\‘õ‹›\ä
+ô]äHOà¬à€€ú›ô^Hô]ãôö[\ä
+
+HOàOOH›
+N¬à€€ú›ò[òX⁄»Hô^õ[ô›»ô^à◊N¬à\ú⁄\›][T›]\‘ôYú ò[òX⁄À][T›]\”Xô[À][T›]\‘€X⁄Y\”õ‹õX[^ôY
+N¬àô]\õàò[òX⁄Œ¬àJN¬àKà⁄][T›]\”Xô[À][T›]\‘€X⁄Y\”õ‹õX[^ôY\ú⁄\›][T›]\‘ôYú◊Bà
+N¬Çà€€ú›[›ôR][T›]\“[îõ‹›\àHôXX›ù\ŸPÿ[òX⁄ à
+›à][T›]\’ò[YK\ôX›[€éàLHJHOà¬àŸ]][T›]\‘õ‹›\ä
+ô]äHOà¬à€€ú›YHô]ãö[ô^Ÿä›
+N¬àYà
+Y
+Hô]\õàô]é¬à€€ú›»HY
+»\ôX›[€é¬àYà
+»»èHô]ãõ[ô›
+Hô]\õàô]é¬à€€ú›ô^HÀããúô]óN¬à€€ú››ZŸ[óHHô^ú‹XŸJYJN¬àô^ú‹XŸJÀZŸ[äN¬à\ú⁄\›][T›]\‘ôYú ô^][T›]\”Xô[À][T›]\‘€X⁄Y\”õ‹õX[^ôY
+N¬àô]\õàô^¬àJN¬àKà⁄][T›]\”Xô[À][T›]\‘€X⁄Y\”õ‹õX[^ôY\ú⁄\›][T›]\‘ôYú◊Bà
+N¬Çà€€ú›\]R][T›]\”Xô[HôXX›ù\ŸPÿ[òX⁄ à
+›à][T›]\’ò[YKô^Xô[à›ö[ô HOà¬àŸ]][T›]\”Xô[ 
+ô]äHOà¬à€€ú›ö[[YYHô^Xô[ùö[J
+N¬à€€ú›ô^H»ããúô]àN¬àYà
+]ö[[YYö[[YYOOH›
+H[]Hô^‹›N¬à[ŸHô^‹›HHö[[YY¬à\ú⁄\›][T›]\‘ôYú ][T›]\‘õ‹›\ãô^][T›]\‘€X⁄Y\”õ‹õX[^ôY
+N¬àô]\õàô^¬àJN¬àKà⁄][T›]\‘õ‹›\ã][T›]\‘€X⁄Y\”õ‹õX[^ôY\ú⁄\›][T›]\‘ôYú◊Bà
+N¬Çà€€ú›]⁄][T›]\‘€XﬁHHôXX›ù\ŸPÿ[òX⁄ à
+€ŸNà][T›]\’ò[YK]⁄à\ùX[ô\€€ôY][Tõ›‘›]\‘€XﬁOäHOà¬àŸ]][T›]\‘€X⁄Y\”õ‹õX[^ôY
+
+ô]äHOà¬à€€ú›õ›»Hô]ãòûT›]\÷ÿ€ŸWN¬à€€ú›ô^à][T›]\‘€X⁄Y\”õ‹õX[^ôYH¬àããúô]ãàûT›]\Œà¬àããúô]ãòûT›]\Ààÿ€ŸWNà»ããúõ›Àããú]⁄KàKàN¬à\ú⁄\›][T›]\‘ôYú ][T›]\‘õ‹›\ã][T›]\”Xô[Àô^
+N¬àô]\õàô^¬àJN¬àKà⁄][T›]\”Xô[À][T›]\‘õ‹›\ã\ú⁄\›][T›]\‘ôYú◊Bà
+N¬Çà€€ú›ŸŸ€QYUŸ^T€XﬁT›]\»HôXX›ù\ŸPÿ[òX⁄ à
+›à][T›]\’ò[YJHOà¬àŸ]][T›]\‘€X⁄Y\”õ‹õX[^ôY
+
+ô]äHOà¬à€€ú››\àHô]»Ÿ]
+ô]ãôYUŸ^Kú›]\Ÿ\ N¬àYà
+›\ãö\ ›
+JH›\ãô[]J›
+N¬à[ŸH›\ãòY
+›
+N¬à€€ú›ô^à][T›]\‘€X⁄Y\”õ‹õX[^ôYH¬àããúô]ãàYUŸ^Nà»ããúô]ãôYUŸ^K›]\Ÿ\Œà\úò^Kôúõ€J›\äHKàN¬à\ú⁄\›][T›]\‘ôYú ][T›]\‘õ‹›\ã][T›]\”Xô[Àô^
+N¬àô]\õàô^¬àJN¬àKà⁄][T›]\”Xô[À][T›]\‘õ‹›\ã\ú⁄\›][T›]\‘ôYú◊Bà
+N¬Çà€€ú›Ÿ]YUŸ^T€XﬁSX]⁄^\»HôXX›ù\ŸPÿ[òX⁄ à
+ò]Œà›ö[ô HOà¬à€€ú›\úŸYHù[Xô\ä›ö[ô ò] Kùö[J
+JN¬àŸ]][T›]\‘€X⁄Y\”õ‹õX[^ôY
+
+ô]äHOà¬à€€ú›X]⁄^\’[ù[YPò[ô⁄€⁄»Hù[Xô\ãö\—ö[ö]J\úŸY
+Bà»X]õZ[äÃÃX]õX^
+MÃÃX]úõ›[ô
+\úŸY
+JJBààô]ãôYUŸ^KõX]⁄^\’[ù[YPò[ô⁄€⁄Œ¬à€€ú›ô^à][T›]\‘€X⁄Y\”õ‹õX[^ôYH¬àããúô]ãàYUŸ^Nà»ããúô]ãôYUŸ^KX]⁄^\’[ù[YPò[ô⁄€⁄»KàN¬à\ú⁄\›][T›]\‘ôYú ][T›]\‘õ‹›\ã][T›]\”Xô[Àô^
+N¬àô]\õàô^¬àJN¬àKà⁄][T›]\”Xô[À][T›]\‘õ‹›\ã\ú⁄\›][T›]\‘ôYú◊Bà
+N¬Çà€€ú››]\”Xô[HôXX›ù\ŸPÿ[òX⁄ à
+›à][T›]\—ö[\ïò[YJNà›ö[ô»Oà¬àYà
+›OOHUSW‘’UT◊—QW’—VJHô]\õàZS[ô»OOHô[àà»ëYHŸ^HààUSW‘’UT◊—QW’—VN¬àYà
+ZS[ô»OOHô[àäH¬àô]\õà\‹^R][T›]\”Xô[
+›ZS[ô N¬àBà€€ú››\›€HH][T›]\”Xô[÷‹›N¬àYà
+›\›€H	âà›\›€HOOH›
+Hô]\õà›\›€N¬àô]\õà\‹^R][T›]\”Xô[
+›ZS[ô N¬àKà⁄][T›]\”Xô[ÀZS[ô◊Bà
+N¬Çà€€ú››Yôëö[\ê⁄\ò[Y\—õ‹ï€€ò\àH\ŸSY[[ 
+
+HOà¬à€€ú››X⁄ﬁHH›Yôê⁄\‘›X⁄ﬁPYù\îö[YTôYãò›\úô[ù¬àYà
+Yö[\ê⁄\^[›]ö[YY\›X⁄ﬁJH¬àô]\õà›Yôëö[\ê⁄\ò[Y\’ö\⁄XõN¬àBàô]\õà›Yôëö[\ê⁄\ò[Y\Àôö[\äà
+ HOà›X⁄ﬁKö\  H
+›Yôê\‹⁄Y€ôYR][P€›[ùÀòûP\‹⁄Y€ôYV‹◊Hœ»
+Hàà
+N¬àKŸö[\ê⁄\^[›]ö[YY›Yôëö[\ê⁄\ò[Y\À›Yôëö[\ê⁄\ò[Y\’ö\⁄XõK›Yôê\‹⁄Y€ôYR][P€›[ù◊JN¬Çà äà8.*∏.-x."∏.-8.&¯.'∏.&x.,x. x.!¯.,∏.&x.`¯.&x.`x.%∏.&à8†%8.a8.(x.b8.`¯.*¯.bx."¯.bx.,¯.`¯.&x.(¯.,∏.(∏. x.,∏.(¯.%¯.-x.b8. ∏.-∏.bx.&x.'∏.(¯.bx.+x.(x. x.,x.&H
+8.(∏.,x.!¯.`¯."∏.bx.`x.+∏."∏."∏.-¯.b8.+x.`8.(x.-¯.b8.+x."∏.-8.&¯.&∏.&x. x.,∏.(¯.c8.%
+H
+ã¬à€€ú››Yôï€€ò\ê\‹⁄Y€ôYT[]R[ô^ûSò[YHH\ŸSY[[ à
+
+HOàùZ[›Yôï€€ò\ê\‹⁄Y€ôYT[]R[ô^X\
+›Yôëö[\ê⁄\ò[Y\—õ‹ï€€ò\äKà‹›Yôëö[\ê⁄\ò[Y\—õ‹ï€€ò\óBà
+N¬Çà äà8.`x.*∏.%8.!¯."∏.-8.&»∏.a8.(x.b8.(¯.,8.&∏..8."∏.-¯.b8.+Hà8†%8."¯.b8.+x.&x.`8.(x.-¯.b8.+x.&x.,x.&à8.(∏. x.`8.)¯.bx.&x.*¯.)x.,x.!¯.)x.a¯.+x. H›X⁄ﬁH8.*¯.(¯.-¯.+x. x.,¯.)x.,x.!¯.`8.)x.-¯.+x. x."∏.-8.&¯.&x.-x.bH
+ã¬à€€ú››Yôï[ò\‹⁄Y€ôY⁄\[ï€€ò\àH\ŸSY[[ 
+
+HOà¬àYà
+›Yôëö[\úÀö\ ’Qëó—íSTó’SêT‘“Q”ëQ
+JHô]\õàùYN¬à€€ú››X⁄ﬁHH›Yôê⁄\‘›X⁄ﬁPYù\îö[YTôYãò›\úô[ù¬àYà
+Yö[\ê⁄\^[›]ö[YY\›X⁄ﬁJH¬àô]\õà
+›Yôê\‹⁄Y€ôYR][P€›[ùÀù[ò\‹⁄Y€ôYœ»
+Hà¬àBàô]\õà›X⁄ﬁKö\ ’Qëó—íSTó’SêT‘“Q”ëQ
+H
+›Yôê\‹⁄Y€ôYR][P€›[ùÀù[ò\‹⁄Y€ôYœ»
+Hà¬àKŸö[\ê⁄\^[›]ö[YY›Yôëö[\úÀ›Yôê\‹⁄Y€ôYR][P€›[ùÀù[ò\‹⁄Y€ôYJN¬Çà\ŸQYôôX›
+
+
+HOà¬àŸ]›Yôëö[\ú 
+ô]äHOà¬à€€ú›ò[Y⁄\Hô]»Ÿ]
+õ€⁄ŸY⁄\[ô‘õ›[ôÀõX\
+
+äHOàãù⁄Ÿ[äJN¬à€€ú›ò[Yù^Y\àHô]»Ÿ]
+õ€⁄ŸYù^Y\îõ›[ôÀõX\
+
+äHOàãù⁄Ÿ[äJN¬à€€ú›ò[Y€€⁄\Hô]»Ÿ]
+⁄\Y€€€€ò\î›]Àú⁄\Yõ›[ôÀõX\
+
+äHOàãù⁄Ÿ[äJN¬à€€ú›ò[Y€€^HHô]»Ÿ]
+⁄\Y€€€€ò\î›]Àõ[Ÿ[YX\îõ›[ôÀõX\
+
+äHOàãù⁄Ÿ[äJN¬à€€ú›ò[YòX”^HHô]»Ÿ]
+òXÿ[ùÿ[U€€ò\î›]Àõ[Ÿ[YX\îõ›[ôÀõX\
+
+äHOàãù⁄Ÿ[äJN¬à€€ú›ô^Hô]»Ÿ]›ö[ôœä
+N¬àõ‹à
+€€ú›àŸà\úò^Kôúõ€Jô]äJH¬àYà
+àOOH’Qëó—íSTó’SêT‘“Q”ëQ
+Hô^òY
+äN¬à[ŸHYà
+àOOH’Qëó—íSTó–ì”“—Q‘“TSë H¬à à8.a8.(x.b8.`8. x.a¯.&àYÿXﬁH8†%8.'8..x.bx.`¯."∏.bx.`8.)x.-¯.+x. x."∏.-8.&¯.%x.b8.+x.(¯.+x.&∏.`x.%¯.&H
+ã¬àH[ŸHYà
+ãú›\ù’⁄]
+’Qëó—íSTó–ì”“—Q‘“T‘ëQíV
+JH¬àYà
+ò[Y⁄\ö\ äJHô^òY
+äN¬àH[ŸHYà
+ãú›\ù’⁄]
+’Qëó—íSTó–ì”“—Q–ïVQTó‘ëQíV
+JH¬àYà
+ò[Yù^Y\ãö\ äJHô^òY
+äN¬àH[ŸHYà
+àOOH’Qëó—íSTó‘””‘“TQ—STJH¬àYà
+⁄\Y€€€€ò\î›]Àú⁄\Y[\Hà
+Hô^òY
+äN¬àH[ŸHYà
+ãú›\ù’⁄]
+’Qëó—íSTó‘””‘“TQ‘ëQíV
+JH¬àYà
+ò[Y€€⁄\ö\ äJHô^òY
+äN¬àH[ŸHYà
+àOOH’Qëó—íSTó‘”””S—S÷QPTó—STJH¬àYà
+⁄\Y€€€€ò\î›]Àõ[Ÿ[YX\ë[\Hà
+Hô^òY
+äN¬àH[ŸHYà
+ãú›\ù’⁄]
+’Qëó—íSTó‘”””S—S÷QPTó‘ëQíV
+JH¬àYà
+ò[Y€€^Kö\ äJHô^òY
+äN¬àH[ŸHYà
+àOOH’Qëó—íSTó’êP–Sï”S—S÷QPTó—STJH¬àYà
+òXÿ[ùÿ[U€€ò\î›]Àõ[Ÿ[YX\ë[\Hà
+Hô^òY
+äN¬àH[ŸHYà
+ãú›\ù’⁄]
+’Qëó—íSTó’êP–Sï”S—S÷QPTó‘ëQíV
+JH¬àYà
+ò[YòX”^Kö\ äJHô^òY
+äN¬àH[ŸHYà
+›Yôëö[\ê⁄\ò[Y\—õ‹ï€€ò\ãö[ò€Y\ äJHô^òY
+äN¬àBàYà
+ô^ú⁄^ôHOOHô]ãú⁄^ôH	âà\úò^Kôúõ€Jô]äKô]ô\ûJ
+
+HOàô^ö\ 
+JJHô]\õàô]é¬àô]\õàô^¬àJN¬àK‹›Yôëö[\ê⁄\ò[Y\—õ‹ï€€ò\ãõ€⁄ŸY⁄\[ô‘õ›[ôÀõ€⁄ŸYù^Y\îõ›[ôÀ⁄\Y€€€€ò\î›]ÀòXÿ[ùÿ[U€€ò\î›]◊JN¬Çà\ŸQYôôX›
+
+
+HOà¬àYà
+õ€⁄ŸY⁄\[ô‘õ›[ôÀõ[ô›OOH
+HŸ]õ€⁄ŸY⁄\[ô‘[ô[^[ôY
+ò[ŸJN¬àYà
+õ€⁄ŸYù^Y\îõ›[ôÀõ[ô›OOH
+HŸ]õ€⁄ŸYù^Y\î[ô[^[ôY
+ò[ŸJN¬àYà
+⁄\Y€€€€ò\î›]Àú€€€›[ùOOH
+HŸ]⁄\Y€€^ò\‘[ô[^[ôY
+ò[ŸJN¬àYà
+òXÿ[ùÿ[U€€ò\î›]ÀùòXÿ[ù€›[ùOOH
+HŸ]òXÿ[ùÿ[S[Ÿ[YX\î[ô[^[ôY
+ò[ŸJN¬àKÿõ€⁄ŸY⁄\[ô‘õ›[ôÀõ[ô›õ€⁄ŸYù^Y\îõ›[ôÀõ[ô›⁄\Y€€€€ò\î›]Àú€€€›[ùòXÿ[ùÿ[U€€ò\î›]ÀùòXÿ[ù€›[ùJN¬Çà\ŸQYôôX›
+
+
+HOà¬à]⁄\Hò[ŸN¬à]ù^Y\àHò[ŸN¬à]€€^Hò[ŸN¬à]òXÿ[ù^HHò[ŸN¬àõ‹à
+€€ú›àŸà\úò^Kôúõ€J›Yôëö[\ú JH¬àYà
+\–õ€⁄ŸY⁄\›Yôëö[\ääJH⁄\HùYN¬àYà
+\–õ€⁄ŸYù^Y\î›Yôëö[\ääJHù^Y\àHùYN¬àYà
+\‘€€⁄\Y›Yôëö[\ääH\‘€€[Ÿ[YX\î›Yôëö[\ääJH€€^HùYN¬àYà
+\’òXÿ[ùÿ[S[Ÿ[YX\î›Yôëö[\ääJHòXÿ[ù^HHùYN¬àBàYà
+⁄\
+HŸ]õ€⁄ŸY⁄\[ô‘[ô[^[ôY
+ùYJN¬àYà
+ù^Y\äHŸ]õ€⁄ŸYù^Y\î[ô[^[ôY
+ùYJN¬àYà
+€€^
+HŸ]⁄\Y€€^ò\‘[ô[^[ôY
+ùYJN¬àYà
+òXÿ[ù^JHŸ]òXÿ[ùÿ[S[Ÿ[YX\î[ô[^[ôY
+ùYJN¬àK‹›Yôëö[\ú◊JN¬Çà\ŸQYôôX›
+
+
+HOà¬àŸ]][T›]\—ö[\ú 
+ô]äHOà¬à€€ú›ô^Hô]»Ÿ]][T›]\—ö[\ïò[YH\[ŸàUSW‘’UT◊—QW’—VOä
+N¬àõ‹à
+€€ú›àŸà\úò^Kôúõ€Jô]äJH¬àYà
+àOOHUSW‘’UT◊—QW’—VJHô^òY
+äN¬à[ŸHYà
+][T›]\‘õ‹›\ëYôôX›]ôKö[ò€Y\ à\»][T›]\’ò[YJJHô^òY
+äN¬àBàYà
+ô^ú⁄^ôHOOHô]ãú⁄^ôH	âà\úò^Kôúõ€Jô]äKô]ô\ûJ
+
+HOàô^ö\ 
+JJHô]\õàô]é¬àô]\õàô^¬àJN¬àK⁄][T›]\‘õ‹›\ëYôôX›]ôWJN¬Çà€€ú›ÿ[T›]\–€›[ù»H\ŸSY[[ 
+
+HOà¬à€€ú›õ—^òQö[\ú»Bàö[\ö[ô‘ÿ[Qö[\úÀú⁄^ôHOOH	âÇàö[\ö[ô‘›Yôëö[\úÀú⁄^ôHOOH	âÇàö[\ö[ô“][T›]\—ö[\úÀú⁄^ôHOOH	âÇà
+[‹ô\ê⁄\ÿX⁄Q^\ö[Y[ù[òXõYö[\ö[ô’ôZX€TŸX\ò⁄õ‹ëö[\ö[ôÀùö[J
+HOOHàäN¬àYà
+õ—^òQö[\ú»	âàÿ[T›]\‘›[[X\ûP[ÿ\ú H¬àô]\õà¬à8.%¯.,x.bx.!¯.*¯.(x.%àù[Xô\äÿ[T›]\‘›[[X\ûP[ÿ\ú÷»∏.%¯.,x.bx.!¯.*¯.(x.%óHœ»
+Kà8."8.+x.!Œàù[Xô\äÿ[T›]\‘›[[X\ûP[ÿ\ú÷»∏."8.+x.!»óHœ»
+Kà8.(¯.+x.*∏.b8.!Œàù[Xô\äÿ[T›]\‘›[[X\ûP[ÿ\ú÷»∏.(¯.+x.*∏.b8.!»óHœ»
+Kà8.*∏.b8.!¯.`x.)x.bx.)Œàù[Xô\äÿ[T›]\‘›[[X\ûP[ÿ\ú÷»∏.*∏.b8.!¯.`x.)x.bx.)»óHœ»
+Kà8.)¯.b8.,∏.!Œàù[Xô\äÿ[T›]\‘›[[X\ûP[ÿ\ú÷»∏.)¯.b8.,∏.!»óHœ»
+KàH\»\ùX[ôX€‹ôÿ[T›]\—ö[\ïò[YKù[Xô\èèé¬àBà€€ú›YUŸ^P⁄\H][T›]\‘€X⁄Y\”õ‹õX[^ôYôYUŸ^N¬à€€ú›ò\ŸS‹ô\ú»HX\Y‹ô\úÀôö[\ä
+‹ô\äHOà¬à€€ú›ÿ[S⁄»H‹ô\ìX]⁄\‘ÿ[Qö[\ú ‹ô\ãö[\ö[ô‘ÿ[Qö[\ú N¬à€€ú›ôZX€S⁄»H‹ô\ê⁄\ÿX⁄Q^\ö[Y[ù[òXõY»X]⁄\’ôZX€TŸX\ò⁄
+‹ô\ãö[\ö[ô’ôZX€TŸX\ò⁄õ‹ëö[\ö[ô HàùYN¬à€€ú››Yôì⁄»H‹ô\ìX]⁄\’€€ò\ëö[\ú à‹ô\ãàö[\ö[ô‘›Yôëö[\úÀàö[\ö[ô“][T›]\—ö[\úÀàYUŸ^P⁄\à‹ô\ê⁄\ÿX⁄Q^\ö[Y[ù[òXõY»ö[\í][\—õ‹ì‹ô\ä‹ô\äHà‹ô\ãö][\¬à
+N¬àô]\õàÿ[S⁄»	âàôZX€S⁄»	âà›Yôì⁄Œ¬àJN¬à€€ú›XÿŒà\ùX[ôX€‹ôÿ[T›]\—ö[\ïò[YKù[Xô\èèàHﬂN¬àõ‹à
+€€ú›ÿ[T›]\»Ÿà–SW‘’UT—T H¬àXÿ÷‹ÿ[T›]\◊HBàÿ[T›]\»OOH∏.%¯.,x.bx.!¯.*¯.(x.%Çà»ò\ŸS‹ô\úÀõ[ô›ààò\ŸS‹ô\úÀôö[\ä
+‹ô\äHOà‹ô\ãúÿ[T›]\»OOHÿ[T›]\ Kõ[ô›¬àBàô]\õàXÿŒ¬àK¬àX\Y‹ô\úÀàö[\ö[ô‘ÿ[Qö[\úÀàö[\ö[ô‘›Yôëö[\úÀàö[\ö[ô“][T›]\—ö[\úÀàÿ[T›]\‘›[[X\ûP[ÿ\úÀà][T›]\‘€X⁄Y\”õ‹õX[^ôYà‹ô\ê⁄\ÿX⁄Q^\ö[Y[ù[òXõYàö[\ö[ô’ôZX€TŸX\ò⁄õ‹ëö[\ö[ôÀàö[\í][\—õ‹ì‹ô\ãàJN¬à€€ú›ÿ[T›]\–⁄\[Ÿ[»H\ŸSY[[ à
+
+HOÇà–SW‘’UT—TÀõX\
+
+ÿ[T›]\ HOà
+¬àÿ[T›]\Àà€›[ùàÿ[T›]\–€›[ù÷‹ÿ[T›]\◊Hœ»àX›]ôNàÿ[T›]\»OOH–SW‘’UT—T÷ÃH»ÿ[T›]\—ö[\úÀú⁄^ôHOOHàÿ[T›]\—ö[\úÀö\ ÿ[T›]\ KàJJKà‹ÿ[T›]\–€›[ùÀÿ[T›]\—ö[\ú◊Bà
+N¬à€€ú›ö\⁄XõHH\ŸSY[[ à
+
+HOÇàX\Y‹ô\ú¬àôö[\ä
+‹ô\äHOà¬à€€ú›ÿ[S⁄»H‹ô\ìX]⁄\‘ÿ[Qö[\ú ‹ô\ãö[\ö[ô‘ÿ[Qö[\ú N¬à€€ú›ÿ[T›]\”⁄»H‹ô\ìX]⁄\‘ÿ[T›]\—ö[\ú ‹ô\ãö[\ö[ô‘ÿ[T›]\—ö[\ú N¬à€€ú›ôZX€S⁄»HX]⁄\’ôZX€TŸX\ò⁄
+‹ô\ãö[\ö[ô’ôZX€TŸX\ò⁄õ‹ëö[\ö[ô N¬àYà
+\ÿ[S⁄»\ÿ[T›]\”⁄»]ôZX€S⁄ Hô]\õàò[ŸN¬àô]\õà‹ô\ìX]⁄\’€€ò\ëö[\ú à‹ô\ãàö[\ö[ô‘›Yôëö[\úÀàö[\ö[ô“][T›]\—ö[\úÀà][T›]\‘€X⁄Y\”õ‹õX[^ôYôYUŸ^Kà‹ô\ê⁄\ÿX⁄Q^\ö[Y[ù[òXõY»ö[\í][\—õ‹ì‹ô\ä‹ô\äHà‹ô\ãö][\¬à
+N¬àJBàú€‹ù
+
+KäHOà¬à€€ú›€‹ö‘ò[ö»H‹ô\êÿ\ô€‹ö‘ô\Ÿ[òŸTò[ö JHH‹ô\êÿ\ô€‹ö‘ô\Ÿ[òŸTò[ö äN¬àYà
+€‹ö‘ò[ö»OOH
+Hô]\õà€‹ö‘ò[öŒ¬à€€ú›€õQ[\TŸ[X›YBàö[\ö[ô‘ÿ[T›]\—ö[\úÀú⁄^ôHOOHH	âàö[\ö[ô‘ÿ[T›]\—ö[\úÀö\ –SW‘’UT—T÷ÕJN¬àYà
+€õQ[\TŸ[X›Y
+H¬à€€ú›YX\ë[HH[Ÿ[YX\î€‹ùò[YJãõ[Ÿ[YX\äHH[Ÿ[YX\î€‹ùò[YJKõ[Ÿ[YX\äN¬àYà
+YX\ë[HOOH
+Hô]\õàYX\ë[N¬àBà€€ú›ûT›]\»H
+–SW‘’UT◊‘íS‘íUVÿKúÿ[T›]\◊Hœ»NJHH
+–SW‘’UT◊‘íS‘íUVÿãúÿ[T›]\◊Hœ»NJN¬àYà
+ûT›]\»OOH
+Hô]\õàûT›]\Œ¬à€€ú›⁄\HH⁄\‹õ›\Ÿ^JKú⁄\
+N¬à€€ú›⁄\àH⁄\‹õ›\Ÿ^Jãú⁄\
+N¬àYà
+⁄\HOOH⁄\äHô]\õà⁄\Kõÿÿ[P€€\\ôJ⁄\ãô[àã»ù[Y\öXŒàùYKŸ[ú⁄]]ö]Nàòò\ŸHàJN¬àô]\õàKöYõÿÿ[P€€\\ôJãöY
+N¬àJKà¬àö[\ö[ô‘ÿ[T›]\—ö[\úÀàö[\ö[ô’ôZX€TŸX\ò⁄õ‹ëö[\ö[ôÀàö[\ö[ô‘›Yôëö[\úÀàö[\ö[ô“][T›]\—ö[\úÀàX\Y‹ô\úÀàö[\ö[ô‘ÿ[Qö[\úÀà][T›]\‘€X⁄Y\”õ‹õX[^ôYà‹ô\ê⁄\ÿX⁄Q^\ö[Y[ù[òXõYàö[\í][\—õ‹ì‹ô\ãàBà
+N¬à äàRH0≠»SëHÿ\àX⁄Ÿ\à\Ÿ\»ù[ÿYY‹ô\úÀõ›€€ò\ãYö[\ôYö\⁄XõXà
+ã¬à€€ú›[ôR[òõﬁZS‹ô\îX⁄‹»H\ŸSY[[ 
+
+HOà¬à€€ú›€‹ùYHÀããõX\Y‹ô\ú◊Kú€‹ù
+
+KäHOà¬à€€ú›]P€\H›ö[ô Kôù[]Hœ»àäBàùö[J
+Bàõÿÿ[P€€\\ôJ›ö[ô ãôù[]Hœ»àäKùö[J
+Kùã»ù[Y\öXŒàùYKŸ[ú⁄]]ö]Nàòò\ŸHàJN¬àYà
+]P€\OOH
+Hô]\õà]P€\¬àô]\õàKöYõÿÿ[P€€\\ôJãöY
+N¬àJN¬àô]\õà€‹ùYõX\
+
+ HOà
+¬àYàÀöYàù[]NàÀôù[]Kàÿ\éàÀòÿ\ãà⁄\‹⁄\ŒàÀò⁄\‹⁄\Ààÿ[NàÀúÿ[Kàÿ\îõ›“YàÀòÿ\îõ›“Yàÿ\íYàÀòÿ\íYàJJN¬àK€X\Y‹ô\ú◊JN¬à äà\ã\›]\»][H€›[ù»úõ€H›\úô[ùX\Y‹ô\úÿ
+›\Xò\ŸKXòX⁄ŸY‹à[ãYö[H‘ëTîÿ[[ H⁄]ÿ[YHö[\ú»\»H\›à
+ã¬à€€ú›][T›]\–€›[ù»H\ŸSY[[ 
+
+HOà¬à€€ú›\ŸT›[[X\ûPÿX⁄Pò\ŸHBàõ€€X[ä›[[X\ûT€ò\⁄›[ÿ\ú H	âÇàö[\ö[ô‘ÿ[Qö[\úÀú⁄^ôHOOH	âÇàö[\ö[ô‘ÿ[T›]\—ö[\úÀú⁄^ôHOOH	âÇàö[\ö[ô‘›Yôëö[\úÀú⁄^ôHOOH	âÇàö[\ö[ô“][T›]\—ö[\úÀú⁄^ôHOOH	âÇàö[\ö[ô’ôZX€TŸX\ò⁄õ‹ëö[\ö[ôÀùö[J
+HOOHàé¬àYà
+\ŸT›[[X\ûPÿX⁄Pò\ŸH	âà›[[X\ûT€ò\⁄›[ÿ\ú H¬à€€ú›€›[ù»Hô]»X\][T›]\’ò[YKù[Xô\èä
+N¬àõ‹à
+€€ú›»ŸàUSW‘’UT—T H¬à€›[ùÀúŸ]
+Àù[Xô\ä›[[X\ûT€ò\⁄›[ÿ\úÀö][T›]\–€›[ùœÀñ‹◊Hœ»
+JN¬àBàô]\õà€›[ùŒ¬àBà€€ú›€›[ù»Hô]»X\][T›]\’ò[YKù[Xô\èä
+N¬àõ‹à
+€€ú›»ŸàUSW‘’UT—T H€›[ùÀúŸ]
+À
+N¬à€€ú›»][T›Yôëö[\ú»HH‹]›Yôëö[\ú ö[\ö[ô‘›Yôëö[\ú N¬à€€ú›⁄\H][T›]\‘€X⁄Y\”õ‹õX[^ôYôYUŸ^N¬à€€ú›ò\ŸQö[\ôYHX\Y‹ô\úÀôö[\ä
+‹ô\äHOà¬à€€ú›ÿ[S⁄»H‹ô\ìX]⁄\‘ÿ[Qö[\ú ‹ô\ãö[\ö[ô‘ÿ[Qö[\ú N¬à€€ú›ÿ[T›]\”⁄»H‹ô\ìX]⁄\‘ÿ[T›]\—ö[\ú ‹ô\ãö[\ö[ô‘ÿ[T›]\—ö[\ú N¬à€€ú›ôZX€S⁄»HX]⁄\’ôZX€TŸX\ò⁄
+‹ô\ãö[\ö[ô’ôZX€TŸX\ò⁄õ‹ëö[\ö[ô N¬àô]\õà
+àÿ[S⁄»	âÇàÿ[T›]\”⁄»	âÇàôZX€S⁄»	âÇà‹ô\ìX]⁄\’€€ò\ëö[\ú à‹ô\ãàö[\ö[ô‘›Yôëö[\úÀàô]»Ÿ]
+
+Kà⁄\à‹ô\ê⁄\ÿX⁄Q^\ö[Y[ù[òXõY»ö[\í][\—õ‹ì‹ô\ä‹ô\äHà‹ô\ãö][\¬à
+Bà
+N¬àJN¬àõ‹à
+€€ú›‹ô\àŸàò\ŸQö[\ôY
+H¬àõ‹à
+€€ú›][HŸà‹ô\ê⁄\ÿX⁄Q^\ö[Y[ù[òXõY»ö[\í][\—õ‹ì‹ô\ä‹ô\äHà‹ô\ãö][\ H¬àYà
+Z][SX]⁄\‘›Yôëö[\ú ][Kò\‹⁄Y€ôYK][T›Yôëö[\ú JH€€ù[ùYN¬à€›[ùÀúŸ]
+][Kú›]\À
+€›[ùÀôŸ]
+][Kú›]\ Hœ»
+H
+»JN¬àBàBàô]\õà€›[ùŒ¬àK¬àX\Y‹ô\úÀàö[\ö[ô‘ÿ[T›]\—ö[\úÀàö[\ö[ô’ôZX€TŸX\ò⁄õ‹ëö[\ö[ôÀàö[\ö[ô‘›Yôëö[\úÀàö[\ö[ô‘ÿ[Qö[\úÀàö[\ö[ô“][T›]\—ö[\úÀà›[[X\ûT€ò\⁄›[ÿ\úÀà][T›]\‘€X⁄Y\”õ‹õX[^ôYà‹ô\ê⁄\ÿX⁄Q^\ö[Y[ù[òXõYàö[\í][\—õ‹ì‹ô\ãàJN¬Çà äà8."8.,¯.&x.)¯.&x.(¯.,∏.(∏. x.,∏.(¯.%x.,∏.(x. x.,∏.(¯.%x.,x.bx.!¯.!8.b8.,∏."∏.-8.&»∏.(x.,∏.)¯.,x.&x.&x.-x.bHà
+YH]H
+»8.`8.%¯.-x.(∏.&à^\’[ù[ò[ô⁄€⁄»8.%x.,x.bx.!¯.a8.%8.bJH
+ã¬à€€ú›YUŸ^R][P€›[ùH\ŸSY[[ 
+
+HOà¬à€€ú›⁄\H][T›]\‘€X⁄Y\”õ‹õX[^ôYôYUŸ^N¬à€€ú›»][T›Yôëö[\ú»HH‹]›Yôëö[\ú ö[\ö[ô‘›Yôëö[\ú N¬à€€ú›ò\ŸQö[\ôYHX\Y‹ô\úÀôö[\ä
+‹ô\äHOà¬à€€ú›ÿ[S⁄»H‹ô\ìX]⁄\‘ÿ[Qö[\ú ‹ô\ãö[\ö[ô‘ÿ[Qö[\ú N¬à€€ú›ÿ[T›]\”⁄»H‹ô\ìX]⁄\‘ÿ[T›]\—ö[\ú ‹ô\ãö[\ö[ô‘ÿ[T›]\—ö[\ú N¬à€€ú›ôZX€S⁄»HX]⁄\’ôZX€TŸX\ò⁄
+‹ô\ãö[\ö[ô’ôZX€TŸX\ò⁄õ‹ëö[\ö[ô N¬àô]\õà
+àÿ[S⁄»	âÇàÿ[T›]\”⁄»	âÇàôZX€S⁄»	âÇà‹ô\ìX]⁄\’€€ò\ëö[\ú à‹ô\ãàö[\ö[ô‘›Yôëö[\úÀàô]»Ÿ]
+
+Kà⁄\à‹ô\ê⁄\ÿX⁄Q^\ö[Y[ù[òXõY»ö[\í][\—õ‹ì‹ô\ä‹ô\äHà‹ô\ãö][\¬à
+Bà
+N¬àJN¬à]€›[ùH¬àõ‹à
+€€ú›‹ô\àŸàò\ŸQö[\ôY
+H¬àõ‹à
+€€ú›][HŸà‹ô\ê⁄\ÿX⁄Q^\ö[Y[ù[òXõY»ö[\í][\—õ‹ì‹ô\ä‹ô\äHà‹ô\ãö][\ H¬àYà
+Z][SX]⁄\‘›Yôëö[\ú ][Kò\‹⁄Y€ôYK][T›Yôëö[\ú JH€€ù[ùYN¬àYà
+X]⁄\—YUŸ^P⁄\
+][K⁄\
+JH€›[ù
+œHN¬àBàBàô]\õà€›[ù¬àK¬àX\Y‹ô\úÀàö[\ö[ô‘ÿ[Qö[\úÀàö[\ö[ô‘ÿ[T›]\—ö[\úÀàö[\ö[ô’ôZX€TŸX\ò⁄õ‹ëö[\ö[ôÀàö[\ö[ô‘›Yôëö[\úÀà][T›]\‘€X⁄Y\”õ‹õX[^ôYà‹ô\ê⁄\ÿX⁄Q^\ö[Y[ù[òXõYàö[\í][\—õ‹ì‹ô\ãàJN¬Çà äà8."∏.-8.&¯.*∏.%∏.,∏.&x.,8.%¯.-x.b8.`x.*∏.%8.!»8†%8."¯.b8.+x.&x.`8.(x.-¯.b8.+x."8.,¯.&x.)¯.&x.(¯.,∏.(∏. x.,∏.(»H
+8.`8."x.'∏.,∏.,8. x.b8.+x.&x.)x.a¯.+x. x.!8.(¯.,x.bx.!¯.`x.(¯. N»8.*¯.)x.,x.!¯.)x.a¯.+x. x.`¯."∏.bH][T›]\‘õ‹›\ëõ‹ï€€ò\äH
+ã¬à€€ú›][T›]\‘õ‹›\ïö\⁄XõHH\ŸSY[[ à
+
+HOà][T›]\‘õ‹›\ëYôôX›]ôKôö[\ä
+ HOà
+][T›]\–€›[ùÀôŸ]
+ Hœ»
+Hà
+Kà⁄][T›]\‘õ‹›\ëYôôX›]ôK][T›]\–€›[ù◊Bà
+N¬Çà€€ú›][T›]\‘õ‹›\ëõ‹ï€€ò\àH\ŸSY[[ 
+
+HOà¬à€€ú››X⁄ﬁHH][T›]\–⁄\‘›X⁄ﬁPYù\îö[YTôYãò›\úô[ù¬àYà
+Yö[\ê⁄\^[›]ö[YY\›X⁄ﬁJH¬àô]\õà][T›]\‘õ‹›\ïö\⁄XõN¬àBàô]\õà][T›]\‘õ‹›\ëYôôX›]ôKôö[\ä
+ HOà›X⁄ﬁKö\  H
+][T›]\–€›[ùÀôŸ]
+ Hœ»
+Hà
+N¬àKŸö[\ê⁄\^[›]ö[YY][T›]\‘õ‹›\ëYôôX›]ôK][T›]\‘õ‹›\ïö\⁄XõK][T›]\–€›[ù◊JN¬Çà€€ú›][T›]\—ö[\ì‹[€ú—õ‹ï€€ò\àH\ŸSY[[ 
+
+HOà¬à€€ú›‹ô\ôYH€‹ù][T›]\Ÿ\—õ‹ëö[\ï€€ò\äÀããö][T›]\‘õ‹›\ëõ‹ï€€ò\óJN¬à€€ú›⁄]YUŸ^HBàYUŸ^R][P€›[ùà][T›]\—ö[\úÀö\ USW‘’UT◊—QW’—VJBà»“USW‘’UT◊—QW’—VKããõ‹ô\ôYBàà‹ô\ôY¬àô]\õà⁄]YUŸ^N¬àKŸYUŸ^R][P€›[ù][T›]\‘õ‹›\ëõ‹ï€€ò\ã][T›]\—ö[\ú◊JN¬Çà äà8.*∏.)x.,x.&∏."8.,∏. x.`∏.*¯.(x.%8.*¯.)x.,∏.(∏."∏.-8.&»8°§à8.%¯.-x.)x.,8.*¯.&x.-∏.b8.!Œà8.(∏.b8.+x.`¯.*¯.bx.`8.*¯.)x.-¯.+x."∏.-8.&¯.`8.%8.-x.(∏.)¯.%x.b8.+x.`x.%∏.)»
+8.%x.,∏.(x.)x.,¯.%8.,x.&∏.`x.*∏.%8.!¯.'8.)JH
+ã¬à\ŸQYôôX›
+
+
+HOà¬à€€ú›ÿ\”][HHô]ëö[\ê⁄\][TŸ[X›ôYãò›\úô[ù¬àô]ëö[\ê⁄\][TŸ[X›ôYãò›\úô[ùHö[\ê⁄\][TŸ[X›¬àYà
+ö[\ê⁄\][TŸ[X›]ÿ\”][JHô]\õé¬ÇàŸ]ÿ[Qö[\ú 
+ô]äHOà¬àYà
+ô]ãú⁄^ôHHJHô]\õàô]é¬à€€ú›X⁄»Hÿ[\–⁄\”‹ô\ôYôö[ô
+
+
+HOàOOHêSà	âàô]ãö\ 
+JN¬àô]\õàX⁄»»ô]»Ÿ]
+‹X⁄◊JHàô]»Ÿ]
+
+N¬àJN¬àŸ]ÿ[T›]\—ö[\ú 
+ô]äHOà¬àYà
+ô]ãú⁄^ôHHJHô]\õàô]é¬à€€ú›X⁄»H–SW‘’UT—TÀôö[ô
+
+
+HOàOOH∏.%¯.,x.bx.!¯.*¯.(x.%à	âàô]ãö\ 
+JN¬àô]\õàX⁄»»ô]»Ÿ]
+‹X⁄◊JHàô]»Ÿ]
+
+N¬àJN¬àŸ]›Yôëö[\ú 
+ô]äHOà¬àYà
+ô]ãú⁄^ôHHJHô]\õàô]é¬àYà
+ô]ãö\ ’Qëó—íSTó’SêT‘“Q”ëQ
+JHô]\õàô]»Ÿ]
+‘’Qëó—íSTó’SêT‘“Q”ëQJN¬àõ‹à
+€€ú›ò[YHŸà›Yôëö[\ê⁄\ò[Y\—õ‹ï€€ò\äH¬àYà
+ô]ãö\ ò[YJJHô]\õàô]»Ÿ]
+€ò[YWJN¬àBàõ‹à
+€€ú›àŸàõ€⁄ŸY⁄\[ô‘õ›[ô H¬àYà
+ô]ãö\ ãù⁄Ÿ[äJHô]\õàô]»Ÿ]
+‹ãù⁄Ÿ[óJN¬àBàõ‹à
+€€ú›àŸàõ€⁄ŸYù^Y\îõ›[ô H¬àYà
+ô]ãö\ ãù⁄Ÿ[äJHô]\õàô]»Ÿ]
+‹ãù⁄Ÿ[óJN¬àBàõ‹à
+€€ú›àŸà⁄\Y€€€€ò\î›]Àú⁄\Yõ›[ô H¬àYà
+ô]ãö\ ãù⁄Ÿ[äJHô]\õàô]»Ÿ]
+‹ãù⁄Ÿ[óJN¬àBàYà
+ô]ãö\ ’Qëó—íSTó‘””‘“TQ—STJJHô]\õàô]»Ÿ]
+‘’Qëó—íSTó‘””‘“TQ—STWJN¬àõ‹à
+€€ú›àŸà⁄\Y€€€€ò\î›]Àõ[Ÿ[YX\îõ›[ô H¬àYà
+ô]ãö\ ãù⁄Ÿ[äJHô]\õàô]»Ÿ]
+‹ãù⁄Ÿ[óJN¬àBàYà
+ô]ãö\ ’Qëó—íSTó‘”””S—S÷QPTó—STJJHô]\õàô]»Ÿ]
+‘’Qëó—íSTó‘”””S—S÷QPTó—STWJN¬àõ‹à
+€€ú›àŸàòXÿ[ùÿ[U€€ò\î›]Àõ[Ÿ[YX\îõ›[ô H¬àYà
+ô]ãö\ ãù⁄Ÿ[äJHô]\õàô]»Ÿ]
+‹ãù⁄Ÿ[óJN¬àBàYà
+ô]ãö\ ’Qëó—íSTó’êP–Sï”S—S÷QPTó—STJJHô]\õàô]»Ÿ]
+‘’Qëó—íSTó’êP–Sï”S—S÷QPTó—STWJN¬à€€ú›ò[òX⁄»H\úò^Kôúõ€Jô]äVÃN¬àô]\õàò[òX⁄»»ô]»Ÿ]
+Ÿò[òX⁄◊JHàô]»Ÿ]
+
+N¬àJN¬àŸ]][T›]\—ö[\ú 
+ô]äHOà¬àYà
+ô]ãú⁄^ôHHJHô]\õàô]é¬à€€ú›X⁄»H][T›]\—ö[\ì‹[€ú—õ‹ï€€ò\ãôö[ô
+
+
+HOàô]ãö\ 
+JN¬àô]\õàX⁄»»ô]»Ÿ]
+‹X⁄◊JHàô]»Ÿ]
+
+N¬àJN¬àK¬àö[\ê⁄\][TŸ[X›àÿ[\–⁄\”‹ô\ôYà›Yôëö[\ê⁄\ò[Y\—õ‹ï€€ò\ãàõ€⁄ŸY⁄\[ô‘õ›[ôÀàõ€⁄ŸYù^Y\îõ›[ôÀà⁄\Y€€€€ò\î›]ÀàòXÿ[ùÿ[U€€ò\î›]Àà][T›]\—ö[\ì‹[€ú—õ‹ï€€ò\ãàJN¬Çà\ŸS^[›]YôôX›
+
+
+HOà¬àYà
+ö[\ê⁄\^[›]ö[YY
+Hô]\õé¬àYà
+X\Y‹ô\úÀõ[ô›OOH	âà›Yôê\‹⁄Y€ôYR][P€›[ùÀô‹ò[ô›[OOH
+Hô]\õé¬à€€ú››Yôî›X⁄ﬁHHô]»Ÿ]
+›Yôëö[\ê⁄\ò[Y\’ö\⁄XõJN¬àYà
+
+›Yôê\‹⁄Y€ôYR][P€›[ùÀù[ò\‹⁄Y€ôYœ»
+Hà
+H›Yôî›X⁄ﬁKòY
+’Qëó—íSTó’SêT‘“Q”ëQ
+N¬àõ‹à
+€€ú›àŸàõ€⁄ŸY⁄\[ô‘õ›[ô H¬àYà
+ãò€›[ùà
+H›Yôî›X⁄ﬁKòY
+ãù⁄Ÿ[äN¬àBàõ‹à
+€€ú›àŸàõ€⁄ŸYù^Y\îõ›[ô H¬àYà
+ãò€›[ùà
+H›Yôî›X⁄ﬁKòY
+ãù⁄Ÿ[äN¬àBàYà
+⁄\Y€€€€ò\î›]Àú⁄\Y[\Hà
+H›Yôî›X⁄ﬁKòY
+’Qëó—íSTó‘””‘“TQ—STJN¬àõ‹à
+€€ú›àŸà⁄\Y€€€€ò\î›]Àú⁄\Yõ›[ô H¬àYà
+ãò€›[ùà
+H›Yôî›X⁄ﬁKòY
+ãù⁄Ÿ[äN¬àBàYà
+⁄\Y€€€€ò\î›]Àõ[Ÿ[YX\ë[\Hà
+H›Yôî›X⁄ﬁKòY
+’Qëó—íSTó‘”””S—S÷QPTó—STJN¬àõ‹à
+€€ú›àŸà⁄\Y€€€€ò\î›]Àõ[Ÿ[YX\îõ›[ô H¬àYà
+ãò€›[ùà
+H›Yôî›X⁄ﬁKòY
+ãù⁄Ÿ[äN¬àBàYà
+òXÿ[ùÿ[U€€ò\î›]Àõ[Ÿ[YX\ë[\Hà
+H›Yôî›X⁄ﬁKòY
+’Qëó—íSTó’êP–Sï”S—S÷QPTó—STJN¬àõ‹à
+€€ú›àŸàòXÿ[ùÿ[U€€ò\î›]Àõ[Ÿ[YX\îõ›[ô H¬àYà
+ãò€›[ùà
+H›Yôî›X⁄ﬁKòY
+ãù⁄Ÿ[äN¬àBà›Yôê⁄\‘›X⁄ﬁPYù\îö[YTôYãò›\úô[ùH›Yôî›X⁄ﬁN¬à][T›]\–⁄\‘›X⁄ﬁPYù\îö[YTôYãò›\úô[ùHô]»Ÿ]
+][T›]\‘õ‹›\ïö\⁄XõJN¬àŸ]ö[\ê⁄\^[›]ö[YY
+ùYJN¬àK¬àö[\ê⁄\^[›]ö[YYàX\Y‹ô\úÀõ[ô›à›Yôê\‹⁄Y€ôYR][P€›[ùÀô‹ò[ô›[à›Yôê\‹⁄Y€ôYR][P€›[ùÀù[ò\‹⁄Y€ôYàõ€⁄ŸY⁄\[ô‘õ›[ôÀàõ€⁄ŸYù^Y\îõ›[ôÀà⁄\Y€€€€ò\î›]ÀàòXÿ[ùÿ[U€€ò\î›]Àà›Yôëö[\ê⁄\ò[Y\’ö\⁄XõKà][T›]\‘õ‹›\ïö\⁄XõKàJN¬Çà äà8.'8.)x.(¯.)¯.(x.(¯.,∏.(∏. x.,∏.(¯.%¯..8. x.*∏.%∏.,∏.&x.,
+8. ∏.+x.&∏.`8. ∏.%x.`8.%8.-x.(∏.)¯. x.,x.&∏."∏.-8.&¯.*∏.%∏.,∏.&x.,8.(¯.,∏.(∏. x.,∏.( H8†%8."∏.-8.&»∏.`x.*∏.%8.!¯.%¯.,x.bx.!¯.*¯.(x.%à
+ã¬à€€ú›][T›]\’›[€›[ùH\ŸSY[[ à
+
+HOàUSW‘’UT—TÀúôYXŸJ
+›[K HOà›[H
+»
+][T›]\–€›[ùÀôŸ]
+ Hœ»
+K
+Kà⁄][T›]\–€›[ù◊Bà
+N¬à€€ú›ö\⁄XõR[ô^ûS‹ô\íYH\ŸSY[[ 
+
+HOà¬à€€ú›X\Hô]»X\›ö[ôÀù[Xô\èä
+N¬àö\⁄XõKôõ‹ëXX⁄
+
+‹ô\ã[ô^
+HOà¬àX\úŸ]
+‹ô\ãöY[ô^
+N¬àJN¬àô]\õàX\¬àK›ö\⁄XõWJN¬à€€ú›^\ö[Y[ùÿ[ùY‹ô\ú»H\ŸSY[[ à
+
+HOÇà‹ô\ê⁄\ÿX⁄Q^\ö[Y[ù[òXõYà»ö\⁄XõKú€XŸJX]õZ[äö\⁄XõKõ[ô›^\ö[Y[ùô\]Y\›Y€›[ù
+JBàà◊KàŸ^\ö[Y[ùô\]Y\›Y€›[ù‹ô\ê⁄\ÿX⁄Q^\ö[Y[ù[òXõYö\⁄XõWBà
+N¬à€€ú›^\ö[Y[ùö\⁄XõTYŸYH\ŸSY[[ à
+
+HOÇà^\ö[Y[ùÿ[ùY‹ô\úÀôö[\ä
+‹ô\äHOÇà‹ô\êÿ\íŸ^\ ‹ô\äKú€€YJ
+Ÿ^JHOà^\ö[Y[ùYò]Yÿ\íŸ^\Àö\ Ÿ^JJBà
+KàŸ^\ö[Y[ùYò]Yÿ\íŸ^\À^\ö[Y[ùÿ[ùY‹ô\ú◊Bà
+N¬à€€ú›^\ö[Y[ùZ\‹⁄[ô’ÿ[ùY€›[ùH\ŸSY[[ à
+
+HOÇà^\ö[Y[ùÿ[ùY‹ô\úÀôö[\äà
+‹ô\äHOà[‹ô\êÿ\íŸ^\ ‹ô\äKú€€YJ
+Ÿ^JHOà^\ö[Y[ùYò]Yÿ\íŸ^\Àö\ Ÿ^JJBà
+Kõ[ô›àŸ^\ö[Y[ùYò]Yÿ\íŸ^\À^\ö[Y[ùÿ[ùY‹ô\ú◊Bà
+N¬à€€ú›ö\⁄XõTYŸYH\ŸSY[[ à
+
+HOà
+‹ô\ê⁄\ÿX⁄Q^\ö[Y[ù[òXõY»^\ö[Y[ùö\⁄XõTYŸYàö\⁄XõKú€XŸJö\⁄XõS[Z]
+JKàŸ^\ö[Y[ùö\⁄XõTYŸY‹ô\ê⁄\ÿX⁄Q^\ö[Y[ù[òXõYö\⁄XõKö\⁄XõS[Z]Bà
+N¬à\ŸQYôôX›
+
+
+HOà¬àYà
+ö\⁄XõTYŸYõ[ô›à
+H\››XõUö\⁄XõTYŸYôYãò›\úô[ùHö\⁄XõTYŸY¬àK›ö\⁄XõTYŸYJN¬à€€ú›ö\⁄XõTYŸYõ‹îô[ô\àH\ŸSY[[ 
+
+HOà¬àYà
+à‹ô\ê⁄\ÿX⁄Q^\ö[Y[ù[òXõY	âÇàö\⁄XõTYŸYõ[ô›OOH	âÇà^\ö[Y[ùÿ[ùY‹ô\úÀõ[ô›à	âÇà^\ö[Y[ùZ\‹⁄[ô’ÿ[ùY€›[ùà	âÇà\››XõUö\⁄XõTYŸYôYãò›\úô[ùõ[ô›àà
+H¬àô]\õà\››XõUö\⁄XõTYŸYôYãò›\úô[ù¬àBàô]\õàö\⁄XõTYŸY¬àKŸ^\ö[Y[ùZ\‹⁄[ô’ÿ[ùY€›[ù^\ö[Y[ùÿ[ùY‹ô\úÀõ[ô›‹ô\ê⁄\ÿX⁄Q^\ö[Y[ù[òXõYö\⁄XõTYŸYJN¬à€€ú›\”[‹ôUö\⁄XõHH‹ô\ê⁄\ÿX⁄Q^\ö[Y[ù[òXõYà»ö\⁄XõKõ[ô›à^\ö[Y[ùö\⁄XõTYŸYõ[ô›ààö\⁄XõKõ[ô›àö\⁄XõS[Z]¬Çà€€ú›Yò]Q^\ö[Y[ù]Z[»HôXX›ù\ŸPÿ[òX⁄ à\ﬁ[ò»
+‹ô\úŒà‹ô\ñ◊JHOà¬àYà
+[‹ô\ê⁄\ÿX⁄Q^\ö[Y[ù[òXõY
+Hô]\õé¬à€€ú›ò]⁄à‹ô\ñ◊HH◊N¬à€€ú›€Z[YYŸ^\Œà›ö[ô÷◊HH◊N¬à€€ú›]Z[ò]⁄[Z]Bà‹ô\úÀõ[ô›H‘ëTó’êP““Së◊—VTíSQSï“SíUPS–”’Sïà»‘ëTó’êP““Së◊—VTíSQSï“SíUPS–”’Sïàà‘ëTó’êP““Së◊—VTíSQSï“Sê‘ëSQSï¬àõ‹à
+€€ú›‹ô\àŸà‹ô\ú H¬à€€ú›Ÿ^\»H‹ô\êÿ\íŸ^\ ‹ô\äN¬àYà
+Ÿ^\Àõ[ô›OOH
+H€€ù[ùYN¬à€€ú›[ôXYR€õ›€àHŸ^\Àú€€YJà
+Ÿ^JHOà^\ö[Y[ùYò]Yÿ\íŸ^\Àö\ Ÿ^JH^\ö[Y[ù[ôõY⁄Ÿ^\‘ôYãò›\úô[ùö\ Ÿ^JBà
+N¬àYà
+[ôXYR€õ›€äH€€ù[ùYN¬àò]⁄ú\⁄
+‹ô\äN¬à€Z[YYŸ^\Àú\⁄
+ããöŸ^\ N¬àõ‹à
+€€ú›Ÿ^HŸàŸ^\ H^\ö[Y[ù[ôõY⁄Ÿ^\‘ôYãò›\úô[ùòY
+Ÿ^JN¬àYà
+ò]⁄õ[ô›èH]Z[ò]⁄[Z]
+HúôXZŒ¬àBàYà
+ò]⁄õ[ô›OOH
+Hô]\õé¬àŸ]^\ö[Y[ùÿY[ô—]Z[ ùYJN¬àŸ]^\ö[Y[ù]Z[\úõ‹äù[
+N¬àûH¬à€€ú›ô\»H]ÿZ]ô]⁄
+‘ëTó’êP““Së◊––Të—URS◊–TW‘U¬àY]Ÿàî‘’ãàXY\úŒà»ê€€ù[ùU\Héàò\Xÿ][€ã⁄ú€€ààKàÿX⁄NàõõÀ\›‹ôHãàõŸNàî””ãú›ö[ô⁄YûJ»ÿ\úŒàò]⁄õX\
+‹ô\êÿ\îô\]Y\›
+HJKàJN¬à€€ú›^[ÿYH
+]ÿZ]ô\Àöú€€ä
+JH\»¬à‹ô\í][\–ûPÿ\èŒàõ€ìù[XõO[ÿö[S‹ô\ïòX⁄⁄[ô“€YTõ‹÷»õ‹ô\í][\–ûPÿ\àóOé¬à‹ô\ï\]\–ûPÿ\èŒàõ€ìù[XõO[ÿö[S‹ô\ïòX⁄⁄[ô“€YTõ‹÷»õ‹ô\ï\]\–ûPÿ\àóOé¬àYò]Yÿ\íŸ^\œŒà›ö[ô÷◊N¬à][\—\úõ‹èŒà›ö[ô»ù[¬à\]\—\úõ‹èŒà›ö[ô»ù[¬à\úõ‹èŒà›ö[ôŒ¬àN¬àYà
+\ô\Àõ⁄ Hõ›»ô]»\úõ‹ä^[ÿYô\úõ‹àœ»ô\Àú›]\’^
+N¬àŸ]^\ö[Y[ù‹ô\í][\–ûPÿ\ä
+ô]äHOà
+»ããúô]ãããä^[ÿYõ‹ô\í][\–ûPÿ\àœ»ﬂJHJJN¬àŸ]^\ö[Y[ù‹ô\ï\]\–ûPÿ\ä
+ô]äHOà
+»ããúô]ãããä^[ÿYõ‹ô\ï\]\–ûPÿ\àœ»ﬂJHJJN¬àŸ]^\ö[Y[ùYò]Yÿ\íŸ^\ 
+ô]äHOà¬à€€ú›ô^Hô]»Ÿ]
+ô]äN¬àõ‹à
+€€ú›Ÿ^HŸà^[ÿYöYò]Yÿ\íŸ^\»œ»◊JHô^òY
+Ÿ^JN¬àõ‹à
+€€ú›Ÿ^HŸà€Z[YYŸ^\ Hô^òY
+Ÿ^JN¬àô]\õàô^¬àJN¬à€€ú›]Z[\úõ‹àH^[ÿYö][\—\úõ‹à^[ÿYù\]\—\úõ‹àù[¬àŸ]^\ö[Y[ù]Z[\úõ‹ä]Z[\úõ‹äN¬àHÿ]⁄
+JH¬àŸ]^\ö[Y[ù]Z[\úõ‹äH[ú›[òŸ[Ÿà\úõ‹à»KõY\‹ÿYŸHà›ö[ô JJN¬àHö[ò[H¬àõ‹à
+€€ú›Ÿ^HŸà€Z[YYŸ^\ H^\ö[Y[ù[ôõY⁄Ÿ^\‘ôYãò›\úô[ùô[]JŸ^JN¬àŸ]^\ö[Y[ùÿY[ô—]Z[ ò[ŸJN¬àBàKàŸ^\ö[Y[ùYò]Yÿ\íŸ^\À‹ô\ê⁄\ÿX⁄Q^\ö[Y[ù[òXõYBà
+N¬Çà\ŸQYôôX›
+
+
+HOà¬àYà
+[‹ô\ê⁄\ÿX⁄Q^\ö[Y[ù[òXõY
+Hô]\õé¬àõ⁄YYò]Q^\ö[Y[ù]Z[ ^\ö[Y[ùÿ[ùY‹ô\ú N¬àKŸ^\ö[Y[ùÿ[ùY‹ô\úÀYò]Q^\ö[Y[ù]Z[À‹ô\ê⁄\ÿX⁄Q^\ö[Y[ù[òXõYJN¬Çà€€ú›õÿ›\”[ôR[òõﬁÿ\àH\ŸPÿ[òX⁄ à\ﬁ[ò»
+^[ÿYà[ôR[òõﬁX⁄–ÿ\î^[ÿY
+HOà¬à€€ú›]THH›ö[ô ^[ÿYú]Hœ»àäKùö[J
+N¬àYà
+]TH	âà]THOOHãHäHŸ]ôZX€TŸX\ò⁄
+ÿ[ö]^ôUôZX€TŸX\ò⁄[ú]
+]TJJN¬Çà]‹ô\íYH›ö[ô ^[ÿYõ‹ô\íYœ»àäKùö[J
+Hù[¬à€€ú›ÿ\îõ›“YH›ö[ô ^[ÿYòÿ\îõ›“Yœ»àäKùö[J
+N¬àYà
+[‹ô\íY	âàÿ\îõ›“Y
+H¬à‹ô\íYHX\Y‹ô\úÀôö[ô
+
+ HOà›ö[ô Àòÿ\îõ›“Yœ»àäKùö[J
+HOOHÿ\îõ›“Y
+OÀöYœ»ù[¬àBàYà
+[‹ô\íY	âà]TH	âà]THOOHãHäH¬à‹ô\íYHX\Y‹ô\úÀôö[ô
+
+ HOàX]⁄\’ôZX€TŸX\ò⁄
+À]TJJOÀöYœ»ù[¬àBàYà
+[‹ô\íY
+Hô]\õé¬ÇàŸ][ôR[òõﬁõÿ›\”‹ô\íY
+‹ô\íY
+N¬àŸ]ÿ[Qö[\ú ô]»Ÿ]
+
+JN¬àŸ]ÿ[T›]\—ö[\ú ô]»Ÿ]
+
+JN¬àŸ]›Yôëö[\ú ô]»Ÿ]
+
+JN¬àŸ]][T›]\—ö[\ú ô]»Ÿ]
+
+JN¬Çà€€ú›‹ô\àHX\Y‹ô\úÀôö[ô
+
+ HOàÀöYOOH‹ô\íY
+N¬àYà
+‹ô\à	âà‹ô\ê⁄\ÿX⁄Q^\ö[Y[ù[òXõY
+H¬à]ÿZ]Yò]Q^\ö[Y[ù]Z[ €‹ô\óJN¬àBÇà€€ú›YHö\⁄XõKôö[ô[ô^
+
+ HOàÀöYOOH‹ô\íY
+N¬àYà
+YèH
+H¬àŸ]ö\⁄XõS[Z]
+
+ô]äHOàX]õX^
+ô]ãY
+»JJN¬àŸ]^\ö[Y[ùô\]Y\›Y€›[ù
+
+ô]äHOÇàX]õX^
+ô]ãY
+»H
+»‘ëTó’êP““Së◊—VTíSQSï–RPQ–ïQëëTäBà
+N¬àBÇà€€ú›ûTÿ‹õ€H
+][\H
+HOà¬à€€ú›[Hÿ›[Y[ùôŸ][[Y[ùûRY
+‹ô\ãXÿ\ôI€‹ô\íYX
+N¬àYà
+[
+H¬à[úÿ‹õ€[ù’öY] »ôZ]ö[‹éàú€[€›ãõÿ⁄Œàú›\ùàJN¬à⁄[ô›Àúô\]Y\›[ö[X][€ëúò[YJ
+
+HOà¬àÿ›[Y[ùôŸ][[Y[ùûRY
+õ[ôKZ[òõﬁXÿ\ãXZK\ŸX›[€àäOÀúÿ‹õ€[ù’öY] ¬àôZ]ö[‹éàú€[€›ãàõÿ⁄ŒàõôX\ô\›ãàJN¬àJN¬àô]\õé¬àBàYà
+][\MäH⁄[ô›Àúô\]Y\›[ö[X][€ëúò[YJ
+
+HOàûTÿ‹õ€
+][\
+»JJN¬àN¬à⁄[ô›Àúô\]Y\›[ö[X][€ëúò[YJ
+
+HOàûTÿ‹õ€
+
+JN¬àKà⁄Yò]Q^\ö[Y[ù]Z[ÀX\Y‹ô\úÀ‹ô\ê⁄\ÿX⁄Q^\ö[Y[ù[òXõYö\⁄XõWBà
+N¬Çà€€ú›Y\[ö‘Ÿ]\ôYàH\ŸTôYäò[ŸJN¬à€€ú›Y\[ö‘ÿ‹õ€€ôTôYàH\ŸTôYäò[ŸJN¬à€€ú›Y\[ö“Ÿ^HH	‘›ö[ô [ö]X[õÿ›\ŸY‹ô\íYœ»àäKùö[J
+_WL	ŸY\[ö‘\ò[\Àòÿ\îõ›“YWL	ŸY\[ö‘\ò[\ÀúŸX\ò⁄X¬à€€ú›\›Y\[ö“Ÿ^TôYàH\ŸTôYäàäN¬à\ŸQYôôX›
+
+
+HOà¬àYà
+\›Y\[ö“Ÿ^TôYãò›\úô[ùOOHY\[ö“Ÿ^JHô]\õé¬à\›Y\[ö“Ÿ^TôYãò›\úô[ùHY\[ö“Ÿ^N¬àY\[ö‘Ÿ]\ôYãò›\úô[ùHò[ŸN¬àY\[ö‘ÿ‹õ€€ôTôYãò›\úô[ùHò[ŸN¬àKŸY\[ö“Ÿ^WJN¬à€€ú›ö[ôY\[ö”‹ô\àH\ŸPÿ[òX⁄ 
+
+Nà‹ô\àù[Oà¬à€€ú›‹ô\íYH›ö[ô [ö]X[õÿ›\ŸY‹ô\íYœ»àäKùö[J
+N¬à€€ú›ÿ\îõ›“YHY\[ö‘\ò[\Àòÿ\îõ›“Y¬à€€ú›ŸX\ò⁄HY\[ö‘\ò[\ÀúŸX\ò⁄¬àYà
+[‹ô\íY	âàXÿ\îõ›“Y	âà\ŸX\ò⁄
+Hô]\õàù[¬àYà
+‹ô\íY
+H¬à€€ú›ûS‹ô\íYHX\Y‹ô\úÀôö[ô
+
+ HOàÀöYOOH‹ô\íY
+N¬àYà
+ûS‹ô\íY
+Hô]\õàûS‹ô\íY¬àBàYà
+ÿ\îõ›“Y
+H¬à€€ú›ûPÿ\îõ›“YHX\Y‹ô\úÀôö[ô
+
+ HOà›ö[ô Àòÿ\îõ›“Yœ»àäKùö[J
+HOOHÿ\îõ›“Y
+N¬àYà
+ûPÿ\îõ›“Y
+Hô]\õàûPÿ\îõ›“Y¬àBàYà
+ŸX\ò⁄
+H¬àô]\õàX\Y‹ô\úÀôö[ô
+
+ HOàX]⁄\’ôZX€TŸX\ò⁄
+ÀŸX\ò⁄
+JHœ»ù[¬àBàô]\õàù[¬àKŸY\[ö‘\ò[\Àòÿ\îõ›“YY\[ö‘\ò[\ÀúŸX\ò⁄[ö]X[õÿ›\ŸY‹ô\íYX\Y‹ô\ú◊JN¬Çà\ŸQYôôX›
+
+
+HOà¬à€€ú›ò]”‹ô\íYH›ö[ô [ö]X[õÿ›\ŸY‹ô\íYœ»àäKùö[J
+N¬à€€ú›ò]‘ŸX\ò⁄HY\[ö‘\ò[\ÀúŸX\ò⁄¬à€€ú›\—Y\[ö»Hõ€€X[äò]”‹ô\íYY\[ö‘\ò[\Àòÿ\îõ›“Yò]‘ŸX\ò⁄
+N¬àYà
+Z\—Y\[ö»Y\[ö‘Ÿ]\ôYãò›\úô[ùX\Y‹ô\úÀõ[ô›OOH
+Hô]\õé¬à€€ú›‹ô\àHö[ôY\[ö”‹ô\ä
+N¬àYà
+[‹ô\äH¬àYà
+ò]‘ŸX\ò⁄
+H¬à€€ú›]Y\ûTŸX\ò⁄Hÿ[ö]^ôUôZX€TŸX\ò⁄[ú]
+ò]‘ŸX\ò⁄
+N¬àŸ]ôZX€TŸX\ò⁄
+
+ô]äHOà
+ô]àOOH]Y\ûTŸX\ò⁄»ô]àà]Y\ûTŸX\ò⁄
+JN¬àBàYà
+\ò]”‹ô\íY	âàYY\[ö‘\ò[\Àòÿ\îõ›“Y
+H¬àY\[ö‘Ÿ]\ôYãò›\úô[ùHùYN¬àY\[ö‘ÿ‹õ€€ôTôYãò›\úô[ùHùYN¬àBàô]\õé¬àBà€€ú›HHò]‘ŸX\ò⁄›ö[ô ‹ô\ãôù[]Hœ»àäKùö[J
+H›ö[ô ‹ô\ãú]Hœ»àäKùö[J
+N¬àY\[ö‘Ÿ]\ôYãò›\úô[ùHùYN¬àõ⁄Yõÿ›\”[ôR[òõﬁÿ\ä¬à‹ô\íYà‹ô\ãöYàÿ\îõ›“Yà›ö[ô ‹ô\ãòÿ\îõ›“Yœ»Y\[ö‘\ò[\Àòÿ\îõ›“Yœ»àäKùö[J
+Hù[à]NàH	âàHOOHãHà»HàãHãàJN¬àK¬àY\[ö‘\ò[\Àòÿ\îõ›“YàY\[ö‘\ò[\ÀúŸX\ò⁄àö[ôY\[ö”‹ô\ãàõÿ›\”[ôR[òõﬁÿ\ãà[ö]X[õÿ›\ŸY‹ô\íYàX\Y‹ô\úÀõ[ô›àJN¬Çà\ŸS^[›]YôôX›
+
+
+HOà¬à€€ú›ò]”‹ô\íYH›ö[ô [ö]X[õÿ›\ŸY‹ô\íYœ»àäKùö[J
+N¬àYà
+à\ò]”‹ô\íY	âÇàYY\[ö‘\ò[\Àòÿ\îõ›“Y	âÇàYY\[ö‘\ò[\ÀúŸX\ò⁄à
+H¬àô]\õé¬àBàYà
+Y\[ö‘ÿ‹õ€€ôTôYãò›\úô[ùYY\[ö‘Ÿ]\ôYãò›\úô[ù
+Hô]\õé¬à€€ú›‹ô\àHö[ôY\[ö”‹ô\ä
+N¬àYà
+[‹ô\äH¬àY\[ö‘ÿ‹õ€€ôTôYãò›\úô[ùHùYN¬àô]\õé¬àBà€€ú›YHö\⁄XõKôö[ô[ô^
+
+ HOàÀöYOOH‹ô\ãöY
+N¬àYà
+Y
+Hô]\õé¬àŸ]ö\⁄XõS[Z]
+
+ô]äHOàX]õX^
+ô]ãY
+»JJN¬àŸ]^\ö[Y[ùô\]Y\›Y€›[ù
+
+ô]äHOÇàX]õX^
+ô]ãY
+»H
+»‘ëTó’êP““Së◊—VTíSQSï–RPQ–ïQëëTäBà
+N¬à€€ú›[Hÿ›[Y[ùôŸ][[Y[ùûRY
+‹ô\ãXÿ\ôI€‹ô\ãöYX
+N¬àYà
+Y[
+Hô]\õé¬à⁄[ô›Àúô\]Y\›[ö[X][€ëúò[YJ
+
+HOà¬à[úÿ‹õ€[ù’öY] »ôZ]ö[‹éàú€[€›ãõÿ⁄ŒàõôX\ô\›àJN¬àY\[ö‘ÿ‹õ€€ôTôYãò›\úô[ùHùYN¬àJN¬àKŸY\[ö‘\ò[\Àòÿ\îõ›“YY\[ö‘\ò[\ÀúŸX\ò⁄ö[ôY\[ö”‹ô\ã[ö]X[õÿ›\ŸY‹ô\íYö\⁄XõWJN¬Çà\ŸQYôôX›
+
+
+HOà¬à›\ùò[ú⁄][€ä
+
+HOà¬àŸ]ö\⁄XõS[Z]
+‘ëTî◊“SíUPS‘Q—W‘“VëJN¬àŸ]^\ö[Y[ùô\]Y\›Y€›[ù
+‘ëTó’êP““Së◊—VTíSQSï“SíUPS–”’Sï
+N¬àJN¬àK¬àö[\ö[ô‘ÿ[T›]\—ö[\úÀàö[\ö[ô‘›Yôëö[\úÀàö[\ö[ô“][T›]\—ö[\úÀàö[\ö[ô‘ÿ[Qö[\úÀàö[\ö[ô’ôZX€TŸX\ò⁄õ‹ëö[\ö[ôÀàJN¬Çà\ŸQYôôX›
+
+
+HOà¬àYà
+[‹ô\ê⁄\ÿX⁄Q^\ö[Y[ù[òXõY
+Hô]\õé¬àYà
+\[Ÿà⁄[ô›»OOHù[ôYö[ôYäHô]\õé¬àYà
+ö\⁄XõKõ[ô›H‘ëTó’êP““Së◊—VTíSQSï“SíUPS–”’Sï
+Hô]\õé¬Çà€€ú›ô\]Y\›ZXYúõ€UöY]‹‹ùH
+
+HOà¬à^\ö[Y[ùÿ‹õ€ùYôô\îòYîôYãò›\úô[ùHù[¬à]ù\ù\›ö\⁄XõR[ô^HLN¬à€€ú›öY]‹‹ù‹H¬à€€ú›öY]‹‹ùõ›€HH⁄[ô›Àö[õô\íZY⁄ÿ›[Y[ùôÿ›[Y[ù[[Y[ùò€Y[ùZY⁄¬Çàõ‹à
+€€ú›‹ô\àŸàö\⁄XõTYŸYõ‹îô[ô\äH¬à€€ú›[Hÿ›[Y[ùôŸ][[Y[ùûRY
+‹ô\ãXÿ\ôI€‹ô\ãöYX
+N¬àYà
+Y[
+H€€ù[ùYN¬à€€ú›ôX›H[ôŸ]õ›[ô[ô–€Y[ùôX›
+
+N¬àYà
+ôX›òõ›€HHöY]‹‹ù‹ôX›ù‹èHöY]‹‹ùõ›€JH€€ù[ùYN¬à€€ú›YHö\⁄XõR[ô^ûS‹ô\íYôŸ]
+‹ô\ãöY
+N¬àYà
+YOHù[
+H€€ù[ùYN¬àù\ù\›ö\⁄XõR[ô^HX]õX^
+ù\ù\›ö\⁄XõR[ô^Y
+N¬àBÇàYà
+ù\ù\›ö\⁄XõR[ô^
+Hô]\õé¬à€€ú›ô^ô\]Y\›YHX]õZ[äàö\⁄XõKõ[ô›àX]õX^
+à‘ëTó’êP““Së◊—VTíSQSï“SíUPS–”’Sïàù\ù\›ö\⁄XõR[ô^
+»H
+»‘ëTó’êP““Së◊—VTíSQSï–RPQ–ïQëëTÇà
+Bà
+N¬àŸ]^\ö[Y[ùô\]Y\›Y€›[ù
+
+ô]äHOà
+ô^ô\]Y\›Yàô]à»ô^ô\]Y\›Yàô]äJN¬àN¬Çà€€ú›ÿ⁄Y[PZXYùYôô\àH
+
+HOà¬àYà
+^\ö[Y[ùÿ‹õ€ùYôô\îòYîôYãò›\úô[ùOHù[
+Hô]\õé¬à^\ö[Y[ùÿ‹õ€ùYôô\îòYîôYãò›\úô[ùH⁄[ô›Àúô\]Y\›[ö[X][€ëúò[YJô\]Y\›ZXYúõ€UöY]‹‹ù
+N¬àN¬Çà⁄[ô›ÀòY]ô[ù\›[ô\äúÿ‹õ€ãÿ⁄Y[PZXYùYôô\ã»\‹⁄]ôNàùYHJN¬à⁄[ô›ÀòY]ô[ù\›[ô\äúô\⁄^ôHãÿ⁄Y[PZXYùYôô\äN¬àô]\õà
+
+HOà¬à⁄[ô›Àúô[[›ôQ]ô[ù\›[ô\äúÿ‹õ€ãÿ⁄Y[PZXYùYôô\äN¬à⁄[ô›Àúô[[›ôQ]ô[ù\›[ô\äúô\⁄^ôHãÿ⁄Y[PZXYùYôô\äN¬àYà
+^\ö[Y[ùÿ‹õ€ùYôô\îòYîôYãò›\úô[ùOHù[
+H¬à⁄[ô›Àòÿ[òŸ[[ö[X][€ëúò[YJ^\ö[Y[ùÿ‹õ€ùYôô\îòYîôYãò›\úô[ù
+N¬à^\ö[Y[ùÿ‹õ€ùYôô\îòYîôYãò›\úô[ùHù[¬àBàN¬àK¬à‹ô\ê⁄\ÿX⁄Q^\ö[Y[ù[òXõYàö\⁄XõKõ[ô›àö\⁄XõR[ô^ûS‹ô\íYàö\⁄XõTYŸYõ‹îô[ô\ãàJN¬Çà\ŸQYôôX›
+
+
+HOà¬àYà
+Z\”[‹ôUö\⁄XõJHô]\õé¬àYà
+‹ô\ê⁄\ÿX⁄Q^\ö[Y[ù[òXõY	âà^\ö[Y[ùÿY[ô—]Z[ Hô]\õé¬à€€ú›\ôŸ]HÿY[‹ôTôYãò›\úô[ù¬àYà
+]\ôŸ]
+Hô]\õé¬à€€ú›ÿúŸ\ùô\àHô]»[ù\úŸX›[€ìÿúŸ\ùô\äà
+[ùöY\ HOà¬à€€ú›[ùûHH[ùöY\÷ÃN¬àYà
+Y[ùûOÀö\“[ù\úŸX›[ô Hô]\õé¬àYà
+‹ô\ê⁄\ÿX⁄Q^\ö[Y[ù[òXõY
+H¬àŸ]^\ö[Y[ùô\]Y\›Y€›[ù
+
+ô]äHOÇàX]õZ[äö\⁄XõKõ[ô›ô]à
+»‘ëTó’êP““Së◊—VTíSQSï“Sê‘ëSQSï
+Bà
+N¬àô]\õé¬àBàŸ]ö\⁄XõS[Z]
+
+ô]äHOàô]à
+»‘ëTî◊‘Q—W“Sê‘ëSQSï
+N¬àKà»õ€›X\ô⁄[éàåååãô\⁄€àåHBà
+N¬àÿúŸ\ùô\ãõÿúŸ\ùôJ\ôŸ]
+N¬àô]\õà
+
+HOàÿúŸ\ùô\ãô\ÿ€€õôX›
+
+N¬àKŸ^\ö[Y[ùÿY[ô—]Z[À\”[‹ôUö\⁄XõK‹ô\ê⁄\ÿX⁄Q^\ö[Y[ù[òXõYö\⁄XõKõ[ô›JN¬Çà€€ú›[]UôZX€P⁄\àH
+
+HOàŸ]ôZX€TŸX\ò⁄
+
+ô]äHOàô]ãú€XŸJLJJN¬à€€ú›ù[ï⁄]›XõTÿ‹õ€H
+X›[€éà
+
+HOàõ⁄Y
+HOà¬à[ô[ô‘ÿ‹õ€TôYãò›\úô[ùH⁄[ô›Àúÿ‹õ€N¬àX›[€ä
+N¬àN¬à€€ú›ÿY[ÿ[T›]\‘ÿ€‹HH
+ÿ[T›]\œŒàÿ[T›]\’ò[YJHOà¬à€€ú›Hô]»TìŸX\ò⁄\ò[\ ŸX\ò⁄\ò[\œÀù‘›ö[ô 
+Hœ»àäN¬àúŸ]
+õÿYãôù[äN¬àúŸ]
+úÿ€‹Hãò[äN¬àYà
+ÿ[T›]\ HúŸ]
+úÿ[T›]\»ãÿ[T›]\ N¬à[ŸHô[]Júÿ[T›]\»äN¬à€€ú›ô^\õH	‹]ò[Y_O…‹ù‘›ö[ô 
+_X¬àõ›]\ãúô\XŸJô^\õ»ÿ‹õ€àò[ŸHJN¬à⁄[ô›ÀúŸ][Y[›]
+
+
+HOà¬àYà
+›ö[ô ô]»TìŸX\ò⁄\ò[\ ⁄[ô›Àõÿÿ][€ãúŸX\ò⁄
+KôŸ]
+úÿ€‹HäHœ»àäKùö[J
+Kù”›Ÿ\êÿ\ŸJ
+HOOHò[äH¬à⁄[ô›Àõÿÿ][€ãúô\XŸJô^\õ
+N¬àBàKLå
+N¬àN¬à€€ú›ŸŸ€Tÿ[P⁄\›XõHH
+ÿ[Nà›ö[ô HOÇàù[ï⁄]›XõTÿ‹õ€
+
+
+HOà¬àYà
+ÿ[HOOHêSäH¬àŸ]ÿ[Qö[\ú ô]»Ÿ]
+
+JN¬àô]\õé¬àBàŸ]ÿ[Qö[\ú ô]»Ÿ]
+‹ÿ[WJJN¬àJN¬à€€ú›ŸŸ€Tÿ[T›]\–⁄\›XõHH
+ò[YNàÿ[T›]\—ö[\ïò[YJHOÇàù[ï⁄]›XõTÿ‹õ€
+
+
+HOà¬à€€ú››\úô[ùÿ€‹HH›ö[ô ŸX\ò⁄\ò[\œÀôŸ]
+úÿ€‹HäHœ»àäKùö[J
+Kù”›Ÿ\êÿ\ŸJ
+N¬àYà
+›\úô[ùÿ€‹HOOHò[à	âà
+ò[YHOOH∏.%¯.,x.bx.!¯.*¯.(x.%àò[YHOOH∏.*∏.b8.!¯.`x.)x.bx.)»äJH¬àŸ]ÿ[T›]\—ö[\ú ò[YHOOH∏.*∏.b8.!¯.`x.)x.bx.)»à»ô]»Ÿ]
+»∏.*∏.b8.!¯.`x.)x.bx.)»óJHàô]»Ÿ]
+
+JN¬àÿY[ÿ[T›]\‘ÿ€‹Jò[YHOOH∏.*∏.b8.!¯.`x.)x.bx.)»à»∏.*∏.b8.!¯.`x.)x.bx.)»àà[ôYö[ôY
+N¬àô]\õé¬àBàYà
+ò[YHOOH∏.%¯.,x.bx.!¯.*¯.(x.%äH¬àŸ]ÿ[T›]\—ö[\ú ô]»Ÿ]
+
+JN¬àô]\õé¬àBàYà
+Yö[\ê⁄\][TŸ[X›
+H¬àŸ]ÿ[T›]\—ö[\ú 
+ô]äHOà¬àYà
+ô]ãú⁄^ôHOOHH	âàô]ãö\ ò[YJJHô]\õàô]»Ÿ]
+
+N¬àô]\õàô]»Ÿ]
+›ò[YWJN¬àJN¬àô]\õé¬àBàŸ]ÿ[T›]\—ö[\ú 
+ô]äHOàŸŸ€TŸ]Y[Xô\äô]ãò[YJJN¬àJN¬à€€ú›ŸŸ€T›Yôê⁄\›XõHH
+ò[YNà›ö[ô HOÇàù[ï⁄]›XõTÿ‹õ€
+
+
+HOà¬àYà
+ò[YHOOH∏.%¯.,x.bx.!¯.*¯.(x.%äH¬àŸ]›Yôëö[\ú ô]»Ÿ]
+
+JN¬àô]\õé¬àBàYà
+Yö[\ê⁄\][TŸ[X›
+H¬àŸ]›Yôëö[\ú 
+ô]äHOà¬àYà
+ô]ãú⁄^ôHOOHH	âàô]ãö\ ò[YJJHô]\õàô]»Ÿ]
+
+N¬àô]\õàô]»Ÿ]
+›ò[YWJN¬àJN¬àô]\õé¬àBàŸ]›Yôëö[\ú 
+ô]äHOàŸŸ€TŸ]Y[Xô\äô]ãò[YJJN¬àJN¬à€€ú›€X\î€€⁄\Y[T›XõHH
+
+HOÇàù[ï⁄]›XõTÿ‹õ€
+
+
+HOàŸ]›Yôëö[\ú 
+ô]äHOà›ö\€€⁄\Y›Yôëö[\ú ô]äJJN¬à€€ú›€X\î€€[Ÿ[YX\ë[T›XõHH
+
+HOÇàù[ï⁄]›XõTÿ‹õ€
+
+
+HOàŸ]›Yôëö[\ú 
+ô]äHOà›ö\€€[Ÿ[YX\î›Yôëö[\ú ô]äJJN¬à€€ú›€X\ïòXÿ[ùÿ[S[Ÿ[YX\ë[T›XõHH
+
+HOÇàù[ï⁄]›XõTÿ‹õ€
+
+
+HOàŸ]›Yôëö[\ú 
+ô]äHOà›ö\òXÿ[ùÿ[S[Ÿ[YX\î›Yôëö[\ú ô]äJJN¬à€€ú›ŸŸ€R][T›]\–⁄\›XõHH
+ò[YNà][T›]\—ö[\ïò[YH\[ŸàUSW‘’UT◊—QW’—VJHOÇàù[ï⁄]›XõTÿ‹õ€
+
+
+HOà¬àYà
+Yö[\ê⁄\][TŸ[X›
+H¬àŸ]][T›]\—ö[\ú 
+ô]äHOà¬àYà
+ô]ãú⁄^ôHOOHH	âàô]ãö\ ò[YJJHô]\õàô]»Ÿ]
+
+N¬àô]\õàô]»Ÿ]
+›ò[YWJN¬àJN¬àô]\õé¬àBàŸ]][T›]\—ö[\ú 
+ô]äHOàŸŸ€TŸ]Y[Xô\äô]ãò[YJJN¬àJN¬à€€ú›ŸŸ€Qö[\ê⁄\[ŸT›XõHH
+
+HOÇàù[ï⁄]›XõTÿ‹õ€
+
+
+HOàŸ]ö[\ê⁄\][TŸ[X›
+
+äHOà]äJN¬à€€ú›€X\í][T›]\—ö[\ú‘›XõHH
+
+HOÇàù[ï⁄]›XõTÿ‹õ€
+
+
+HOàŸ]][T›]\—ö[\ú ô]»Ÿ]
+
+JJN¬à€€ú›€X\ïôZX€T›XõHH
+
+HOÇàù[ï⁄]›XõTÿ‹õ€
+
+
+HOà¬àŸ]ôZX€TŸX\ò⁄
+àäN¬àŸ]ö\⁄XõS[Z]
+‘ëTî◊“SíUPS‘Q—W‘“VëJN¬àŸ]^\ö[Y[ùô\]Y\›Y€›[ù
+‘ëTó’êP““Së◊—VTíSQSï“SíUPS–”’Sï
+N¬àJN¬à€€ú›[]UôZX€T›XõHH
+
+HOàù[ï⁄]›XõTÿ‹õ€
+
+
+HOà[]UôZX€P⁄\ä
+JN¬à€€ú›€X\ëö[\ú‘›XõHH
+
+HOÇàù[ï⁄]›XõTÿ‹õ€
+
+
+HOà¬àŸ]ÿ[Qö[\ú ô]»Ÿ]
+
+JN¬àŸ]ÿ[T›]\—ö[\ú ô]»Ÿ]
+
+JN¬àŸ]ôZX€TŸX\ò⁄
+àäN¬àŸ]›Yôëö[\ú ô]»Ÿ]
+
+JN¬àŸ]][T›]\—ö[\ú ô]»Ÿ]
+
+JN¬àŸ]ö\⁄XõS[Z]
+‘ëTî◊“SíUPS‘Q—W‘“VëJN¬àŸ]^\ö[Y[ùô\]Y\›Y€›[ù
+‘ëTó’êP““Së◊—VTíSQSï“SíUPS–”’Sï
+N¬àJN¬à€€ú›\–X›]ôQö[\ú»Bàÿ[Qö[\úÀú⁄^ôHààÿ[T›]\—ö[\úÀú⁄^ôHàà›Yôëö[\úÀú⁄^ôHàà][T›]\—ö[\úÀú⁄^ôHààôZX€TŸX\ò⁄ùö[J
+Kõ[ô›à¬Çà\ŸS^[›]YôôX›
+
+
+HOà¬àYà
+[ô[ô‘ÿ‹õ€TôYãò›\úô[ùOHù[
+Hô]\õé¬à€€ú›HH[ô[ô‘ÿ‹õ€TôYãò›\úô[ù¬à[ô[ô‘ÿ‹õ€TôYãò›\úô[ùHù[¬à⁄[ô›Àúô\]Y\›[ö[X][€ëúò[YJ
+
+HOà¬à⁄[ô›Àúÿ‹õ€ »‹àKYùàôZ]ö[‹éàò]]»àJN¬à⁄[ô›ÀúŸ][Y[›]
+
+
+HOà¬à⁄[ô›Àúÿ‹õ€ »‹àKYùàôZ]ö[‹éàò]]»àJN¬àK
+N¬àJN¬àK‹ÿ[T›]\—ö[\úÀôZX€TŸX\ò⁄][T›]\—ö[\úÀ›Yôëö[\úÀö\⁄XõS[Z]ÿ[Qö[\úÀ^\ö[Y[ùô\]Y\›Y€›[ùJN¬Çà äà8."¯.-8.!¯. x.c8. ∏.bx.,∏.(x.`8.!8.(¯.-¯.b8.+x.!Œà8.`8.(x.-¯.b8.+x.(x.-x.!8.&x.`x. x.bH‹ô\ó⁄][\»»‹ô\ó›\⁄◊›\]\»8.`¯.*¯.bx.%8.-∏.!¯. ∏.bx.+x.(x..x.)x.*¯.&x.bx.,∏.`¯.*¯.(x.b
+8.%x.bx.+x.!¯.`8.&¯.-8.%ôX[[YH8.`¯.&x.!8.+x.&x.`∏."¯.)H›\Xò\ŸJH
+ã¬à\ŸQYôôX›
+
+
+HOà¬àYà
+\⁄[ô—[[—ò[òX⁄ Hô]\õé¬à€€ú›\õHõÿŸ\‹Àô[ùãìëV‘PìP◊‘’TPêT—W’TìÀùö[J
+N¬à€€ú›Ÿ^HHõÿŸ\‹Àô[ùãìëV‘PìP◊‘’TPêT—W–Sì”ó“—VOÀùö[J
+N¬àYà
+]\õZŸ^JHô]\õé¬Çà]ÿ[òŸ[YHò[ŸN¬à]Xõ›[òŸNàô]\õï\O\[ŸàŸ][Y[›]à[ôYö[ôY¬à€€ú›ÿ⁄Y[TôYúô\⁄H
+
+HOà¬àYà
+ÿ[òŸ[Y
+Hô]\õé¬àYà
+Xõ›[òŸJH€X\ï[Y[›]
+Xõ›[òŸJN¬àXõ›[òŸHHŸ][Y[›]
+
+
+HOà¬àXõ›[òŸHH[ôYö[ôY¬àõ›]\ãúôYúô\⁄
+
+N¬àKL
+N¬àN¬Çà€€ú››\Xò\ŸHH‹ôX]P€Y[ù
+\õŸ^K¬à]]à»\ú⁄\›Ÿ\‹⁄[€éàò[ŸK]]‘ôYúô\⁄⁄Ÿ[éàò[ŸK]X›Ÿ\‹⁄[€í[ï\õàò[ŸHKàJN¬Çà€€ú›⁄[õô[H›\Xò\ŸBàò⁄[õô[
+õ[ÿö[K[‹ô\ã]òX⁄⁄[ôÀ\ﬁ[ò»äBàõ€äàú‹›‹ô\◊ÿ⁄[ôŸ\»ãà»]ô[ùàäàãÿ⁄[XNàúXõX»ãXõNà‘ëTó“UST◊’PìW”êSQHKàÿ⁄Y[TôYúô\⁄à
+Bàõ€äàú‹›‹ô\◊ÿ⁄[ôŸ\»ãà»]ô[ùàäàãÿ⁄[XNàúXõX»ãXõNà‘ëTó’T“◊’TUT◊’PìW”êSQHKàÿ⁄Y[TôYúô\⁄à
+Bàú›Xúÿ‹öXôJ
+N¬Çàô]\õà
+
+HOà¬àÿ[òŸ[YHùYN¬àYà
+Xõ›[òŸJH€X\ï[Y[›]
+Xõ›[òŸJN¬àõ⁄Y›\Xò\ŸKúô[[›ôP⁄[õô[
+⁄[õô[
+N¬àN¬àK‹õ›]\ã\⁄[ô—[[—ò[òX⁄◊JN¬Çà äà8.%8.-∏.!¯.)x.!¯.`8.(x.-¯.b8.+x.+x.(∏..x.b8.&∏.&x.*∏..8.%8. ∏.+x.!¯.*¯.&x.bx.,à8°§àõ›]\ãúôYúô\⁄
+
+H
+8."∏.%8.`8."∏.(∏. x.(¯.$¯.-HôX[[YH8.a8.(x.b8.%¯.,¯.!¯.,∏.&x.*¯.(¯.-¯.+x.*¯.&x.bx.,∏.+x.-¯.b8.&x.a8.(x.b8.a8.%8.bH›Xúÿ‹öXôJH
+ã¬à\ŸQYôôX›
+
+
+HOà¬à€€ú›[H‹ô\ïòX⁄⁄[ô‘õ€›ôYãò›\úô[ù¬àYà
+\[Ÿà⁄[ô›»OOHù[ôYö[ôYàY[
+Hô]\õé¬Çà€€ú›ÿ‹õ€]‹H
+
+HOà⁄[ô›Àúÿ‹õ€HHé¬Çà€€ú›€X\î[ö\›X[H
+
+HOà¬àê\õTôYãò›\úô[ùHò[ŸN¬àî[ôYãò›\úô[ùH¬àŸ]î[
+
+N¬àN¬Çà€€ú›€ï›X⁄›\ùH
+Nà›X⁄]ô[ù
+HOà¬àYà
+\ÿ‹õ€]‹
+
+HîôYúô\⁄[ô‘ôYãò›\úô[ù
+Hô]\õé¬àê\õTôYãò›\úô[ùHùYN¬àî›\ùTôYãò›\úô[ùHKù›X⁄\÷ÃKò€Y[ùN¬àî›\ùôYãò›\úô[ùHKù›X⁄\÷ÃKò€Y[ù¬àN¬Çà€€ú›€ï›X⁄[›ôHH
+Nà›X⁄]ô[ù
+HOà¬àYà
+\ê\õTôYãò›\úô[ùîôYúô\⁄[ô‘ôYãò›\úô[ù
+Hô]\õé¬àYà
+\ÿ‹õ€]‹
+
+JH¬à€X\î[ö\›X[
+
+N¬àô]\õé¬àBà€€ú›HHKù›X⁄\÷ÃKò€Y[ùHHî›\ùTôYãò›\úô[ù¬à€€ú›HKù›X⁄\÷ÃKò€Y[ùHî›\ùôYãò›\úô[ù¬àYà
+HäHô]\õé¬àYà
+X]òXú 
+HàX]òXú JH
+àçÕJHô]\õé¬à€€ú›[\YHX]õZ[äH
+àåÕKÃäN¬àî[ôYãò›\úô[ùH[\Y¬àŸ]î[
+[\Y
+N¬àYà
+[\Yà
+HKúô]ô[ùYò][
+
+N¬àN¬Çà€€ú›[ô[H
+
+HOà¬àYà
+\ê\õTôYãò›\úô[ù
+Hô]\õé¬àê\õTôYãò›\úô[ùHò[ŸN¬à€€ú›⁄›[ôYúô\⁄Hî[ôYãò›\úô[ùèHó‘ëSPT—W—STQ‘	âà\îôYúô\⁄[ô‘ôYãò›\úô[ù¬àî[ôYãò›\úô[ùH¬àŸ]î[
+
+N¬àYà
+⁄›[ôYúô\⁄
+H¬àîôYúô\⁄[ô‘ôYãò›\úô[ùHùYN¬àŸ]îôYúô\⁄[ô ùYJN¬à›\ùò[ú⁄][€ä
+
+HOà¬àõ›]\ãúôYúô\⁄
+
+N¬àJN¬à⁄[ô›ÀúŸ][Y[›]
+
+
+HOà¬àîôYúô\⁄[ô‘ôYãò›\úô[ùHò[ŸN¬àŸ]îôYúô\⁄[ô ò[ŸJN¬àKL
+N¬àBàN¬Çà[òY]ô[ù\›[ô\äù›X⁄›\ùã€ï›X⁄›\ù»\‹⁄]ôNàùYHJN¬à[òY]ô[ù\›[ô\äù›X⁄[›ôHã€ï›X⁄[›ôK»\‹⁄]ôNàò[ŸHJN¬à[òY]ô[ù\›[ô\äù›X⁄[ôã[ô[
+N¬à[òY]ô[ù\›[ô\äù›X⁄ÿ[òŸ[ã€X\î[ö\›X[
+N¬àô]\õà
+
+HOà¬à[úô[[›ôQ]ô[ù\›[ô\äù›X⁄›\ùã€ï›X⁄›\ù
+N¬à[úô[[›ôQ]ô[ù\›[ô\äù›X⁄[›ôHã€ï›X⁄[›ôJN¬à[úô[[›ôQ]ô[ù\›[ô\äù›X⁄[ôã[ô[
+N¬à[úô[[›ôQ]ô[ù\›[ô\äù›X⁄ÿ[òŸ[ã€X\î[ö\›X[
+N¬àN¬àK‹õ›]\óJN¬Çàô]\õà
+àÇà‹î[ààîôYúô\⁄[ô»»
+à]Çà€\‹”ò[YOHú⁄[ù\ãY]ô[ùÀ[õ€ôHö^Y[úŸ]^LãVÕåHõ^ù\›YûKXŸ[ù\àL»Çà›[O^ﬁ¬à‹ààY[ô’‹àõX^
+[ùäÿYôKX\ôXKZ[úŸ]]‹
+Kú
+Hãàò[úŸõ‹õNàò[ú€]VJ	‹îôYúô\⁄[ô»»àX]õX^
+î[HL
+_\
+Xà_Bà\öXK[]ôOHú€]HÇàÇà]à€\‹”ò[YOHôõ^X^]ÀV€Z[äL	Kåô[JWH][\ÀXŸ[ù\àÿ\Làõ›[ôYYù[ôÀ\€]KNLŒLàLÀçHKLà^XŸ[ù\à^VÃL\Hõ€ù\Ÿ[ZXõ€XY[ôÀ\€ùY»^]⁄]H⁄Y›À[»ö[ôÀLHö[ôÀ]⁄]KÃLèÇà‹îôYúô\⁄[ô»»
+àÇà‹[Çà€\‹”ò[YOHö[õ[ôKXõÿ⁄»LÀçHÀLÀçH⁄ö[öÀLõ›[ôYYù[õ‹ô\ãLàõ‹ô\ã]⁄]KÃÕHõ‹ô\ã]]⁄]H[ö[X]K\‹[àÇà\öXKZY[ÇàœÇà‹[èû›ZS[ô»OOHô[àà»ìÿY[ô»]Kããààà∏. x.,¯.)x.,x.!¯.`∏.*¯.)x.%8. ∏.bx.+x.(x..x.)x†)àüO‹‹[èÇàœÇà
+Hàî[èHó‘ëSPT—W—STQ‘»
+à‹[èû›ZS[ô»OOHô[àà»îô[X\ŸH»ôYúô\⁄àà∏.&¯.)x.b8.+x.(∏.`8.'∏.-¯.b8.+x.(¯.-x.`8.'¯.(¯."àüO‹‹[èÇà
+Hà
+à‹[èû›ZS[ô»OOHô[àà»î[»ôYúô\⁄àà∏.%8.-∏.!¯.)x.!¯.`8.'∏.-¯.b8.+x.(¯.-x.`8.'¯.(¯."àüO‹‹[èÇà
+_BàŸ]èÇàŸ]èÇà
+Hàù[Bà[ôR[òõﬁúöYŸTõ›öY\Çà‹ô\úœ^€[ôR[òõﬁZS‹ô\îX⁄‹ﬂBàZS[ôœ^›ZS[ôﬂBàôYô\úôY‹ô\íY^⁄[ö]X[õÿ›\ŸY‹ô\íYBà›Yôì‹[€úœ^‹›Yôîõ‹›\üBàÿ[P\‹⁄Y€ôY\–ûTÿ[O^‹ÿ[P\‹⁄Y€ôY\ﬂBà›]\”‹[€úœ^⁄][T›]\‘õ‹›\üBàõÿ›\ŸY‹ô\íY^€[ôR[òõﬁõÿ›\”‹ô\íYBà€îX⁄–ÿ\è^ ^[ÿY
+HOàõ⁄Yõÿ›\”[ôR[òõﬁÿ\ä^[ÿY
+_Bà€îÿ]ôY^ 
+HOàõ›]\ãúôYúô\⁄
+
+_BàÇà]ÇàôYè^€‹ô\ïòX⁄⁄[ô‘õ€›ôYüBà€\‹”ò[YOHôõ^Z[ãZLZ[ãZYù[ÀYù[õ^LHõ^X€€ôÀ\€]KLL[ùX[X\ŸY^VÃM\HXY[ôÀ[õ‹õX[^\€]KNÇàÇà]à€\‹”ò[YOHõ^X]]»õ^Z[ãZLZ[ãZYù[ÀYù[X^]À[õ€ôHõ^LHõ^X€€›ô\ôõ›À^X€\ôÀ\€]KLLèÇà]à€\‹”ò[YOHú›X⁄ﬁH‹LãMôÀ\€]KLLŒMHLãLàLàòX⁄Ÿõ‹Xõ\à€NúL»èÇà]à€\‹”ò[YOHõXãLàõ›[ôYLûôÀ]⁄]HLà⁄Y›À\€Hö[ôÀLHö[ôÀ\€]KLåÕåèÇà]à€\‹”ò[YOHôõ^ÀYù[õ^[õ›‹ò\][\ÀXŸ[ù\àÿ\Là›ô\ôõ›À^X]]»ãLçHÀ]ŸXö⁄][›ô\ôõ›À\ÿ‹õ€[ôŒù›X⁄HèÇàù]€Çà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ 
+HOà¬à⁄[ô›Àúÿ‹õ€ »‹àYùàôZ]ö[‹éàú€[€›àJN¬à_Bà]O^›ZS[ô»OOHô[àà»îÿ‹õ€»‹àà∏.`8.)x.-¯.b8.+x.&x.*¯.&x.bx.,∏."8.+x.a8.&¯.&∏.&x.*∏..8.%üBà\öXK[Xô[^›ZS[ô»OOHô[àà»îÿ‹õ€»‹àà∏.`8.)x.-¯.b8.+x.&x.*¯.&x.bx.,∏."8.+x.a8.&¯.&∏.&x.*∏..8.%üBà€\‹”ò[YOHö[õ[ôKYõ^LL⁄ö[öÀL][\ÀXŸ[ù\àù\›YûKXŸ[ù\àõ›[ôYLûôÀ\€]KLLL»^^»õ€ù\Ÿ[ZXõ€^\€]KMÃö[ôÀLHö[ôÀ\€]KLå›X⁄[X[ö\[][€àX›]ôNòôÀ\€]KLåŒLÇàÇà›ZS[ô»OOHô[àà»ï‹àà∏.&∏.&x.*∏..8.%üBàÿù]€èÇàù]€Çà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ 
+HOàŸ]ZS[ô 
+ô]äHOà
+ô]àOOHùà»ô[àààùäJ_Bà€\‹”ò[YOHö[õ[ôKYõ^LLZ[ã]ÀLL⁄ö[öÀL][\ÀXŸ[ù\àù\›YûKXŸ[ù\àõ›[ôYLûôÀ\€]KLLLãçH^^»õ€ù\Ÿ[ZXõ€^\€]KMÃö[ôÀLHö[ôÀ\€]KLå›X⁄[X[ö\[][€àX›]ôNòôÀ\€]KLåŒLÇà]O^›ZS[ô»OOHô[àà»î›⁄]⁄[ô›XYŸHàà∏.*∏.)x.,x.&∏.(8.,∏.*x.,àüBà\öXK[Xô[^›ZS[ô»OOHô[àà»î›⁄]⁄[ô›XYŸHàà∏.*∏.)x.,x.&∏.(8.,∏.*x.,àüBàÇà›ZS[ô»OOHùà»‹ô\ïòX⁄⁄[ô’€€ò\ëõY’œàà‹ô\ïòX⁄⁄[ô’€€ò\ëõY—ÿàœüBàÿù]€èÇà‹[à€\‹”ò[YOHú⁄ö[öÀL^\€Hõ€ù\Ÿ[ZXõ€^\€]KNLèû›ZS[ô»OOHô[àà»îŸX\ò⁄àà∏.!8.bx.&x.*¯.,àüO‹‹[èÇà[ú]à\OHù^Çà[ú][ŸOHù^Çà[ù\íŸ^R[ùHúŸX\ò⁄Çà]]–ÿ\][^ôOHò⁄\òX›\ú»Çà]]–€‹úôX›HõŸôàÇà‹[⁄X⁄œ^Ÿò[Ÿ_Bà]]–€€\]OHõŸôàÇàò[YO^›ôZX€TŸX\ò⁄Bà€ê⁄[ôŸO^ JHOàŸ]ôZX€TŸX\ò⁄
+ÿ[ö]^ôUôZX€TŸX\ò⁄[ú]
+Kù\ôŸ]ùò[YJJ_Bà€î\›O^ JHOà¬àKúô]ô[ùYò][
+
+N¬à€€ú›ò]»HKò€\õÿ\ô]KôŸ]]Jù^‹Z[àäN¬à€€ú›€X[ôYHÿ[ö]^ôUôZX€TŸX\ò⁄\›Jò] N¬àYà
+€X[ôY
+HŸ]ôZX€TŸX\ò⁄
+€X[ôY
+N¬à_BàXŸZ€\è^›ZS[ô»OOHô[àà»î]H»⁄\‹⁄\¯†)ààà∏.%¯.,8.`8.&∏.-x.(∏.&H»8.`8.)x. ∏.%∏.,x.!¯†)àüBà]O^›ZS[ô»OOHô[àà»ï\H‹à€ôÀ\ô\‹»»\›Húõ€H€\õÿ\ôàà∏.`x.%x.,8.`x.)x.bx.)¯.'∏.-8.(x.'∏.c8.*¯.(¯.-¯.+x. x.%8.!8.bx.,∏.!¯.`8.'∏.-¯.b8.+x.)¯.,∏.!¯."8.,∏. x.!8.)x.-8.&¯.&∏.+x.(¯.c8.%üBà\öXK[Xô[^›ZS[ô»OOHô[àà»îŸX\ò⁄]H‹à⁄\‹⁄\À\H‹à\›Húõ€H€\õÿ\ôàà∏.!8.bx.&x.*¯.,∏.%¯.,8.`8.&∏.-x.(∏.&x.*¯.(¯.-¯.+x.`8.)x. ∏.%x.,x.)¯.%∏.,x.!»8.'∏.-8.(x.'∏.c8.*¯.(¯.-¯.+x.)¯.,∏.!¯."8.,∏. x.!8.)x.-8.&¯.&∏.+x.(¯.c8.%üBà€\‹”ò[YO^ÿ€äàõZ[ãZLLHZ[ã]ÀLõ^LHõ›[ôYLûôÀ\€]KNMLL»KLãçH^XŸ[ù\à^Xò\ŸHõ€ù\Ÿ[ZXõ€Xù[\ã[ù[\»òX⁄⁄[ôÀ[õ‹õX[^]⁄]Hãàõ›][ôK[õ€ôHö[ôÀLXŸZ€\éù^]⁄]KÕHãàôõÿ›\À]ö\⁄XõNúö[ôÀLàõÿ›\À]ö\⁄XõNúö[ôÀ]⁄]KÃÕHÇà
+_BàœÇàù]€Çà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^Ÿ[]UôZX€T›Xõ_Bà€\‹”ò[YOHöLL⁄ö[öÀLõ›[ôYLûôÀ\€]KNMLL»^^»õ€ù\Ÿ[ZXõ€^]⁄]H›X⁄[X[ö\[][€àÇàÇà›ZS[ô»OOHô[àà»ë[àà∏.)x.&àüBàÿù]€èÇàù]€Çà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ÿ€X\ïôZX€T›Xõ_Bà€\‹”ò[YOHöLL⁄ö[öÀLõ›[ôYLûôÀ\€]KLLL»^^»õ€ù\Ÿ[ZXõ€^\€]KMÃö[ôÀLHö[ôÀ\€]KLå›X⁄[X[ö\[][€àÇàÇà›ZS[ô»OOHô[àà»ê€X\ààà∏.)x.bx.,∏.!»üBàÿù]€èÇàŸ]èÇàŸ]èÇàŸ]èÇàXY\à€\‹”ò[YOHòôÀ\€]KLLŒMHLKLà€NúL»€NúKL»èÇà]à€\‹”ò[YOHõXãLàõ^õ^]‹ò\][\ÀXŸ[ù\àÿ\LàLà€NúLèÇàH€\‹”ò[YOHù^VÃKåÕ\ô[WHõ€ùXõ€òX⁄⁄[ôÀ]Y⁄^\€]KNLèì‹ô\àòX⁄⁄[ôœ⁄OÇàù]€Çà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ 
+HOàõ⁄Yò[ú€]P[YÿXﬁR][\ 
+_Bà\ÿXõY^›ò[ú€]P[ù\ﬁ_Bà€\‹”ò[YO^ÿ€äàú⁄ö[öÀLõ›[ôYYù[LãçHKLH^VÃL\Hõ€ù\Ÿ[ZXõ€XY[ôÀ\€ùY»ö[ôÀLH›X⁄[X[ö\[][€àãàò[ú€]P[ù\ﬁBà»ò›\ú€‹ã[õ›X[›ŸYôÀ\€]KLå^\€]KMLö[ôÀ\€]KLÃŒÇààòôÀXõYKML^XõYKNLö[ôÀXõYKLåŒLÇà
+_Bà]O^¬àZS[ô»OOHô[àÇà»îôK]ò[ú€]H][Hò[Y\»[ôZHõ›\»
+]\›õ›‹Œ»TH[Z]\Y\ HÇàà∏.`x.&¯.)x.`¯.*¯.(x.b8.%¯.,x.bx.!¯."∏.-¯.b8.+x.(¯.,∏.(∏. x.,∏.(¯.`x.)x.,8.*¯.(x.,∏.(∏.`8.*¯.%x..8.a8.%¯.(∏.`x.&∏.&∏. x.)x..8.b8.(H
+8.`8.(¯.-x.(∏.!¯."8.,∏. x.`x.%∏.)¯.)x.b8.,∏.*∏..8.%8."8.,¯. x.,x.%8."8.,¯.&x.)¯.&x.%x.,∏.(x.`8."¯.-8.(¯.c8.'¯.`8.)¯.+x.(¯.c
+HÇàBàÇà›ò[ú€]P[ù\ﬁBà»
+ZS[ô»OOHô[àà»ïò[ú€][ôÀããààà∏. x.,¯.)x.,x.!¯.`x.&¯.)KããàäBàà
+ZS[ô»OOHô[àà»îôK]ò[ú€]H[àà∏.`x.&¯.)x.`¯.*¯.(x.b8.%¯.,x.bx.!¯.*¯.(x.%ä_Bàÿù]€èÇàù]€Çà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^›ŸŸ€Qö[\ê⁄\[ŸT›Xõ_Bà]O^¬àö[\ê⁄\][TŸ[X›à»
+ZS[ô»OOHô[àÇà»ê›\úô[ù[ŸNà][K\Ÿ[X›⁄\»\àõ›Àà\»›⁄]⁄»⁄[ô€K\Ÿ[X›àÇàà∏.`∏.*¯.(x.%8.&¯.,x."8."8..8.&∏.,x.&Nà8.`8.)x.-¯.+x. x.*¯.)x.,∏.(∏."∏.-8.&¯.%x.b8.+x.`x.%∏.)»0≠»8.`x.%x.,8.`8.'∏.-¯.b8.+x.*∏.)x.,x.&∏.`8.&¯.a¯.&x.`8.)x.-¯.+x. x.%¯.-x.)x.,8.*¯.&x.-∏.b8.!»äBàà
+ZS[ô»OOHô[àÇà»ê›\úô[ù[ŸNà⁄[ô€K\Ÿ[X›\àõ›Àà\»›⁄]⁄»][K\Ÿ[X›àÇàà∏.`∏.*¯.(x.%8.&¯.,x."8."8..8.&∏.,x.&Nà8.`8.)x.-¯.+x. x.%¯.-x.)x.,8.*¯.&x.-∏.b8.!¯.%x.b8.+x.`x.%∏.)»0≠»8.`x.%x.,8.`8.'∏.-¯.b8.+x.*∏.)x.,x.&∏.`8.&¯.a¯.&x.`8.)x.-¯.+x. x.*¯.)x.,∏.(∏."∏.-8.&»äBàBà\öXK\ô\‹ŸY^Ÿö[\ê⁄\][TŸ[X›Bà€\‹”ò[YO^ÿ€äàú⁄ö[öÀLõ›[ôYYù[LãçHKLH^VÃL\Hõ€ù\Ÿ[ZXõ€XY[ôÀ\€ùY»ö[ôÀLH›X⁄[X[ö\[][€àãàö[\ê⁄\][TŸ[X›à»òôÀ\€]KNML^]⁄]Hö[ôÀ\€]KNÇààòôÀX[Xô\ãLL^X[Xô\ãNMLö[ôÀX[Xô\ãLÃŒLÇà
+_BàÇàŸö[\ê⁄\][TŸ[X›à»
+ZS[ô»OOHô[àà»ì][HŸ[X›àà∏.`8.)x.-¯.+x. x.*¯.)x.,∏.(∏."∏.-8.&»äBàà
+ZS[ô»OOHô[àà»î⁄[ô€HŸ[X›àà∏.`8.)x.-¯.+x. x.%¯.-x.)x.,8.*¯.&x.-∏.b8.!»ä_Bàÿù]€èÇà€‹ô\ê⁄\ÿX⁄Q^\ö[Y[ù[òXõY	âà‹ô\ê⁄\ÿX⁄PòYŸSXô[»
+à‹[à€\‹”ò[YOHú⁄ö[öÀLõ›[ôYYù[ôÀY[Y\ò[MLLãçHKLH^VÃL\Hõ€ù\Ÿ[ZXõ€XY[ôÀ\€ùY»^Y[Y\ò[NLö[ôÀLHö[ôÀY[Y\ò[LåŒLèÇàŸö[\îô[ô\î[ô[ô»»
+ZS[ô»OOHô[àà»ï\][ô»ààï\][ô»äHà‹ô\ê⁄\ÿX⁄PòYŸSXô[Bà‹‹[èÇà
+Hàù[Bà€‹ô\ê⁄\ÿX⁄Q^\ö[Y[ù[òXõY	âà\–X›]ôQö[\ú»»
+àù]€Çà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ÿ€X\ëö[\ú‘›Xõ_Bà€\‹”ò[YOHú⁄ö[öÀLõ›[ôYYù[ôÀ]⁄]HLãçHKLH^VÃL\Hõ€ù\Ÿ[ZXõ€XY[ôÀ\€ùY»^\€]KNö[ôÀLHö[ôÀ\€]KLå›X⁄[X[ö\[][€àX›]ôNòôÀ\€]KLLÇàÇà›ZS[ô»OOHô[àà»ê€X\àö[\ú»àà∏.)x.bx.,∏.!»ö[\àüBàÿù]€èÇà
+Hàù[BàŸ]èÇà›ò[ú€]P[Y\‹ÿYŸH»
+à]à€\‹”ò[YOHõXãLàõ›[ôYLûôÀ\⁄ﬁKMLL»KLà^^»õ€ù[YY][HXY[ôÀ\€ùY»^\⁄ﬁKNLèÇà›ò[ú€]P[Y\‹ÿYŸ_BàŸ]èÇà
+Hàù[Bà›\⁄[ô—[[—ò[òX⁄»»
+à]à€\‹”ò[YOHõXãLàõ›[ôYLûôÀX[Xô\ãMLL»KLãçH^\€Hõ€ù[YY][HXY[ôÀ\€ùY»^X[Xô\ãNLèÇà›ZS[ô»OOHô[àÇà»ë[[»ò[òX⁄»[ŸNà]ôHÿ\ú»]Hõ›õ›[ôúõ€H›\Xò\ŸHÇààë[[»ò[òX⁄»[ŸNà8.a8.(x.b8.'∏.&∏. ∏.bx.+x.(x..x.)x.(¯.%∏."8.(¯.-8.!¯."8.,∏. H›\Xò\ŸHüBàŸ]èÇà
+Hàù[Bà⁄\—Yô\úôYYò][€ìÿY[ô»»
+à]à€\‹”ò[YOHõXãLàõ›[ôYLûôÀ\⁄ﬁKMLL»KLãçH^\€Hõ€ù[YY][HXY[ôÀ\€ùY»^\⁄ﬁKNLèÇà›ZS[ô»OOHô[àÇà»ÿY[ô»ÿ\à\›[àHòX⁄Ÿ‹õ›[ôããà	ŸYô\úôYYò][€î\òŸ[ùIXàà8. x.,¯.)x.,x.!¯.`∏.*¯.)x.%8.(¯.,∏.(∏. x.,∏.(¯.(¯.%∏.`¯.&x.'∏.-¯.bx.&x.*¯.)x.,x.!Àããà	ŸYô\úôYYò][€î\òŸ[ùIXBàŸ]èÇà
+Hàù[BàŸ]Uÿ\õö[ô‹Àõ[ô›à	âà\›\ô\‹—]Uÿ\õö[ô‹—\ö[ô—Yô\úôYYò][€à»
+à]à€\‹”ò[YOHõXãLàõ›[ôYLûôÀ\õ‹ŸKMLL»KLãçH^\€Hõ€ù[YY][HXY[ôÀ\€ùY»^\õ‹ŸKNèÇà]Hÿ\õö[ôŒàŸ]Uÿ\õö[ô‹÷Ã_BàŸ]èÇà
+Hàù[BàŸ^\ö[Y[ù]Z[\úõ‹à	âà‹ô\ê⁄\ÿX⁄Q^\ö[Y[ù[òXõY»
+à]à€\‹”ò[YOHõXãLàõ›[ôYLûôÀX[Xô\ãMLL»KLà^^»õ€ù\Ÿ[ZXõ€XY[ôÀ\€ùY»^X[Xô\ãNLö[ôÀLHö[ôÀX[Xô\ãLLèÇà›ZS[ô»OOHô[àà»ë]Z[ÿY[ô»ÿ\õö[ôŒààà∏.`∏.*¯.)x.%8.(¯.,∏.(∏.)x.,8.`8.+x.-x.(∏.%8.&∏.,∏.!¯.*∏.b8.)¯.&x.a8.(x.b8.*∏.,¯.`8.(¯.a¯."àüBàŸ^\ö[Y[ù]Z[\úõ‹üBàŸ]èÇà
+Hàù[BàÇà]à€\‹”ò[YOHõXãLàõ›[ôYLûôÀ]⁄]HLàèÇà]à€\‹”ò[YOHõXãLàõ›[ôYLûôÀ\€]KLLŒLàèÇà]à€\‹”ò[YOHõXãLKçHèÇà‹[à€\‹”ò[YOHù^^»õ€ù\Ÿ[ZXõ€òX⁄⁄[ôÀ]⁄YH^\€]KMåèû›ZS[ô»OOHô[àà»îÿ[H›]\»àà∏.*∏.%∏.,∏.&x.,8. ∏.,∏.(àüO‹‹[èÇàŸ]èÇà]à€\‹”ò[YOHô‹öYÿ\Làà›[O^ﬁ»‹öY[\]P€€[[úŒàúô\X]
+]]ÀYö]Z[õX^
+ÃúYúäJHà_OÇà‹ÿ[T›]\–⁄\[Ÿ[ÀõX\
+
+»ÿ[T›]\ŒàÀX›]ôK€›[ùJHOà¬à€€ú›⁄›‘⁄\^[ôH»OOH∏.(¯.+x.*∏.b8.!»à	âàõ€⁄ŸY⁄\[ô‘õ›[ôÀõ[ô›à¬à€€ú›⁄›–ù^Y\ë^[ôH»OOH∏."8.+x.!»à	âàõ€⁄ŸYù^Y\îõ›[ôÀõ[ô›à¬à€€ú›⁄›‘⁄\Y€€^[ôH»OOH∏.*∏.b8.!¯.`x.)x.bx.)»à	âà⁄\Y€€€€ò\î›]Àú€€€›[ùà¬à€€ú›⁄›’òXÿ[ù[Ÿ[YX\ë^[ôH»OOH∏.)¯.b8.,∏.!»à	âàòXÿ[ùÿ[U€€ò\î›]ÀùòXÿ[ù€›[ùà¬àYà
+⁄›‘⁄\^[ô
+H¬àô]\õà
+à]ÇàŸ^O^‹ﬂBà€\‹”ò[YO^ÿ€äàôõ^Z[ãZVÕHZ[ã]ÀL›ô\ôõ›ÀZY[àõ›[ôYLûö[ôÀLHò[ú⁄][€ãX€€‹ú»ãàX›]ôH»òôÀ\€]KNML^]⁄]Hö[ôÀ\€]KNààòôÀ\€]KLL^\€]KMÃö[ôÀ\€]KLåŒÇà
+_BàÇàù]€Çà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ 
+HOàŸŸ€Tÿ[T›]\–⁄\›XõJ _Bà€\‹”ò[YO^ÿ€äàôõ^Z[ãZVÕHZ[ã]ÀLõ^LHõ^X€€][\ÀXŸ[ù\àù\›YûKXŸ[ù\àLKçHKLà^XŸ[ù\àò[ú⁄][€ãX€€‹ú»›X⁄[X[ö\[][€àãàX›]ôH»ù^]⁄]Hààö›ô\éòôÀ\€]KLåÕÃÇà
+_BàÇà]à€\‹”ò[YOHùù[òÿ]H^^»õ€ù[YY][HXY[ôÀ\€ùY»èûŸ\‹^Tÿ[T›]\”Xô[
+ÀZS[ô _OŸ]èÇà]à€\‹”ò[YOHù^Xò\ŸHõ€ù\Ÿ[ZXõ€Xù[\ã[ù[\»XY[ôÀ[õ€ôHèÇàÿ€›[ùBàŸ]èÇàÿù]€èÇàù]€Çà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ 
+HOàŸ]õ€⁄ŸY⁄\[ô‘[ô[^[ôY
+
+‹[äHOà[‹[ä_Bà\öXKY^[ôY^ÿõ€⁄ŸY⁄\[ô‘[ô[^[ôYBà\öXK[Xô[^¬àõ€⁄ŸY⁄\[ô‘[ô[^[ôYà»∏.(∏.b8.+x.(¯.+x.&∏.*∏.b8.!»õ€⁄ŸY⁄\[ô»Çàà∏. ∏.(∏.,∏.(∏.(¯.+x.&∏.*∏.b8.!»õ€⁄ŸY⁄\[ô»ÇàBà]OH∏.(¯.+x.&∏.*∏.b8.!»
+õ€⁄ŸY⁄\[ô HÇà€\‹”ò[YO^ÿ€äàôõ^ÀNH⁄ö[öÀLõ^X€€][\ÀXŸ[ù\àù\›YûKXŸ[ù\à^Xò\ŸHõ€ù\Ÿ[ZXõ€XY[ôÀ[õ€ôH›X⁄[X[ö\[][€àãàX›]ôBà»òõ‹ô\ã[õ‹ô\ã]⁄]KÃçH^]⁄]H›ô\éòôÀ]⁄]KÃLÇààòõ‹ô\ã[õ‹ô\ã\€]KLåŒL^\€]KMå›ô\éòôÀ\€]KLåÕåÇà
+_BàÇàÿõ€⁄ŸY⁄\[ô‘[ô[^[ôY»∏£ »àà∏£!üBàÿù]€èÇàŸ]èÇà
+N¬àBàYà
+⁄›–ù^Y\ë^[ô
+H¬àô]\õà
+à]ÇàŸ^O^‹ﬂBà€\‹”ò[YO^ÿ€äàôõ^Z[ãZVÕHZ[ã]ÀL›ô\ôõ›ÀZY[àõ›[ôYLûö[ôÀLHò[ú⁄][€ãX€€‹ú»ãàX›]ôH»òôÀ\€]KNML^]⁄]Hö[ôÀ\€]KNààòôÀ\€]KLL^\€]KMÃö[ôÀ\€]KLåŒÇà
+_BàÇàù]€Çà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ 
+HOàŸŸ€Tÿ[T›]\–⁄\›XõJ _Bà€\‹”ò[YO^ÿ€äàôõ^Z[ãZVÕHZ[ã]ÀLõ^LHõ^X€€][\ÀXŸ[ù\àù\›YûKXŸ[ù\àLKçHKLà^XŸ[ù\àò[ú⁄][€ãX€€‹ú»›X⁄[X[ö\[][€àãàX›]ôH»ù^]⁄]Hààö›ô\éòôÀ\€]KLåÕÃÇà
+_BàÇà]à€\‹”ò[YOHùù[òÿ]H^^»õ€ù[YY][HXY[ôÀ\€ùY»èûŸ\‹^Tÿ[T›]\”Xô[
+ÀZS[ô _OŸ]èÇà]à€\‹”ò[YOHù^Xò\ŸHõ€ù\Ÿ[ZXõ€Xù[\ã[ù[\»XY[ôÀ[õ€ôHèÇàÿ€›[ùBàŸ]èÇàÿù]€èÇàù]€Çà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ 
+HOàŸ]õ€⁄ŸYù^Y\î[ô[^[ôY
+
+‹[äHOà[‹[ä_Bà\öXKY^[ôY^ÿõ€⁄ŸYù^Y\î[ô[^[ôYBà\öXK[Xô[^¬àõ€⁄ŸYù^Y\î[ô[^[ôYà»∏.(∏.b8.+x. x.)x..8.b8.(x.%x.,∏.(x."∏.-¯.b8.+x.)x..x. x.!8.bx.,à
+8."8.+x.! HÇàà∏. ∏.(∏.,∏.(∏. x.)x..8.b8.(x.%x.,∏.(x."∏.-¯.b8.+x.)x..x. x.!8.bx.,à
+8."8.+x.! HÇàBà]OH∏.)x..x. x.!8.bx.,à
+8."8.+x.! HÇà€\‹”ò[YO^ÿ€äàôõ^ÀNH⁄ö[öÀLõ^X€€][\ÀXŸ[ù\àù\›YûKXŸ[ù\à^Xò\ŸHõ€ù\Ÿ[ZXõ€XY[ôÀ[õ€ôH›X⁄[X[ö\[][€àãàX›]ôBà»òõ‹ô\ã[õ‹ô\ã]⁄]KÃçH^]⁄]H›ô\éòôÀ]⁄]KÃLÇààòõ‹ô\ã[õ‹ô\ã\€]KLåŒL^\€]KMå›ô\éòôÀ\€]KLåÕåÇà
+_BàÇàÿõ€⁄ŸYù^Y\î[ô[^[ôY»∏£ »àà∏£!üBàÿù]€èÇàŸ]èÇà
+N¬àBàYà
+⁄›‘⁄\Y€€^[ô
+H¬àô]\õà
+à]ÇàŸ^O^‹ﬂBà€\‹”ò[YO^ÿ€äàôõ^Z[ãZVÕHZ[ã]ÀL›ô\ôõ›ÀZY[àõ›[ôYLûö[ôÀLHò[ú⁄][€ãX€€‹ú»ãàX›]ôH»òôÀ\€]KNML^]⁄]Hö[ôÀ\€]KNààòôÀ\€]KLL^\€]KMÃö[ôÀ\€]KLåŒÇà
+_BàÇàù]€Çà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ 
+HOàŸŸ€Tÿ[T›]\–⁄\›XõJ _Bà€\‹”ò[YO^ÿ€äàôõ^Z[ãZVÕHZ[ã]ÀLõ^LHõ^X€€][\ÀXŸ[ù\àù\›YûKXŸ[ù\àLKçHKLà^XŸ[ù\àò[ú⁄][€ãX€€‹ú»›X⁄[X[ö\[][€àãàX›]ôH»ù^]⁄]Hààö›ô\éòôÀ\€]KLåÕÃÇà
+_BàÇà]à€\‹”ò[YOHùù[òÿ]H^^»õ€ù[YY][HXY[ôÀ\€ùY»èûŸ\‹^Tÿ[T›]\”Xô[
+ÀZS[ô _OŸ]èÇà]à€\‹”ò[YOHù^Xò\ŸHõ€ù\Ÿ[ZXõ€Xù[\ã[ù[\»XY[ôÀ[õ€ôHèÇàÿ€›[ùBàŸ]èÇàÿù]€èÇàù]€Çà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ 
+HOàŸ]⁄\Y€€^ò\‘[ô[^[ôY
+
+‹[äHOà[‹[ä_Bà\öXKY^[ôY^‹⁄\Y€€^ò\‘[ô[^[ôYBà\öXK[Xô[^¬à⁄\Y€€^ò\‘[ô[^[ôYà»∏.(∏.b8.+x. x.(¯.+x.!»⁄\Y»[Ÿ[YX\à
+8.*∏.b8.!¯.`x.)x.bx.) HÇàà∏. ∏.(∏.,∏.(∏. x.(¯.+x.!»⁄\Y»[Ÿ[YX\à
+8.*∏.b8.!¯.`x.)x.bx.) HÇàBà]OHú⁄\Y0≠»[Ÿ[YX\àÇà€\‹”ò[YO^ÿ€äàôõ^ÀNH⁄ö[öÀLõ^X€€][\ÀXŸ[ù\àù\›YûKXŸ[ù\à^Xò\ŸHõ€ù\Ÿ[ZXõ€XY[ôÀ[õ€ôH›X⁄[X[ö\[][€àãàX›]ôBà»òõ‹ô\ã[õ‹ô\ã]⁄]KÃçH^]⁄]H›ô\éòôÀ]⁄]KÃLÇààòõ‹ô\ã[õ‹ô\ã\€]KLåŒL^\€]KMå›ô\éòôÀ\€]KLåÕåÇà
+_BàÇà‹⁄\Y€€^ò\‘[ô[^[ôY»∏£ »àà∏£!üBàÿù]€èÇàŸ]èÇà
+N¬àBàYà
+⁄›’òXÿ[ù[Ÿ[YX\ë^[ô
+H¬àô]\õà
+à]ÇàŸ^O^‹ﬂBà€\‹”ò[YO^ÿ€äàôõ^Z[ãZVÕHZ[ã]ÀL›ô\ôõ›ÀZY[àõ›[ôYLûö[ôÀLHò[ú⁄][€ãX€€‹ú»ãàX›]ôH»òôÀ\€]KNML^]⁄]Hö[ôÀ\€]KNààòôÀ\€]KLL^\€]KMÃö[ôÀ\€]KLåŒÇà
+_BàÇàù]€Çà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ 
+HOàŸŸ€Tÿ[T›]\–⁄\›XõJ _Bà€\‹”ò[YO^ÿ€äàôõ^Z[ãZVÕHZ[ã]ÀLõ^LHõ^X€€][\ÀXŸ[ù\àù\›YûKXŸ[ù\àLKçHKLà^XŸ[ù\àò[ú⁄][€ãX€€‹ú»›X⁄[X[ö\[][€àãàX›]ôH»ù^]⁄]Hààö›ô\éòôÀ\€]KLåÕÃÇà
+_BàÇà]à€\‹”ò[YOHùù[òÿ]H^^»õ€ù[YY][HXY[ôÀ\€ùY»èûŸ\‹^Tÿ[T›]\”Xô[
+ÀZS[ô _OŸ]èÇà]à€\‹”ò[YOHù^Xò\ŸHõ€ù\Ÿ[ZXõ€Xù[\ã[ù[\»XY[ôÀ[õ€ôHèÇàÿ€›[ùBàŸ]èÇàÿù]€èÇàù]€Çà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ 
+HOàŸ]òXÿ[ùÿ[S[Ÿ[YX\î[ô[^[ôY
+
+‹[äHOà[‹[ä_Bà\öXKY^[ôY^›òXÿ[ùÿ[S[Ÿ[YX\î[ô[^[ôYBà\öXK[Xô[^¬àòXÿ[ùÿ[S[Ÿ[YX\î[ô[^[ôYà»∏.(∏.b8.+x. x.(¯.+x.!»[Ÿ[YX\à
+8.)¯.b8.,∏.! HÇàà∏. ∏.(∏.,∏.(∏. x.(¯.+x.!»[Ÿ[YX\à
+8.)¯.b8.,∏.! HÇàBà]OHì[Ÿ[YX\à
+8.)¯.b8.,∏.! HÇà€\‹”ò[YO^ÿ€äàôõ^ÀNH⁄ö[öÀLõ^X€€][\ÀXŸ[ù\àù\›YûKXŸ[ù\à^Xò\ŸHõ€ù\Ÿ[ZXõ€XY[ôÀ[õ€ôH›X⁄[X[ö\[][€àãàX›]ôBà»òõ‹ô\ã[õ‹ô\ã]⁄]KÃçH^]⁄]H›ô\éòôÀ]⁄]KÃLÇààòõ‹ô\ã[õ‹ô\ã\€]KLåŒL^\€]KMå›ô\éòôÀ\€]KLåÕåÇà
+_BàÇà›òXÿ[ùÿ[S[Ÿ[YX\î[ô[^[ôY»∏£ »àà∏£!üBàÿù]€èÇàŸ]èÇà
+N¬àBàô]\õà
+àù]€ÇàŸ^O^‹ﬂBà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ 
+HOàŸŸ€Tÿ[T›]\–⁄\›XõJ _Bà€\‹”ò[YO^ÿ€äàõZ[ãZVÕHõ›[ôYLûLKçHKLà^XŸ[ù\àò[ú⁄][€ãX€€‹ú»›X⁄[X[ö\[][€àãàX›]ôH»òôÀ\€]KNML^]⁄]HààòôÀ\€]KLL^\€]KMÃ›ô\éòôÀ\€]KLåÕÃÇà
+_BàÇà]à€\‹”ò[YOHùù[òÿ]H^^»õ€ù[YY][HXY[ôÀ\€ùY»èûŸ\‹^Tÿ[T›]\”Xô[
+ÀZS[ô _OŸ]èÇà]à€\‹”ò[YOHù^Xò\ŸHõ€ù\Ÿ[ZXõ€Xù[\ã[ù[\»XY[ôÀ[õ€ôHèûÿ€›[ùOŸ]èÇàÿù]€èÇà
+N¬àJ_BàŸ]èÇàÿõ€⁄ŸY⁄\[ô‘[ô[^[ôY	âàõ€⁄ŸY⁄\[ô‘õ›[ôÀõ[ô›à»
+à]à€\‹”ò[YOHõ]Làõ›[ôYLûõ‹ô\àõ‹ô\ãZ[ôY€ÀLåŒôÀZ[ôY€ÀMLŒLLàö[ôÀLHö[ôÀZ[ôY€ÀLLŒèÇà]à€\‹”ò[YOHõXãLKçHèÇà‹[à€\‹”ò[YOHù^^»õ€ù\Ÿ[ZXõ€òX⁄⁄[ôÀ]⁄YH^Z[ôY€ÀNMLèû›ZS[ô»OOHô[àà»î⁄\[ô»õ›[ôHõ€⁄ŸY⁄\[ô»àà∏.(¯.+x.&∏.*∏.b8.!»8†%õ€⁄ŸY⁄\[ô»üO‹‹[èÇà€\‹”ò[YOHõ]LçH^VÃLHõ€ù[õ‹õX[XY[ôÀ\€ùY»^Z[ôY€ÀNLÕÕHèÇà›ZS[ô»OOHô[àÇà»ë‹õ›\YûH⁄\[ô»ò[YH€àÿ\à
+€ôH⁄\\àõ›[ô
+Kà€õHõ‹àÿ[H›]\»ïÿZ][ô»⁄\ãà][K\Ÿ[X›[òXõYàÇàà∏.`x.(∏. x.%x.,∏.(x.!8.b8.,∏.`¯.&x.(¯.%à
+8.(¯.+x.&∏.)x.,8."∏.-8.& H0≠»8.`8."x.'∏.,∏.,8.*∏.%∏.,∏.&x.,8. ∏.,∏.(à∏.(¯.+x.*∏.b8.!◊à0≠»8.`8.)x.-¯.+x. x.*¯.)x.,∏.(∏.(¯.+x.&∏.a8.%8.bHüBà‹ÇàŸ]èÇà]à€\‹”ò[YOHôõ^õ^]‹ò\][\ÀY[ôÿ\Là›ô\ôõ›À^X]]»ãLHèÇàÿõ€⁄ŸY⁄\[ô‘õ›[ôÀõX\
+
+äHOà
+àù]€ÇàŸ^O^‹ãù⁄Ÿ[üBà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ 
+HOàŸŸ€T›Yôê⁄\›XõJãù⁄Ÿ[ä_Bà€\‹”ò[YO^ÿ€äàôõ^Z[ãZVÕLúHZ[ã]ÀVÕç\ô[WHX^]ÀVÃLô[WH⁄ö[öÀLõ^X€€][\ÀXŸ[ù\àù\›YûKXŸ[ù\àÿ\LHõ›[ôYYù[LãçHKLà^XŸ[ù\àõ€ù\Ÿ[ZXõ€ö[ôÀLHò[ú⁄][€ãVŸö[\ãõﬁ\⁄Y›◊H›X⁄[X[ö\[][€àãà›Yôëö[\úÀö\ ãù⁄Ÿ[äBà»òôÀZ[ôY€ÀMå^]⁄]Hö[ôÀZ[ôY€ÀMLÕLÇààòôÀ]⁄]H^Z[ôY€ÀNLö[ôÀZ[ôY€ÀLåŒL›ô\éòôÀZ[ôY€ÀLLŒLÇà
+_BàÇà‹[à€\‹”ò[YOHõ[ôKX€[\L»X^]ÀYù[^^»õ€ù[YY][HXY[ôÀ\€ùY»èû‹ãõXô[O‹‹[èÇà‹[à€\‹”ò[YOHù^Xò\ŸHõ€ù\Ÿ[ZXõ€XY[ôÀ[õ€ôHXù[\ã[ù[\»èû‹ãò€›[ùO‹‹[èÇàÿù]€èÇà
+J_BàŸ]èÇàŸ]èÇà
+Hàù[Bàÿõ€⁄ŸYù^Y\î[ô[^[ôY	âàõ€⁄ŸYù^Y\îõ›[ôÀõ[ô›à»
+à]à€\‹”ò[YOHõ]Làõ›[ôYLûõ‹ô\àõ‹ô\ãY[Y\ò[LåŒôÀY[Y\ò[MLŒLLàö[ôÀLHö[ôÀY[Y\ò[LLŒèÇà]à€\‹”ò[YOHõXãLKçHèÇà‹[à€\‹”ò[YOHù^^»õ€ù\Ÿ[ZXõ€òX⁄⁄[ôÀ]⁄YH^Y[Y\ò[NMLèû›ZS[ô»OOHô[àà»êù^Y\àHõ€⁄ŸYàà∏.)x..x. x.!8.bx.,à8†%8."8.+x.!»üO‹‹[èÇà€\‹”ò[YOHõ]LçH^VÃLHõ€ù[õ‹õX[XY[ôÀ\€ùY»^Y[Y\ò[NLÕÕHèÇà›ZS[ô»OOHô[àÇà»ë‹õ›\YûHù^Y\àò[YH
+€ôH⁄\\àù^Y\äKà€õHõ‹àÿ[H›]\»êõ€⁄ŸYãà][K\Ÿ[X›[òXõYàÇàà∏.`x.(∏. x.%x.,∏.(x."∏.-¯.b8.+x.)x..x. x.!8.bx.,à
+8."∏.-8.&¯.)x.,8."∏.-¯.b8.+JH0≠»8.`8."x.'∏.,∏.,8.*∏.%∏.,∏.&x.,8. ∏.,∏.(à∏."8.+x.!◊à0≠»8.`8.)x.-¯.+x. x.*¯.)x.,∏.(∏."∏.-¯.b8.+x.a8.%8.bHüBà‹ÇàŸ]èÇà]à€\‹”ò[YOHôõ^õ^]‹ò\][\ÀY[ôÿ\Là›ô\ôõ›À^X]]»ãLHèÇàÿõ€⁄ŸYù^Y\îõ›[ôÀõX\
+
+äHOà
+àù]€ÇàŸ^O^‹ãù⁄Ÿ[üBà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ 
+HOàŸŸ€T›Yôê⁄\›XõJãù⁄Ÿ[ä_Bà€\‹”ò[YO^ÿ€äàôõ^Z[ãZVÕLúHZ[ã]ÀVÕç\ô[WHX^]ÀVÃLô[WH⁄ö[öÀLõ^X€€][\ÀXŸ[ù\àù\›YûKXŸ[ù\àÿ\LHõ›[ôYYù[LãçHKLà^XŸ[ù\àõ€ù\Ÿ[ZXõ€ö[ôÀLHò[ú⁄][€ãVŸö[\ãõﬁ\⁄Y›◊H›X⁄[X[ö\[][€àãà›Yôëö[\úÀö\ ãù⁄Ÿ[äBà»òôÀY[Y\ò[Må^]⁄]Hö[ôÀY[Y\ò[MLÕLÇààòôÀ]⁄]H^Y[Y\ò[NLö[ôÀY[Y\ò[LåŒL›ô\éòôÀY[Y\ò[LLŒLÇà
+_BàÇà‹[à€\‹”ò[YOHõ[ôKX€[\L»X^]ÀYù[^^»õ€ù[YY][HXY[ôÀ\€ùY»èû‹ãõXô[O‹‹[èÇà‹[à€\‹”ò[YOHù^Xò\ŸHõ€ù\Ÿ[ZXõ€XY[ôÀ[õ€ôHXù[\ã[ù[\»èû‹ãò€›[ùO‹‹[èÇàÿù]€èÇà
+J_BàŸ]èÇàŸ]èÇà
+Hàù[Bà‹⁄\Y€€^ò\‘[ô[^[ôY	âà⁄\Y€€€€ò\î›]Àú€€€›[ùà»
+à]à€\‹”ò[YOHõ]Là‹XŸK^KLàõ›[ôYLûõ‹ô\àõ‹ô\ã]ö[€]LåŒHôÀ]ö[€]MLŒLLàö[ôÀLHö[ôÀ]ö[€]LLŒèÇà]à€\‹”ò[YOHõXãLçHèÇà‹[à€\‹”ò[YOHù^^»õ€ù\Ÿ[ZXõ€òX⁄⁄[ôÀ]⁄YH^]ö[€]NMLèû›ZS[ô»OOHô[àà»î⁄\YHYò[òŸYö[\ú»àà∏.*∏.b8.!¯.`x.)x.bx.)»8†%8. x.(¯.+x.!¯.`8.'∏.-8.b8.(HüO‹‹[èÇà€\‹”ò[YOHõ]LçH^VÃLHõ€ù[õ‹õX[XY[ôÀ\€ùY»^]ö[€]NLÕÕHèÇà›ZS[ô»OOHô[àÇà»òÿ\úÀú⁄\Y[ô[Ÿ[YX\àö[\úÀà][K\Ÿ[X›[àXX⁄õ›»
+‘äN»õ›‹»\ôH€€Xö[ôY⁄]SëàÇààòÿ\úÀú⁄\Y8.`x.)x.,[Ÿ[YX\à0≠»8.`x.%∏.)¯.`8.%8.-x.(∏.)¯. x.,x.&x.`8.)x.-¯.+x. x.a8.%8.bx.*¯.)x.,∏.(∏."∏.-8.&»
+‘äH0≠»8.*∏.+x.!¯.`x.%∏.)»Së8. x.,x.&HüBà‹ÇàŸ]èÇà]à€\‹”ò[YOHúõ›[ôY^õ‹ô\àõ‹ô\ã\⁄ﬁKLåŒôÀ\⁄ﬁKMLŒMHLàèÇà]à€\‹”ò[YOHõXãLKçHèÇà‹[à€\‹”ò[YOHù^VÃL\Hõ€ù\Ÿ[ZXõ€^\⁄ﬁKNMLèî⁄\Y‹‹[èÇà€\‹”ò[YOHù^VÃLH^\⁄ﬁKNLÕÕHèû›ZS[ô»OOHô[àà»ê[H[ûH⁄\Yò[YK[\HHÿ\úÀú⁄\Y\»õ[ö»àà∏.%¯.,x.bx.!¯.*¯.(x.%H8.a8.(x.b8."8.,¯. x.,x.%8. ∏.bx.+x.!8.)¯.,∏.(H⁄\Y0≠»8.)¯.b8.,∏.!»H8.a8.(x.b8.(x.-x. ∏.bx.+x.!8.)¯.,∏.(x.`¯.&Hÿ\úÀú⁄\YüO‹ÇàŸ]èÇà]à€\‹”ò[YOHôõ^õ^]‹ò\][\ÀY[ôÿ\Là›ô\ôõ›À^X]]»ãLçHèÇàù]€Çà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ÿ€X\î€€⁄\Y[T›Xõ_Bà€\‹”ò[YO^ÿ€äàôõ^Z[ãZVÕLúHZ[ã]ÀVÕç\ô[WHX^]ÀVŒ\ô[WH⁄ö[öÀLõ^X€€][\ÀXŸ[ù\àù\›YûKXŸ[ù\àÿ\LHõ›[ôYYù[LãçHKLà^XŸ[ù\àõ€ù\Ÿ[ZXõ€ö[ôÀLHò[ú⁄][€ãVŸö[\ãõﬁ\⁄Y›◊H›X⁄[X[ö\[][€àãà\€€⁄\Y[PX›]ôBà»òôÀ\⁄ﬁKMå^]⁄]Hö[ôÀ\⁄ﬁKMLÕLÇààòôÀ]⁄]H^\⁄ﬁKNLö[ôÀ\⁄ﬁKLåŒL›ô\éòôÀ\⁄ﬁKLLŒLÇà
+_BàÇà‹[à€\‹”ò[YOHõ[ôKX€[\LàX^]ÀYù[^^»õ€ù[YY][HXY[ôÀ\€ùY»èû›ZS[ô»OOHô[àà»ê[àà∏.%¯.,x.bx.!¯.*¯.(x.%üO‹‹[èÇà‹[à€\‹”ò[YOHù^Xò\ŸHõ€ù\Ÿ[ZXõ€XY[ôÀ[õ€ôHXù[\ã[ù[\»èÇà‹⁄\Y€€€€ò\î›]Àú€€€›[ùBà‹‹[èÇàÿù]€èÇà‹⁄\Y€€€€ò\î›]Àú⁄\Y[\Hà»
+àù]€Çà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ 
+HOàŸŸ€T›Yôê⁄\›XõJ’Qëó—íSTó‘””‘“TQ—STJ_Bà€\‹”ò[YO^ÿ€äàôõ^Z[ãZVÕLúHZ[ã]ÀVÕç\ô[WHX^]ÀVŒ\ô[WH⁄ö[öÀLõ^X€€][\ÀXŸ[ù\àù\›YûKXŸ[ù\àÿ\LHõ›[ôYYù[LãçHKLà^XŸ[ù\àõ€ù\Ÿ[ZXõ€ö[ôÀLHò[ú⁄][€ãVŸö[\ãõﬁ\⁄Y›◊H›X⁄[X[ö\[][€àãà›Yôëö[\úÀö\ ’Qëó—íSTó‘””‘“TQ—STJBà»òôÀ\⁄ﬁKMå^]⁄]Hö[ôÀ\⁄ﬁKMLÕLÇààòôÀ]⁄]H^\⁄ﬁKNLö[ôÀ\⁄ﬁKLåŒL›ô\éòôÀ\⁄ﬁKLLŒLÇà
+_BàÇà‹[à€\‹”ò[YOHõ[ôKX€[\LàX^]ÀYù[^^»õ€ù[YY][HXY[ôÀ\€ùY»èû›ZS[ô»OOHô[àà»ë[\Hàà∏.)¯.b8.,∏.!»üO‹‹[èÇà‹[à€\‹”ò[YOHù^Xò\ŸHõ€ù\Ÿ[ZXõ€XY[ôÀ[õ€ôHXù[\ã[ù[\»èÇà‹⁄\Y€€€€ò\î›]Àú⁄\Y[\_Bà‹‹[èÇàÿù]€èÇà
+Hàù[Bà‹⁄\Y€€€€ò\î›]Àú⁄\Yõ›[ôÀõX\
+
+äHOà
+àù]€ÇàŸ^O^‹ãù⁄Ÿ[üBà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ 
+HOàŸŸ€T›Yôê⁄\›XõJãù⁄Ÿ[ä_Bà€\‹”ò[YO^ÿ€äàôõ^Z[ãZVÕLúHZ[ã]ÀVÕç\ô[WHX^]ÀVÃLô[WH⁄ö[öÀLõ^X€€][\ÀXŸ[ù\àù\›YûKXŸ[ù\àÿ\LHõ›[ôYYù[LãçHKLà^XŸ[ù\àõ€ù\Ÿ[ZXõ€ö[ôÀLHò[ú⁄][€ãVŸö[\ãõﬁ\⁄Y›◊H›X⁄[X[ö\[][€àãà›Yôëö[\úÀö\ ãù⁄Ÿ[äBà»òôÀ\⁄ﬁKMå^]⁄]Hö[ôÀ\⁄ﬁKMLÕLÇààòôÀ]⁄]H^\⁄ﬁKNLö[ôÀ\⁄ﬁKLåŒL›ô\éòôÀ\⁄ﬁKLLŒLÇà
+_BàÇà‹[à€\‹”ò[YOHõ[ôKX€[\L»X^]ÀYù[^^»õ€ù[YY][HXY[ôÀ\€ùY»èû‹ãõXô[O‹‹[èÇà‹[à€\‹”ò[YOHù^Xò\ŸHõ€ù\Ÿ[ZXõ€XY[ôÀ[õ€ôHXù[\ã[ù[\»èû‹ãò€›[ùO‹‹[èÇàÿù]€èÇà
+J_BàŸ]èÇàŸ]èÇà]à€\‹”ò[YOHúõ›[ôY^õ‹ô\àõ‹ô\ãX[Xô\ãLåŒôÀX[Xô\ãMLŒMHLàèÇà]à€\‹”ò[YOHõXãLKçHèÇà‹[à€\‹”ò[YOHù^VÃL\Hõ€ù\Ÿ[ZXõ€^X[Xô\ãNMLèì[Ÿ[YX\è‹‹[èÇà€\‹”ò[YOHù^VÃLH^X[Xô\ãNLÕÕHèû›ZS[ô»OOHô[àà»ê[H[ûHYX\ã[\HHõ»[Ÿ[ﬁYX\à»◊ﬁYX\ààà∏.%¯.,x.bx.!¯.*¯.(x.%H8.a8.(x.b8."8.,¯. x.,x.%8.&¯.-H0≠»8.)¯.b8.,∏.!»H8.a8.(x.b8.(x.-H[Ÿ[ﬁYX\à»◊ﬁYX\àüO‹ÇàŸ]èÇà]à€\‹”ò[YOHôõ^õ^]‹ò\][\ÀY[ôÿ\Là›ô\ôõ›À^X]]»ãLçHèÇàù]€Çà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ÿ€X\î€€[Ÿ[YX\ë[T›Xõ_Bà€\‹”ò[YO^ÿ€äàôõ^Z[ãZVÕLúHZ[ã]ÀVÕç\ô[WHX^]ÀVŒ\ô[WH⁄ö[öÀLõ^X€€][\ÀXŸ[ù\àù\›YûKXŸ[ù\àÿ\LHõ›[ôYYù[LãçHKLà^XŸ[ù\àõ€ù\Ÿ[ZXõ€ö[ôÀLHò[ú⁄][€ãVŸö[\ãõﬁ\⁄Y›◊H›X⁄[X[ö\[][€àãà\€€[Ÿ[YX\ë[PX›]ôBà»òôÀX[Xô\ãMå^]⁄]Hö[ôÀX[Xô\ãMLÕLÇààòôÀ]⁄]H^X[Xô\ãNLö[ôÀX[Xô\ãLåŒL›ô\éòôÀX[Xô\ãLLŒLÇà
+_BàÇà‹[à€\‹”ò[YOHõ[ôKX€[\LàX^]ÀYù[^^»õ€ù[YY][HXY[ôÀ\€ùY»èû›ZS[ô»OOHô[àà»ê[àà∏.%¯.,x.bx.!¯.*¯.(x.%üO‹‹[èÇà‹[à€\‹”ò[YOHù^Xò\ŸHõ€ù\Ÿ[ZXõ€XY[ôÀ[õ€ôHXù[\ã[ù[\»èÇà‹⁄\Y€€€€ò\î›]Àú€€€›[ùBà‹‹[èÇàÿù]€èÇà‹⁄\Y€€€€ò\î›]Àõ[Ÿ[YX\ë[\Hà»
+àù]€Çà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ 
+HOàŸŸ€T›Yôê⁄\›XõJ’Qëó—íSTó‘”””S—S÷QPTó—STJ_Bà€\‹”ò[YO^ÿ€äàôõ^Z[ãZVÕLúHZ[ã]ÀVÕç\ô[WHX^]ÀVŒ\ô[WH⁄ö[öÀLõ^X€€][\ÀXŸ[ù\àù\›YûKXŸ[ù\àÿ\LHõ›[ôYYù[LãçHKLà^XŸ[ù\àõ€ù\Ÿ[ZXõ€ö[ôÀLHò[ú⁄][€ãVŸö[\ãõﬁ\⁄Y›◊H›X⁄[X[ö\[][€àãà›Yôëö[\úÀö\ ’Qëó—íSTó‘”””S—S÷QPTó—STJBà»òôÀX[Xô\ãMå^]⁄]Hö[ôÀX[Xô\ãMLÕLÇààòôÀ]⁄]H^X[Xô\ãNLö[ôÀX[Xô\ãLåŒL›ô\éòôÀX[Xô\ãLLŒLÇà
+_BàÇà‹[à€\‹”ò[YOHõ[ôKX€[\LàX^]ÀYù[^^»õ€ù[YY][HXY[ôÀ\€ùY»èû›ZS[ô»OOHô[àà»ë[\Hàà∏.)¯.b8.,∏.!»üO‹‹[èÇà‹[à€\‹”ò[YOHù^Xò\ŸHõ€ù\Ÿ[ZXõ€XY[ôÀ[õ€ôHXù[\ã[ù[\»èÇà‹⁄\Y€€€€ò\î›]Àõ[Ÿ[YX\ë[\_Bà‹‹[èÇàÿù]€èÇà
+Hàù[Bà‹⁄\Y€€€€ò\î›]Àõ[Ÿ[YX\îõ›[ôÀõX\
+
+äHOà
+àù]€ÇàŸ^O^‹ãù⁄Ÿ[üBà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ 
+HOàŸŸ€T›Yôê⁄\›XõJãù⁄Ÿ[ä_Bà€\‹”ò[YO^ÿ€äàôõ^Z[ãZVÕLúHZ[ã]ÀVÕç\ô[WHX^]ÀVÃLô[WH⁄ö[öÀLõ^X€€][\ÀXŸ[ù\àù\›YûKXŸ[ù\àÿ\LHõ›[ôYYù[LãçHKLà^XŸ[ù\àõ€ù\Ÿ[ZXõ€ö[ôÀLHò[ú⁄][€ãVŸö[\ãõﬁ\⁄Y›◊H›X⁄[X[ö\[][€àãà›Yôëö[\úÀö\ ãù⁄Ÿ[äBà»òôÀX[Xô\ãMå^]⁄]Hö[ôÀX[Xô\ãMLÕLÇààòôÀ]⁄]H^X[Xô\ãNLö[ôÀX[Xô\ãLåŒL›ô\éòôÀX[Xô\ãLLŒLÇà
+_BàÇà‹[à€\‹”ò[YOHõ[ôKX€[\L»X^]ÀYù[^^»õ€ù[YY][HXY[ôÀ\€ùY»èû‹ãõXô[O‹‹[èÇà‹[à€\‹”ò[YOHù^Xò\ŸHõ€ù\Ÿ[ZXõ€XY[ôÀ[õ€ôHXù[\ã[ù[\»èû‹ãò€›[ùO‹‹[èÇàÿù]€èÇà
+J_BàŸ]èÇàŸ]èÇàŸ]èÇà
+Hàù[Bà›òXÿ[ùÿ[S[Ÿ[YX\î[ô[^[ôY	âàòXÿ[ùÿ[U€€ò\î›]ÀùòXÿ[ù€›[ùà»
+à]à€\‹”ò[YOHõ]Làõ›[ôYLûõ‹ô\àõ‹ô\ã\õ‹ŸKLåŒHôÀ\õ‹ŸKMLŒLLàö[ôÀLHö[ôÀ\õ‹ŸKLLŒèÇà]à€\‹”ò[YOHõXãLKçHèÇà‹[à€\‹”ò[YOHù^^»õ€ù\Ÿ[ZXõ€òX⁄⁄[ôÀ]⁄YH^\õ‹ŸKNMLèû›ZS[ô»OOHô[àà»ì[Ÿ[YX\àH]òZ[XõHààì[Ÿ[YX\à8†%8.)¯.b8.,∏.!»üO‹‹[èÇà€\‹”ò[YOHõ]LçH^VÃLHõ€ù[õ‹õX[XY[ôÀ\€ùY»^\õ‹ŸKNLÕÕHèÇà›ZS[ô»OOHô[àÇà»ì€õHõ‹àÿ[H›]\»ê]òZ[XõWãà[H[ûHYX\ã[\HHõ»[Ÿ[ﬁYX\à»◊ﬁYX\ã][H⁄\»H‘ãàÇàà∏.`8."x.'∏.,∏.,8.*∏.%∏.,∏.&x.,8. ∏.,∏.(à∏.)¯.b8.,∏.!◊à0≠»8.%¯.,x.bx.!¯.*¯.(x.%H8.a8.(x.b8."8.,¯. x.,x.%8.&¯.-H0≠»8.)¯.b8.,∏.!»H8.a8.(x.b8.(x.-H[Ÿ[ﬁYX\à»◊ﬁYX\à0≠»8.*¯.)x.,∏.(∏."∏.-8.&»H‘àüBà‹ÇàŸ]èÇà]à€\‹”ò[YOHôõ^õ^]‹ò\][\ÀY[ôÿ\Là›ô\ôõ›À^X]]»ãLçHèÇàù]€Çà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ÿ€X\ïòXÿ[ùÿ[S[Ÿ[YX\ë[T›Xõ_Bà€\‹”ò[YO^ÿ€äàôõ^Z[ãZVÕLúHZ[ã]ÀVÕç\ô[WHX^]ÀVŒ\ô[WH⁄ö[öÀLõ^X€€][\ÀXŸ[ù\àù\›YûKXŸ[ù\àÿ\LHõ›[ôYYù[LãçHKLà^XŸ[ù\àõ€ù\Ÿ[ZXõ€ö[ôÀLHò[ú⁄][€ãVŸö[\ãõﬁ\⁄Y›◊H›X⁄[X[ö\[][€àãà]òXÿ[ùÿ[S[Ÿ[YX\ë[PX›]ôBà»òôÀ\õ‹ŸKMå^]⁄]Hö[ôÀ\õ‹ŸKMLÕLÇààòôÀ]⁄]H^\õ‹ŸKNLö[ôÀ\õ‹ŸKLåŒL›ô\éòôÀ\õ‹ŸKLLŒLÇà
+_BàÇà‹[à€\‹”ò[YOHõ[ôKX€[\LàX^]ÀYù[^^»õ€ù[YY][HXY[ôÀ\€ùY»èû›ZS[ô»OOHô[àà»ê[àà∏.%¯.,x.bx.!¯.*¯.(x.%üO‹‹[èÇà‹[à€\‹”ò[YOHù^Xò\ŸHõ€ù\Ÿ[ZXõ€XY[ôÀ[õ€ôHXù[\ã[ù[\»èÇà›òXÿ[ùÿ[U€€ò\î›]ÀùòXÿ[ù€›[ùBà‹‹[èÇàÿù]€èÇà›òXÿ[ùÿ[U€€ò\î›]Àõ[Ÿ[YX\ë[\Hà»
+àù]€Çà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ 
+HOàŸŸ€T›Yôê⁄\›XõJ’Qëó—íSTó’êP–Sï”S—S÷QPTó—STJ_Bà€\‹”ò[YO^ÿ€äàôõ^Z[ãZVÕLúHZ[ã]ÀVÕç\ô[WHX^]ÀVŒ\ô[WH⁄ö[öÀLõ^X€€][\ÀXŸ[ù\àù\›YûKXŸ[ù\àÿ\LHõ›[ôYYù[LãçHKLà^XŸ[ù\àõ€ù\Ÿ[ZXõ€ö[ôÀLHò[ú⁄][€ãVŸö[\ãõﬁ\⁄Y›◊H›X⁄[X[ö\[][€àãà›Yôëö[\úÀö\ ’Qëó—íSTó’êP–Sï”S—S÷QPTó—STJBà»òôÀ\õ‹ŸKMå^]⁄]Hö[ôÀ\õ‹ŸKMLÕLÇààòôÀ]⁄]H^\õ‹ŸKNLö[ôÀ\õ‹ŸKLåŒL›ô\éòôÀ\õ‹ŸKLLŒLÇà
+_BàÇà‹[à€\‹”ò[YOHõ[ôKX€[\LàX^]ÀYù[^^»õ€ù[YY][HXY[ôÀ\€ùY»èû›ZS[ô»OOHô[àà»ë[\Hàà∏.)¯.b8.,∏.!»üO‹‹[èÇà‹[à€\‹”ò[YOHù^Xò\ŸHõ€ù\Ÿ[ZXõ€XY[ôÀ[õ€ôHXù[\ã[ù[\»èÇà›òXÿ[ùÿ[U€€ò\î›]Àõ[Ÿ[YX\ë[\_Bà‹‹[èÇàÿù]€èÇà
+Hàù[Bà›òXÿ[ùÿ[U€€ò\î›]Àõ[Ÿ[YX\îõ›[ôÀõX\
+
+äHOà
+àù]€ÇàŸ^O^‹ãù⁄Ÿ[üBà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ 
+HOàŸŸ€T›Yôê⁄\›XõJãù⁄Ÿ[ä_Bà€\‹”ò[YO^ÿ€äàôõ^Z[ãZVÕLúHZ[ã]ÀVÕç\ô[WHX^]ÀVÃLô[WH⁄ö[öÀLõ^X€€][\ÀXŸ[ù\àù\›YûKXŸ[ù\àÿ\LHõ›[ôYYù[LãçHKLà^XŸ[ù\àõ€ù\Ÿ[ZXõ€ö[ôÀLHò[ú⁄][€ãVŸö[\ãõﬁ\⁄Y›◊H›X⁄[X[ö\[][€àãà›Yôëö[\úÀö\ ãù⁄Ÿ[äBà»òôÀ\õ‹ŸKMå^]⁄]Hö[ôÀ\õ‹ŸKMLÕLÇààòôÀ]⁄]H^\õ‹ŸKNLö[ôÀ\õ‹ŸKLåŒL›ô\éòôÀ\õ‹ŸKLLŒLÇà
+_BàÇà‹[à€\‹”ò[YOHõ[ôKX€[\L»X^]ÀYù[^^»õ€ù[YY][HXY[ôÀ\€ùY»èû‹ãõXô[O‹‹[èÇà‹[à€\‹”ò[YOHù^Xò\ŸHõ€ù\Ÿ[ZXõ€XY[ôÀ[õ€ôHXù[\ã[ù[\»èû‹ãò€›[ùO‹‹[èÇàÿù]€èÇà
+J_BàŸ]èÇàŸ]èÇà
+Hàù[BàŸ]èÇà]à€\‹”ò[YOHõXãLàõ›[ôYLûôÀ\€]KLLŒLàèÇà]à€\‹”ò[YOHõXãLKçHèÇà‹[à€\‹”ò[YOHù^^»õ€ù\Ÿ[ZXõ€òX⁄⁄[ôÀ]⁄YH^\€]KMåèû›ZS[ô»OOHô[àà»îÿ[H€ŸHàà∏.`8."¯.)x.)x.cüO‹‹[èÇàŸ]èÇà]à€\‹”ò[YOHô‹öYÿ\Làà›[O^ﬁ»‹öY[\]P€€[[úŒàúô\X]
+]]ÀYö]Z[õX^
+ÃúYúäJHà_OÇà‹ÿ[P⁄\[Ÿ[ÀõX\
+
+»ÿ[KXô[€›[ùX›]ôHJHOà
+àù]€ÇàŸ^O^‹ÿ[_Bà\OHòù]€àÇà€ê€X⁄œ^ 
+HOàŸŸ€Tÿ[P⁄\›XõJÿ[J_Bà€\‹”ò[YO^ÿ€äàõZ[ãZVÕHõ›[ôYLûLKçHKLà^XŸ[ù\àò[ú⁄][€ãX€€‹ú»ãàX›]ôH»òôÀ\€]KNML^]⁄]HààòôÀ\€]KLL^\€]KMÃ›ô\éòôÀ\€]KLåÕÃÇà
+_BàÇà]à€\‹”ò[YOHùù[òÿ]H^^»õ€ù[YY][HXY[ôÀ\€ùY»èû€Xô[OŸ]èÇà]à€\‹”ò[YOHù^Xò\ŸHõ€ù\Ÿ[ZXõ€Xù[\ã[ù[\»XY[ôÀ[õ€ôHèûÿ€›[ùOŸ]èÇàÿù]€èÇà
+J_BàŸ]èÇàŸ]èÇà]à€\‹”ò[YOHúõ›[ôYLûôÀ\€]KLLŒLàèÇà]à€\‹”ò[YOHõXãLKçHõ^][\ÀXŸ[ù\àù\›YûKXô]ŸY[àÿ\LàèÇà‹[à€\‹”ò[YOHù^^»õ€ù\Ÿ[ZXõ€òX⁄⁄[ôÀ]⁄YH^\€]KMåèû›ZS[ô»OOHô[àà»î›Yôà
+][H›€ô\ú Hàà∏.'∏.&x.,x. x.!¯.,∏.&H
+8.(¯.,∏.(∏. x.,∏.(¯.!¯.,∏.&JHüO‹‹[èÇàù]€Çà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ 
+HOàŸ]⁄›‘›YôìX[òYŸ\ä
+‹[äHOà[‹[ä_Bà€\‹”ò[YO^ÿ€äàú⁄ö[öÀLõ›[ôYYù[L»KLKçH^^»õ€ù[YY][Hò[ú⁄][€ãX€€‹ú»ãà⁄›‘›YôìX[òYŸ\à»òôÀ\€]KNML^]⁄]HààòôÀ\€]KLL^\€]KMÃ›ô\éòôÀ\€]KLåÕåÇà
+_Bà\öXKY^[ôY^‹⁄›‘›YôìX[òYŸ\üBàÇà ZS[ô»OOHô[àà»ìX[òYŸH›Yôààà∏."8.,x.%8. x.,∏.(¯.'∏.&x.,x. x.!¯.,∏.&HäH
+»
+⁄›‘›YôìX[òYŸ\à»à8£ »ààà8£!ä_Bàÿù]€èÇàŸ]èÇà]à€\‹”ò[YOHôõ^õ^]‹ò\][\ÀY[ôÿ\Là›ô\ôõ›À^X]]»ãLHèÇàù]€Çà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ 
+HOàŸŸ€T›Yôê⁄\›XõJ∏.%¯.,x.bx.!¯.*¯.(x.%ä_Bà€\‹”ò[YO^ÿ€äàôõ^Z[ãZVÕLúHZ[ã]ÀVÕç\ô[WH⁄ö[öÀLõ^X€€][\ÀXŸ[ù\àù\›YûKXŸ[ù\àÿ\LHõ›[ôYYù[L»KLà^XŸ[ù\àò[ú⁄][€ãX€€‹ú»›X⁄[X[ö\[][€àãà›Yôëö[\úÀú⁄^ôHOOH»òôÀ\€]KNML^]⁄]HààòôÀ\€]KLL^\€]KMÃ›ô\éòôÀ\€]KLåÕÃÇà
+_BàÇà‹[à€\‹”ò[YOHù^^»õ€ù[YY][HXY[ôÀ]Y⁄èû›ZS[ô»OOHô[àà»ê[àà∏.%¯.,x.bx.!¯.*¯.(x.%üO‹‹[èÇà‹[à€\‹”ò[YOHù^Xò\ŸHõ€ù\Ÿ[ZXõ€XY[ôÀ[õ€ôHXù[\ã[ù[\»èû‹›Yôê\‹⁄Y€ôYR][P€›[ùÀô‹ò[ô›[O‹‹[èÇàÿù]€èÇà‹›Yôï[ò\‹⁄Y€ôY⁄\[ï€€ò\à»
+àù]€Çà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ 
+HOàŸŸ€T›Yôê⁄\›XõJ’Qëó—íSTó’SêT‘“Q”ëQ
+_Bà€\‹”ò[YO^ÿ€äàôõ^Z[ãZVÕLúHZ[ã]ÀVÕåç\ô[WHX^]ÀVÕÀç\ô[WH⁄ö[öÀLõ^X€€][\ÀXŸ[ù\àù\›YûKXŸ[ù\àÿ\LHõ›[ôYYù[LãçHKLà^XŸ[ù\àõ€ù\Ÿ[ZXõ€ö[ôÀLHò[ú⁄][€ãVŸö[\ãõﬁ\⁄Y›◊H›X⁄[X[ö\[][€àãà\‹⁄Y€ôYT›Yôëö[\ê⁄\€\‹Ÿ\ ’Qëó—íSTó’SêT‘“Q”ëQ”PëS›Yôëö[\úÀö\ ’Qëó—íSTó’SêT‘“Q”ëQ
+JBà
+_BàÇà‹[à€\‹”ò[YOHõ[ôKX€[\LàX^]ÀYù[^^»õ€ù[YY][HXY[ôÀ\€ùY»èûŸ\‹^T›Yôëö[\ï[ò\‹⁄Y€ôYXô[
+ZS[ô _O‹‹[èÇà‹[à€\‹”ò[YOHù^Xò\ŸHõ€ù\Ÿ[ZXõ€XY[ôÀ[õ€ôHXù[\ã[ù[\»èû‹›Yôê\‹⁄Y€ôYR][P€›[ùÀù[ò\‹⁄Y€ôYO‹‹[èÇàÿù]€èÇà
+Hàù[Bà‹›Yôëö[\ê⁄\ò[Y\—õ‹ï€€ò\ãõX\
+
+ HOà
+àù]€ÇàŸ^O^‹ﬂBà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ 
+HOàŸŸ€T›Yôê⁄\›XõJ _Bà€\‹”ò[YO^ÿ€äàôõ^Z[ãZVÕLúHZ[ã]ÀVÕåç\ô[WHX^]ÀVÕÀç\ô[WH⁄ö[öÀLõ^X€€][\ÀXŸ[ù\àù\›YûKXŸ[ù\àÿ\LHõ›[ôYYù[LãçHKLà^XŸ[ù\àõ€ù\Ÿ[ZXõ€ö[ôÀLHò[ú⁄][€ãVŸö[\ãõﬁ\⁄Y›◊H›X⁄[X[ö\[][€àãà\‹⁄Y€ôYT›Yôëö[\ê⁄\€\‹Ÿ\ àÀà›Yôëö[\úÀö\  Kà›Yôï€€ò\ê\‹⁄Y€ôYT[]R[ô^ûSò[YKôŸ]
+ Bà
+Bà
+_BàÇà‹[à€\‹”ò[YOHõ[ôKX€[\LàX^]ÀYù[^^»õ€ù[YY][HXY[ôÀ\€ùY»èû‹ﬂO‹‹[èÇà‹[à€\‹”ò[YOHù^Xò\ŸHõ€ù\Ÿ[ZXõ€XY[ôÀ[õ€ôHXù[\ã[ù[\»èû‹›Yôê\‹⁄Y€ôYR][P€›[ùÀòûP\‹⁄Y€ôYV‹◊Hœ»O‹‹[èÇàÿù]€èÇà
+J_BàŸ]èÇà‹⁄›‘›YôìX[òYŸ\à»
+à]à€\‹”ò[YOHõ]Là‹XŸK^KLàõ›[ôYLûôÀ\€]KLLLãçHèÇà€\‹”ò[YOHù^^»õ€ù[õ‹õX[XY[ôÀ\€ùY»^\€]KMåèÇà›ZS[ô»OOHô[àÇà»ìX[òYŸH›€ô\àò[Y\»\ôH€õKàY‹ô[[›ôHö[\àõ‹›\àò[Y\»
+ÿ]ôY€àŸ\ùô\ãÿX⁄Yÿÿ[HYàŸ\ùô\à[ò]òZ[XõJKàÇàà∏.`8.&¯.-8.%8."8.,∏. x.%¯.-x.b8.&x.-x.b8.`8.%¯.b8.,∏.&x.,x.bx.&H8†%8.`8.'∏.-8.b8.(K¯.)x.&∏."∏.-¯.b8.+x.`¯.&x.(¯.,∏.(∏."∏.-¯.b8.+x. x.(¯.+x.!»
+8.`8. x.a¯.&∏.&∏.&x.`8."¯.-8.(¯.c8.'¯.`8.)¯.+x.(¯.c0≠»8.`x.!8."∏.`¯.&x.`8.!8.(¯.-¯.b8.+x.!¯.%∏.bx.,∏.`8."¯.-8.(¯.c8.'¯.`8.)¯.+x.(¯.c8.a8.(x.b8.'∏.(¯.bx.+x.(JHüBà‹Çà[€\‹”ò[YOHõX^ZM‹XŸK^KLH›ô\ôõ›À^KX]]»èÇà‹›Yôîõ‹›\ãõ[ô›OOH»
+àH€\‹”ò[YOHù^VÃL\Hõ€ù\Ÿ[ZXõ€^\€]KMèû›ZS[ô»OOHô[àà»ìõ»ò[Y\»Y]
+Yô[› Hàà∏.(∏.,x.!¯.a8.(x.b8.(x.-x."∏.-¯.b8.+H
+8.`8.'∏.-8.b8.(x.%8.bx.,∏.&x.)x.b8.,∏.! HüO€OÇà
+Hà
+à›Yôîõ‹›\ãõX\
+
+ò[YJHOà
+àHŸ^O^€ò[Y_H€\‹”ò[YOHôõ^][\ÀXŸ[ù\àù\›YûKXô]ŸY[àÿ\Làõ›[ôY^ôÀ]⁄]HLàKLKçHèÇà‹[à€\‹”ò[YOHõZ[ã]ÀLù[òÿ]H^\€Hõ€ù[YY][H^\€]KNèû€ò[Y_O‹‹[èÇàù]€Çà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ 
+HOàô[[›ôT›Yôëúõ€Tõ‹›\äò[YJ_Bà€\‹”ò[YOHú⁄ö[öÀLõ›[ôYYù[ôÀ\õ‹ŸKLLLãçHKLH^^»õ€ù[YY][H^\õ‹ŸKNÇàÇà›ZS[ô»OOHô[àà»îô[[›ôHàà∏.)x.&àüBàÿù]€èÇà€OÇà
+JBà
+_Bà›[Çà]à€\‹”ò[YOHôõ^ÿ\LàèÇà[ú]àò[YO^‹›Yôìò[YR[ú]Bà€ê⁄[ôŸO^ JHOàŸ]›Yôìò[YR[ú]
+Kù\ôŸ]ùò[YJ_BàXŸZ€\è^›ZS[ô»OOHô[àà»ï\Hò[YH[àYàà∏.'∏.-8.(x.'∏.c8."∏.-¯.b8.+x.`x.)x.bx.)¯. x.%8.`8.'∏.-8.b8.(HüBà€\‹”ò[YOHõZ[ã]ÀLõ^LHõ›[ôYLûôÀ]⁄]HL»KLãçH^\€Hõ€ù[YY][H^\€]KNL›][ôK[õ€ôHö[ôÀLHö[ôÀ\€]KLåŒÇà€íŸ^Q›€è^ JHOà¬àYà
+KöŸ^HOOHë[ù\àäH¬àKúô]ô[ùYò][
+
+N¬àY›Yôï‘õ‹›\ä›Yôìò[YR[ú]
+N¬àŸ]›Yôìò[YR[ú]
+àäN¬àBà_BàœÇàù]€Çà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ 
+HOà¬àY›Yôï‘õ‹›\ä›Yôìò[YR[ú]
+N¬àŸ]›Yôìò[YR[ú]
+àäN¬à_Bà€\‹”ò[YOHú⁄ö[öÀLõ›[ôYLûôÀ\€]KNMLL»KLãçH^\€Hõ€ù\Ÿ[ZXõ€^]⁄]H›X⁄[X[ö\[][€àÇàÇà›ZS[ô»OOHô[àà»êYàà∏.`8.'∏.-8.b8.(HüBàÿù]€èÇàŸ]èÇà]à€\‹”ò[YOHòõ‹ô\ã]õ‹ô\ã\€]KLåŒLàèÇà€\‹”ò[YOHõXãLà^^»õ€ù\Ÿ[ZXõ€òX⁄⁄[ôÀ]⁄YH^\€]KMåèÇà›ZS[ô»OOHô[àà»ìX\ÿ[H€ŸHOà›€ô\ààà∏."8.,x.&∏.!8..x.b8.`8."¯.)x.)x.c8°§à8.'∏.&x.,x. x.!¯.,∏.&x.(¯.,x.&∏.'8.-8.%8."∏.+x.&àüBà‹Çà€\‹”ò[YOHõXãLà^VÃL\Hõ€ù[õ‹õX[XY[ôÀ\€ùY»^\€]KMLèÇà›ZS[ô»OOHô[àÇà»êYù\àX\[ôÀô]»][\»]]À\Ÿ[X››€ô\àûHÿ[H€ŸH
+ò[òX⁄Œàö\ú›ò[YH[àõ‹›\äKàÇàà∏.%x.,x.bx.!¯.!8.b8.,∏.`x.)x.bx.)»8.`8.)¯.)x.,∏. x.%8.`8.'∏.-8.b8.(x.!¯.,∏.&x.`¯.&x. x.,∏.(¯.c8.%8."8.,8.`8.)x.-¯.+x. x."∏.-¯.b8.+x.'∏.&x.,x. x.!¯.,∏.&x.`¯.*¯.bx.%x.,∏.(x.`8."¯.)x.)x.c8. ∏.+x.!¯.(¯.%à
+8.%∏.bx.,∏.a8.(x.b8.a8.%8.bx."8.,x.&∏.!8..x.b8."8.,8.`¯."∏.bx."∏.-¯.b8.+x.`x.(¯. x.`¯.&x.(¯.,∏.(∏. x.,∏.(¯.%8.bx.,∏.&x.&∏.&x.`8.*¯.(x.-¯.+x.&x.`8.%8.-8.(JHüBà‹Çà[€\‹”ò[YOHõX^ZMMà‹XŸK^KLKçH›ô\ôõ›À^KX]]»èÇà”‘ëTó’êP““Së◊‘–SW–”—TÀõX\
+
+€ŸJHOà
+àBàŸ^O^ÿ€Ÿ_Bà€\‹”ò[YOHôõ^Z[ãZVÕH][\ÀXŸ[ù\àÿ\Làõ›[ôY^ôÀ]⁄]HLàKLKçHö[ôÀLHö[ôÀ\€]KLåÕåÇàÇà‹[à€\‹”ò[YOHùÀLM⁄ö[öÀL^XŸ[ù\à^^»õ€ùXõ€Xù[\ã[ù[\»^\€]KNèÇàÿ€Ÿ_Bà‹‹[èÇàŸ[X›à\öXK[Xô[^›ZS[ô»OOHô[àà»›€ô\àõ‹àÿ[H€ŸH	ÿ€Ÿ_Xà8.'∏.&x.,x. x.!¯.,∏.&x.*∏.,¯.*¯.(¯.,x.&∏.`8."¯.)x.)x.c	ÿ€Ÿ_XBàò[YO^‹ÿ[P\‹⁄Y€ôY\÷ÿ€ŸWHœ»àüBà€ê⁄[ôŸO^ JHOàŸ]ÿ[P\‹⁄Y€ôYQõ‹ê€ŸJ€ŸKKù\ôŸ]ùò[YJ_Bà€\‹”ò[YOHõZ[ã]ÀLõ^LHõ›[ôY^ôÀ\€]KMLLàKLà^\€Hõ€ù[YY][H^\€]KNL›][ôK[õ€ôHö[ôÀLHö[ôÀ\€]KLåŒÇàÇà‹[€àò[YOHàèû›ZS[ô»OOHô[àà»∏†%[ò\‹⁄Y€ôY8†%àà∏†%8.a8.(x.b8.(¯.,8.&∏..8†%üO€‹[€èÇà‹›Yôîõ‹›\ãõX\
+
+äHOà
+à‹[€àŸ^O^€üHò[YO^€üOÇà€üBà€‹[€èÇà
+J_Bà‹Ÿ[X›Çà€OÇà
+J_Bà›[ÇàŸ]èÇàŸ]èÇà
+Hàù[Bà]à€\‹”ò[YOHõXãLH]L»õ^][\ÀXŸ[ù\àù\›YûKXô]ŸY[àÿ\LàèÇà‹[à€\‹”ò[YOHù^^»õ€ù\Ÿ[ZXõ€òX⁄⁄[ôÀ]⁄YH^\€]KMåèû›ZS[ô»OOHô[àà»í][H›]\»àà∏.*∏.%∏.,∏.&x.,8.(¯.,∏.(∏. x.,∏.(»üO‹‹[èÇàù]€Çà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ 
+HOàŸ]⁄›‘›]\”X[òYŸ\ä
+‹[äHOà[‹[ä_Bà€\‹”ò[YO^ÿ€äàú⁄ö[öÀLõ›[ôYYù[L»KLKçH^^»õ€ù[YY][Hò[ú⁄][€ãX€€‹ú»ãà⁄›‘›]\”X[òYŸ\à»òôÀ\€]KNML^]⁄]HààòôÀ\€]KLL^\€]KMÃ›ô\éòôÀ\€]KLåÕåÇà
+_Bà\öXKY^[ôY^‹⁄›‘›]\”X[òYŸ\üBàÇà ZS[ô»OOHô[àà»ìX[òYŸH›]\»àà∏."8.,x.%8. x.,∏.(¯.*∏.%∏.,∏.&x.,äH
+»
+⁄›‘›]\”X[òYŸ\à»à8£ »ààà8£!ä_Bàÿù]€èÇàŸ]èÇà‹⁄›‘›]\”X[òYŸ\à»
+à]à€\‹”ò[YOHõ]Là›ô\ôõ›ÀZY[àõ›[ôYLûôÀ]⁄]H⁄Y›À\€Hö[ôÀLHö[ôÀ\€]KLåŒèÇà]à€\‹”ò[YOHõX^ZV€Z[äÃùöÃúô[JWH‹XŸK^KL›ô\ôõ›À^KX]]»›ô\úÿ‹õ€X€€ùZ[àL»KL»›X⁄\[ã^HèÇà]èÇà€\‹”ò[YOHù^^»õ€ù\Ÿ[ZXõ€XY[ôÀ\€ùY»^\€]KNLèÇà›ZS[ô»OOHô[àà»í][H›]\»8†%[[à€ôH[ô[àà∏.%x.,x.bx.!¯.!8.b8.,∏.*∏.%∏.,∏.&x.,8.(¯.,∏.(∏. x.,∏.(»8†%8.`¯.&x.`x.'8.!¯.`8.%8.-x.(∏.)»üBà‹Çà€\‹”ò[YOHõ]LH^VÃL\Hõ€ù[õ‹õX[XY[ôÀ\€ùY»^\€]KMåèÇà›ZS[ô»OOHô[àÇà»ï€€ò\à‹ô\à	àXô[»ÿX⁄H€à]öXŸKà\‹⁄]»”H»8†'YHŸ^x†'Hﬁ[ò»»HŸ\ùô\à⁄[à]òZ[XõKàÇàà∏.)x.,¯.%8.,x.&∏.`x.)x.,8."∏.-¯.b8.+x."∏.-8.&¯.`8. x.a¯.&∏.`¯.&x.`8.!8.-¯.b8.+x.!»0≠»8. x.,∏.(¯.&x.,x.&∏.)¯.,x.&x.'x.,∏. H»”H»8."∏.-8.&¯.(x.,∏.)¯.,x.&x.&x.-x.bH8."¯.-8.!¯. x.c8.`8.(x.-¯.b8.+x.(x.-x.`8."¯.-8.(¯.c8.'¯.`8.)¯.+x.(¯.cüBà‹ÇàŸ]èÇÇà]à€\‹”ò[YOHõ]Mõ‹ô\ã]õ‹ô\ã\€]KLåÕÃMèÇà€\‹”ò[YOHù^VÃL\Hõ€ù\Ÿ[ZXõ€\\òÿ\ŸHòX⁄⁄[ôÀ]⁄YH^\€]KMLèÇà›ZS[ô»OOHô[àà»ëö[\àò\ààà∏.`x.%∏.&∏. x.(¯.+x.!¯."∏.-8.&»üBà‹Çà€\‹”ò[YOHõ]Là^VÃLHõ€ù[õ‹õX[XY[ôÀ\ô[^Y^\€]KMåèÇà›ZS[ô»OOHô[àÇà»ì€àXX⁄X›]ôHõ›ŒàY]H⁄\^\\»›€à»ô[‹ô\àYù]À\öY⁄€àHò\ã\ô[[›ôHúõ€Hò\à»X⁄»]ô[›Àà\⁄Yõ›‹»8°§àY»ò\àô\›‹ô\»]àÇàà∏.`¯.&x.`x.%∏.)¯.%¯.-x.b8.+x.(∏..x.b8.`x.%∏.&éà8."∏.b8.+x.!¯. x.)x.,∏.!¯.!8.-¯.+x.`x. x.bx.a8. ∏."∏.-¯.b8.+x.&∏.&x."∏.-8.&»0≠»8.&¯..8.b8.(H8†'8. ∏.-∏.bx.&K¯.)x.!¯†'H8.`8.&¯.)x.-x.b8.(∏.&x.)x.,¯.%8.,x.&∏."∏.-8.&¯.&∏.&x.`x.%∏.&à0≠»8†'8.)x.&∏."8.,∏. x.`x.%∏.&∏†'H8.`8.+x.,∏.+x.+x. x."8.,∏. x.`x.%∏.&à
+8.a8.&¯.+x.(∏..x.b8. x.)x..8.b8.(x.`8.*∏.bx.&x.&¯.(¯.,8.%8.bx.,∏.&x.)x.b8.,∏.! H0≠»8.`x.%∏.)¯.`8.*∏.bx.&x.&¯.(¯.,8.(x.-x.&¯..8.b8.(H8†'8.`8.'∏.-8.b8.(x.`8. ∏.bx.,∏.`x.%∏.&∏†'HüBà‹Çà]à€\‹”ò[YOHõ]L»õ›[ôY^ôÀ]⁄]HLãçHö[ôÀLHö[ôÀ\€]KLåÕÃèÇà€\‹”ò[YOHù^VÃL\Hõ€ù\Ÿ[ZXõ€XY[ôÀ\€ùY»^\€]KNèÇà›ZS[ô»OOHô[àà»ê[›]\Ÿ\»
+€ŸH8°§à⁄\Xô[
+Hàà∏.(¯.,∏.(∏. x.,∏.(¯.*∏.%∏.,∏.&x.,8.%¯.,x.bx.!¯.*¯.(x.%
+8.`∏.!8.bx.%8.a8.%¯.(à8°§à8."∏.-¯.b8.+x.&∏.&x."∏.-8.& HüBà‹Çà€\‹”ò[YOHõ]LH^VÃLH^\€]KMLèÇà›ZS[ô»OOHô[àÇà»ëö^Yﬁ\›[H€Ÿ\»0≠»Xô[õ€›‹»[›\àY]»Xõ›ôH⁄[à€àHò\ãàÇàà∏.`∏.!8.bx.%8.`¯.&x.(¯.,8.&∏.&∏.!8.!¯.%¯.-x.b0≠»8."∏.-¯.b8.+x.&∏.&x."∏.-8.&¯.%x.,∏.(x.%¯.-x.b8.`x. x.bx.`¯.&x.(¯.,∏.(∏. x.,∏.(¯.%8.bx.,∏.&x.)x.b8.,∏.!¯.`8.(x.-¯.b8.+x.+x.(∏..x.b8.`¯.&x.`x.%∏.&àüBà‹Çà€€\‹”ò[YOHõ]LàX^ZVÃLKç\ô[WH\›YX⁄[X[‹XŸK^KLKçH›ô\ôõ›À^KX]]»›ô\úÿ‹õ€X€€ùZ[àVÃKåLç\ô[WHãLHX\öŸ\éù^VÃLHX\öŸ\éôõ€ù\Ÿ[ZXõ€X\öŸ\éù^\€]KM›X⁄\[ã^H€NõX^Z[õ€ôH€NõX\öŸ\éù^VÃL\HèÇà‹€‹ù][T›]\Ÿ\—õ‹ëö[\ï€€ò\äÀããíUSW‘’UT—T◊JKõX\
+
+›
+HOà
+àHŸ^O^ÿôYã\›]\ÀI‹›XH€\‹”ò[YOHúLH^VÃL\HXY[ôÀ\€ùY»^\€]KNèÇà‹[à€\‹”ò[YOHôõ€ùXõ€èû‹›O‹‹[èÇà‹[à€\‹”ò[YOHù^\€]KMèà8°§à‹‹[èÇà‹[à€\‹”ò[YOHôõ€ù[YY][H^\€]KMÃèÇà‹›]\”Xô[
+›\»][T›]\—ö[\ïò[YJ_Bà‹‹[èÇà€OÇà
+J_Bà€€ÇàŸ]èÇà[€\‹”ò[YOHõ]L»‹XŸK^KLàèÇà⁄][T›]\‘õ‹›\ãõ[ô›OOH»
+àH€\‹”ò[YOHúõ›[ôY^ôÀ\€]KMLLàKLà^VÃL\Hõ€ù\Ÿ[ZXõ€^\€]KMLö[ôÀLHö[ôÀ\€]KLLXY[ôÀ\ô[^YèÇà›ZS[ô»OOHô[àÇà»ëYò][à[›]\Ÿ\»⁄›»€àHò\ãàô[[›ôH]X\›€ôH›]\»\ôH8°§à][›ô\»[ù»H\⁄Y\›ô[›»[ù[[›H\Y»ò\ãàÇàà∏.`8.(¯.-8.b8.(x.%x.bx.&x.`x.%∏.&∏.!8.(¯.&∏.%¯..8. x.*∏.%∏.,∏.&x.,0≠»8.`x.%x.,8†'8.)x.&∏."8.,∏. x.`x.%∏.&∏†'H8.`x.%∏.)¯.`¯.%8.*¯.&x.-∏.b8.!¯.&∏.&H8.`8.'∏.-¯.b8.+x.`8.(¯.-8.b8.(x. x.,¯.*¯.&x.%8.`8.+x.!»8.*∏.%∏.,∏.&x.,8.%¯.-x.b8.`8.*¯.)x.-¯.+x."8.,8.`∏.'8.)x.b8.`¯.&x. x.)x..8.b8.(x.`8.*∏.bx.&x.&¯.(¯.,8.`¯."∏.bx.&¯..8.b8.(H8†'8.`8.'∏.-8.b8.(x.`8. ∏.bx.,∏.`x.%∏.&∏†'H8.!8.-¯.&x.a8.%8.bHüBà€OÇà
+Hàù[Bà⁄][T›]\‘õ‹›\ãõX\
+
+›ò[ö HOà
+àHŸ^O^‹›H€\‹”ò[YOHúõ›[ôYLûôÀ\€]KMLLãçHö[ôÀLHö[ôÀ\€]KLLèÇà]à€\‹”ò[YOHôõ^õ^X€€ÿ\LãçH€Nôõ^\õ›»€Nö][\À\›ô]⁄€Nôÿ\L»èÇà]à€\‹”ò[YOHôõ^⁄ö[öÀLõ^\õ›»][\ÀXŸ[ù\àÿ\Là€NùÀVÕKçÕ\ô[WH€Nôõ^X€€€Nö][\À\›ô]⁄èÇà‹[à€\‹”ò[YOHö[õ[ôKYõ^ÀYö]õ›[ôY[»ôÀ]⁄]HLàKLH^XŸ[ù\à^VÃL\Hõ€ùXõ€òX⁄⁄[ôÀ]Y⁄^\€]KNö[ôÀLHö[ôÀ\€]KLåŒLèÇà‹›Bà‹‹[èÇà‹[à€\‹”ò[YOHù^VÃLHõ€ù[YY][HXY[ôÀ\€ùY»^\€]KML€Nôõ^LH€NúLçHèÇà›ZS[ô»OOHô[àà»	‹ò[ö»
+»_H€àò\òà8.)x.,¯.%8.,x.&∏.%¯.-x.b	‹ò[ö»
+»_H8.&∏.&x.`x.%∏.&òBà‹‹[èÇàŸ]èÇà]à€\‹”ò[YOHõZ[ã]ÀLõ^LH‹XŸK^KLHèÇàXô[à[õ‹è^ÿ][K\›]\ÀX⁄\[Xô[IŸ[ò€ŸUTíP€€\€ô[ù
+›
+_XBà€\‹”ò[YOHòõÿ⁄»^VÃLHõ€ù\Ÿ[ZXõ€\\òÿ\ŸHòX⁄⁄[ôÀ]⁄YH^\€]KMLÇàÇà›ZS[ô»OOHô[àà»ëY]⁄\Xô[àà∏.`x. x.bx.a8. ∏."∏.-¯.b8.+x.&∏.&x."∏.-8.&»üBà€Xô[Çà[ú]àY^ÿ][K\›]\ÀX⁄\[Xô[IŸ[ò€ŸUTíP€€\€ô[ù
+›
+_XBàò[YO^⁄][T›]\”Xô[÷‹›Hœ»›Bà€ê⁄[ôŸO^ JHOà\]R][T›]\”Xô[
+›Kù\ôŸ]ùò[YJ_BàXŸZ€\è^‹›Bà\öXK[Xô[^¬àZS[ô»OOHô[àÇà»\‹^HXô[€àö[\à⁄\
+	‹›JXàà8."∏.-¯.b8.+x.`x.*∏.%8.!¯.&∏.&x."∏.-8.&¯.*∏.%∏.,∏.&x.,	‹›XàBà€\‹”ò[YOHõZ[ãZLLHÀYù[õ›[ôY^ôÀ]⁄]HL»KLà^\€Hõ€ù[YY][H^\€]KNL›][ôK[õ€ôHö[ôÀLHö[ôÀ\€]KLåŒXŸZ€\éù^\€]KMõÿ›\Œúö[ôÀLàõÿ›\Œúö[ôÀ\€]KMÕLÇàœÇàŸ]èÇà]à€\‹”ò[YOHôõ^⁄ö[öÀLÿ\LKçHX^\€Nôõ^LHèÇàù]€Çà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ 
+HOà[›ôR][T›]\“[îõ‹›\ä›LJ_Bà€\‹”ò[YOHõZ[ãZLLHZ[ã]ÀVÕåç\ô[WHõ^LH›X⁄[X[ö\[][€àõ›[ôY^ôÀ\€]KLåŒLLà^VÃL\Hõ€ùXõ€^\€]KN⁄Y›À\€HX›]ôNòôÀ\€]KLÃ€NõZ[ã]ÀVÃÀç\ô[WH€Nôõ^[õ€ôHÇà\öXK[Xô[^›ZS[ô»OOHô[àà»[›ôH0™…‹›pÆ»\€àò\òà8.`8.)x.-¯.b8.+x.&H	‹›H8. ∏.-∏.bx.&XBà]O^›ZS[ô»OOHô[àà»ì[›ôH\0≠»X\õY\à€àò\ààà∏. ∏.-∏.bx.&H0≠»8.`8.(¯.a¯.)¯. ∏.-∏.bx.&x.&∏.&x."∏..8.%8."∏.-8.&»üBàÇà›ZS[ô»OOHô[àà»∏°§H\àà∏°§H8. ∏.-∏.bx.&HüBàÿù]€èÇàù]€Çà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ 
+HOà[›ôR][T›]\“[îõ‹›\ä›J_Bà€\‹”ò[YOHõZ[ãZLLHZ[ã]ÀVÕåç\ô[WHõ^LH›X⁄[X[ö\[][€àõ›[ôY^ôÀ\€]KLåŒLLà^VÃL\Hõ€ùXõ€^\€]KN⁄Y›À\€HX›]ôNòôÀ\€]KLÃ€NõZ[ã]ÀVÃÀç\ô[WH€Nôõ^[õ€ôHÇà\öXK[Xô[^›ZS[ô»OOHô[àà»[›ôH0™…‹›pÆ»›€à€àò\òà8.`8.)x.-¯.b8.+x.&H	‹›H8.)x.!ÿBà]O^›ZS[ô»OOHô[àà»ì[›ôH›€à0≠»]\à€àò\ààà∏.)x.!»0≠»8."∏.bx.,∏.)x.!¯.`¯.&x."∏..8.%8."∏.-8.&»üBàÇà›ZS[ô»OOHô[àà»∏°§»›€ààà∏°§»8.)x.!»üBàÿù]€èÇàù]€Çà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ 
+HOàô[[›ôR][T›]\—úõ€Tõ‹›\ä›
+_Bà€\‹”ò[YOHõZ[ãZLLH›X⁄[X[ö\[][€àõ›[ôY^ôÀ\õ‹ŸKLLL»^VÃL\Hõ€ùXõ€^\õ‹ŸKNLö[ôÀLHö[ôÀ\õ‹ŸKLåŒX›]ôNòôÀ\õ‹ŸKLåŒ€NúLãçHÇà\öXK[Xô[^›ZS[ô»OOHô[àà»ô[[›ôH0™…‹›pÆ»úõ€Hò\òà8.)x.&à	‹›H8.+x.+x. x."8.,∏. x.`x.%∏.&∏. x.(¯.+x.!ÿBà]O^›ZS[ô»OOHô[àà»îô[[›ôHúõ€Hò\à
+ô\›‹ôHô[› Hàà∏.)x.&∏."8.,∏. x.`x.%∏.&à
+8.a8.&¯. x.)x..8.b8.(x.`8.*∏.bx.&x.&¯.(¯.,
+HüBàÇà›ZS[ô»OOHô[àà»îô[[›ôHàà∏.)x.&∏."8.,∏. x.`x.%∏.&àüBàÿù]€èÇàŸ]èÇàŸ]èÇà€OÇà
+J_Bà⁄][T›]\‘õ‹›\ãõ[ô›à	âàYXõR][T›]\Ÿ\Àõ[ô›àà»YXõR][T›]\Ÿ\ÀõX\
+
+›
+HOà¬à€€ú›õH›]\”Xô[
+›\»][T›]\—ö[\ïò[YJN¬àô]\õà
+àBàŸ^O^ÿ€€ò\ã[ŸôãI‹›XBà€\‹”ò[YOHúõ›[ôYLûõ‹ô\àõ‹ô\ãY\⁄Yõ‹ô\ã\€]KLÃŒôÀ\€]KMLÕLãçHÇàÇà]à€\‹”ò[YOHôõ^õ^X€€ÿ\LãçH€Nôõ^\õ›»€Nö][\ÀXŸ[ù\à€Nôÿ\L»èÇà‹[à€\‹”ò[YOHö[õ[ôKYõ^ÀYö]⁄ö[öÀLõ›[ôY[»ôÀ]⁄]HLàKLH^VÃL\Hõ€ùXõ€^\€]KMLö[ôÀLHö[ôÀ\€]KLåŒèÇà‹›Bà‹‹[èÇà]à€\‹”ò[YOHõZ[ã]ÀLõ^LHèÇà€\‹”ò[YOHù^VÃLHõ€ù\Ÿ[ZXõ€\\òÿ\ŸHòX⁄⁄[ôÀ]⁄YH^\€]KMLèÇà›ZS[ô»OOHô[àà»ìõ›€àò\ààà∏.(∏.,x.!¯.a8.(x.b8.+x.(∏..x.b8.`¯.&x.`x.%∏.&∏. x.(¯.+x.!»üBà‹Çà€\‹”ò[YOHùù[òÿ]H^\€Hõ€ù\Ÿ[ZXõ€^\€]KMÃèû€õO‹ÇàŸ]èÇàù]€Çà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ 
+HOàY][T›]\’‘õ‹›\ä›
+_Bà€\‹”ò[YOHõZ[ãZLLH⁄ö[öÀL›X⁄[X[ö\[][€àõ›[ôY^ôÀ\€]KNMLM^^»õ€ùXõ€^]⁄]H⁄Y›À\€HX›]ôNòôÀ\€]KNÇà\öXK[Xô[^¬àZS[ô»OOHô[àÇà»Y0™…‹›pÆ»»ö[\àò\òàà8.`8.'∏.-8.b8.(H	‹›H8.`8. ∏.bx.,∏.`x.%∏.&∏. x.(¯.+x.!ÿàBà]O^›ZS[ô»OOHô[àà»êY»ò\ààà∏.`8.'∏.-8.b8.(x.`8. ∏.bx.,∏.`x.%∏.&∏. x.(¯.+x.!»üBàÇà›ZS[ô»OOHô[àà»ä»Y»ò\àààä»8.`8.'∏.-8.b8.(x.`8. ∏.bx.,∏.`x.%∏.&àüBàÿù]€èÇàŸ]èÇà€OÇà
+N¬àJBààù[Bà›[ÇàŸ]èÇÇà]à€\‹”ò[YOHõ]Mõ‹ô\ã]õ‹ô\ã\€]KLåÕÃMèÇà€\‹”ò[YOHù^VÃL\Hõ€ù\Ÿ[ZXõ€\\òÿ\ŸHòX⁄⁄[ôÀ]⁄YH^\€]KMLèÇà›ZS[ô»OOHô[àà»ëYK]Ÿ^H⁄\àà∏."∏.-8.&¯.(x.,∏.)¯.,x.&x.&x.-x.bHüBà‹Çà€\‹”ò[YOHõ]LH^VÃLHõ€ù[õ‹õX[XY[ôÀ\€ùY»^\€]KMLèÇà›ZS[ô»OOHô[àÇà»í[ò€Y\»][\»⁄‹ŸH›]\»\»Ÿ[X›Y[ôZ[[ôYKY]HŸôúŸ]\]X[»Hù[Xô\à
+HYHŸ^JKàÇàà∏.`8.)x.-¯.+x. x.*∏.%∏.,∏.&x.,8.%¯.-x.b8.`8. ∏.bx.,∏. x.)x..8.b8.(H8.`x.)x.bx.)¯. x.,¯.*¯.&x.%8.!8.b8.,∏.(¯.,8.(∏.,8."8.,∏. x.)¯.,x.&x.&x.-x.bx.%∏.-∏.!»YH
+H8.'∏.+x.%8.-x.)¯.,x.&x.&x.-x.bK8. x.%¯.(KäHüBà‹Çà]à€\‹”ò[YOHõ]Làõ^õ^]‹ò\ÿ\LKçHèÇà“USW‘’UT—TÀõX\
+
+›
+HOà¬à€€ú›€àH][T›]\‘€X⁄Y\”õ‹õX[^ôYôYUŸ^Kú›]\Ÿ\Àö[ò€Y\ ›
+N¬àô]\õà
+àù]€ÇàŸ^O^‹›Bà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ 
+HOàŸŸ€QYUŸ^T€XﬁT›]\ ›
+_Bà€\‹”ò[YO^ÿ€äàúõ›[ôYYù[LãçHKLH^VÃL\Hõ€ù\Ÿ[ZXõ€ò[ú⁄][€ãX€€‹ú»›X⁄[X[ö\[][€àãà€à»òôÀ\€]KNML^]⁄]HààòôÀ\€]KLåŒ^\€]KMÃÇà
+_BàÇà‹›]\”Xô[
+›\»][T›]\—ö[\ïò[YJ_Bàÿù]€èÇà
+N¬àJ_BàŸ]èÇàXô[€\‹”ò[YOHõ]L»õ^õ^]‹ò\][\ÀXŸ[ù\àÿ\Là^VÃL\Hõ€ù[YY][H^\€]KMÃèÇà‹[à€\‹”ò[YOHú⁄ö[öÀLèû›ZS[ô»OOHô[àà»ìX]⁄^\’[ù[àà∏.`8.%¯.-x.(∏.&à^\’[ù[ò[ô⁄€⁄»üO‹‹[èÇà[ú]à\OHõù[Xô\àÇà[ú][ŸOHõù[Y\öX»Çà›\^Ã_Bàò[YO^⁄][T›]\‘€X⁄Y\”õ‹õX[^ôYôYUŸ^KõX]⁄^\’[ù[YPò[ô⁄€⁄ﬂBà€ê⁄[ôŸO^ JHOàŸ]YUŸ^T€XﬁSX]⁄^\ Kù\ôŸ]ùò[YJ_Bà€\‹”ò[YOHùÀLçõ›[ôY^õ‹ô\àõ‹ô\ã\€]KLåôÀ\€]KMLLàKLKçH^\€Hõ€ù\Ÿ[ZXõ€Xù[\ã[ù[\»›][ôK[õ€ôHö[ôÀLHö[ôÀ]ò[ú‹\ô[ùõÿ›\Œúö[ôÀ\€]KLÃÇàœÇà€Xô[ÇàŸ]èÇÇà]à€\‹”ò[YOHõ]Mõ‹ô\ã]õ‹ô\ã\€]KLåÕÃMèÇà€\‹”ò[YOHù^VÃL\Hõ€ù\Ÿ[ZXõ€\\òÿ\ŸHòX⁄⁄[ôÀ]⁄YH^\€]KMLèÇà›ZS[ô»OOHô[àà»îù[\»\à›]\»€ŸHàà∏.`∏.!8.bx.%8.*∏.%∏.,∏.&x.,0≠»YH»8.'x.,∏. H»”HüBà‹Çà[€\‹”ò[YOHõ]Là‹XŸK^KLKçHèÇà“USW‘’UT—TÀõX\
+
+›
+HOà¬à€€ú›õ›»H][T›]\‘€X⁄Y\”õ‹õX[^ôYòûT›]\÷‹›N¬àô]\õà
+àHŸ^O^‹›H€\‹”ò[YOHúõ›[ôY^ôÀ\€]KMLLàKLKçHö[ôÀLHö[ôÀ\€]KLLèÇà]à€\‹”ò[YOHù^VÃL\Hõ€ùXõ€XY[ôÀ]Y⁄^\€]KNLèÇà‹[èû‹›O‹‹[èÇà‹[à€\‹”ò[YOHõ[LHõ€ù[õ‹õX[^\€]KMåè∞≠»‹›]\”Xô[
+›\»][T›]\—ö[\ïò[YJ_O‹‹[èÇàŸ]èÇà]à€\‹”ò[YOHõ]Làõ^õ^X€€ÿ\LàèÇà]à€\‹”ò[YOHôõ^õ^]‹ò\ÿ\^Mÿ\^KLà^VÃL\Hõ€ù[YY][H^\€]KMÃèÇàXô[€\‹”ò[YOHö[õ[ôKYõ^›\ú€‹ã\⁄[ù\à][\ÀXŸ[ù\àÿ\LKçHèÇà[ú]à\OHò⁄X⁄ÿõﬁÇà⁄X⁄ŸY^‹õ›Àò\úö]ò[YQ]_Bà€ê⁄[ôŸO^ 
+HOÇà]⁄][T›]\‘€XﬁJ›»\úö]ò[YQ]Nà\õ›Àò\úö]ò[YQ]HJBàBà€\‹”ò[YOHöMÀM⁄ö[öÀLõ›[ôYõ‹ô\ã\€]KLÃÇàœÇà›ZS[ô»OOHô[àà»ëYH]Hö]ô\»\úö]ò[UHàà∏.`¯."∏.bHYH8.`8.&¯.a¯.&x. x.,¯.*¯.&x.%8.(x.,àüBà€Xô[ÇàXô[€\‹”ò[YOHö[õ[ôKYõ^›\ú€‹ã\⁄[ù\à][\ÀXŸ[ù\àÿ\LKçHèÇà[ú]à\OHò⁄X⁄ÿõﬁÇà⁄X⁄ŸY^‹õ›Àú›‹ôQ\‹⁄]€ÿ⁄ﬂBà€ê⁄[ôŸO^ 
+HOà¬à€€ú›ô^€àH\õ›Àú›‹ôQ\‹⁄]€ÿ⁄Œ¬à]⁄][T›]\‘€XﬁJ›¬à›‹ôQ\‹⁄]€ÿ⁄Œàô^€ãà›‹ôQ\‹⁄]X^^\Œàô^€Çà»õ›Àú›‹ôQ\‹⁄]X^^\»œ»QêUS‘’‘ëW—T‘“U”PV—VT¬ààõ›Àú›‹ôQ\‹⁄]X^^\ÀàJN¬à_Bà€\‹”ò[YOHöMÀM⁄ö[öÀLõ›[ôYõ‹ô\ã\€]KLÃÇàœÇà›ZS[ô»OOHô[àà»î›‹ôH\‹⁄]ÿ\àà∏.`8.'∏.%8.,∏.&x.)¯.,x.&x.'x.,∏. x.*∏.`∏.%x.(¯.cüBà€Xô[ÇàŸ]èÇà]à€\‹”ò[YOHôõ^õ^]‹ò\ÿ\L»èÇà‹õ›Àú›‹ôQ\‹⁄]€ÿ⁄»»
+àXô[€\‹”ò[YOHôõ^õ^]‹ò\][\ÀXŸ[ù\àÿ\LH^VÃL\H^\€]KMåèÇà‹[à€\‹”ò[YOHôõ€ù[YY][Hèû›ZS[ô»OOHô[àà»êÿ\^\»àà∏.`8.'∏.%8.,∏.&x.)¯.,x.&HüO‹‹[èÇà[ú]à\OHõù[Xô\àÇà[ú][ŸOHõù[Y\öX»ÇàZ[è^Ã_BàX^^ÕÃÃBàò[YO^‹õ›Àú›‹ôQ\‹⁄]X^^\»OHù[»ààà›ö[ô õ›Àú›‹ôQ\‹⁄]X^^\ _Bà€ê⁄[ôŸO^ JHOà¬à]⁄][T›]\‘€XﬁJ›¬à›‹ôQ\‹⁄]X^^\Œà\úŸS‹[€ò[€XﬁQ^JKù\ôŸ]ùò[YJKàJN¬à_BàXŸZ€\è^‘›ö[ô QêUS‘’‘ëW—T‘“U”PV—VT _Bà€\‹”ò[YOHùÀVÕåç\ô[WHõ›[ôY[»ôÀ]⁄]HLKçHKLH^^»õ€ù\Ÿ[ZXõ€Xù[\ã[ù[\»ö[ôÀLHö[ôÀ\€]KLåŒÇàœÇà€Xô[Çà
+Hàù[BàXô[€\‹”ò[YOHôõ^õ^]‹ò\][\ÀXŸ[ù\àÿ\LH^VÃL\H^\€]KMåèÇà‹[à€\‹”ò[YOHôõ€ù[YY][Hèû›ZS[ô»OOHô[àà»ë^\»[ã\›]\»
+ÿ\õäHàà∏.+x.(∏..x.b8.*∏.%∏.,∏.&x.,8.`8. x.-8.&x.)¯.,x.&H
+8.`8.%x.-¯.+x.&JHüO‹‹[èÇà[ú]à\OHõù[Xô\àÇà[ú][ŸOHõù[Y\öX»ÇàZ[è^Ã_BàX^^ÕÃÃBàò[YO^‹õ›Àú€SX^ÿ[[ô\ë^\“[î›]\»OHù[»ààà›ö[ô õ›Àú€SX^ÿ[[ô\ë^\“[î›]\ _Bà€ê⁄[ôŸO^ JHOà¬à]⁄][T›]\‘€XﬁJ›¬à€SX^ÿ[[ô\ë^\“[î›]\Œà\úŸS‹[€ò[€XﬁQ^JKù\ôŸ]ùò[YJKàJN¬à_BàXŸZ€\èH∏†%Çà€\‹”ò[YOHùÀVÕåç\ô[WHõ›[ôY[»ôÀ]⁄]HLKçHKLH^^»õ€ù\Ÿ[ZXõ€Xù[\ã[ù[\»ö[ôÀLHö[ôÀ\€]KLåŒÇàœÇà€Xô[ÇàŸ]èÇàŸ]èÇà€OÇà
+N¬àJ_Bà›[ÇàŸ]èÇàŸ]èÇàŸ]èÇà
+Hàù[Bà]à€\‹”ò[YOHõ]LKçHõ^õ^]‹ò\ÿ\LàèÇàù]€Çà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ÿ€X\í][T›]\—ö[\ú‘›Xõ_Bà€\‹”ò[YO^ÿ€äàôõ^Z[ãZVÕLúHZ[ã]ÀVÕ\ô[WH⁄ö[öÀLõ^X€€][\ÀXŸ[ù\àù\›YûKXŸ[ù\àÿ\LHõ›[ôY^LàKLà^XŸ[ù\à›X⁄[X[ö\[][€àò[ú⁄][€ãX€€‹ú»ãà][T›]\—ö[\úÀú⁄^ôHOOH»òôÀ\€]KNML^]⁄]HààòôÀ\€]KLL^\€]KMÃ›ô\éòôÀ\€]KLåÕÃÇà
+_BàÇà]à€\‹”ò[YOHù^^»õ€ù[YY][HXY[ôÀ\€ùY»èû›ZS[ô»OOHô[àà»î⁄›»[àà∏.`x.*∏.%8.!¯.%¯.,x.bx.!¯.*¯.(x.%üOŸ]èÇà]à€\‹”ò[YOHù^Xò\ŸHõ€ù\Ÿ[ZXõ€Xù[\ã[ù[\»èû⁄][T›]\’›[€›[ùOŸ]èÇàÿù]€èÇà⁄][T›]\—ö[\ì‹[€ú—õ‹ï€€ò\ãõX\
+
+ HOà
+àù]€ÇàŸ^O^‹ﬂBà\OHòù]€àÇà€î⁄[ù\ë›€è^ JHOàKúô]ô[ùYò][
+
+_Bà€ê€X⁄œ^ 
+HOàŸŸ€R][T›]\–⁄\›XõJ _Bà]O^¬à»OOHUSW‘’UT◊—QW’—VBà»ZS[ô»OOHô[àÇà»X]⁄\»YKY^Hù[Nà›]\Ÿ\»	⁄][T›]\‘€X⁄Y\”õ‹õX[^ôYôYUŸ^Kú›]\Ÿ\Àöõ⁄[äãä_H0≠»^\’[ù[ò[ô⁄€⁄œI⁄][T›]\‘€X⁄Y\”õ‹õX[^ôYôYUŸ^KõX]⁄^\’[ù[YPò[ô⁄€⁄ﬂXàà8."∏.-8.&¯.(x.,∏.)¯.,x.&x.&x.-x.bNà8.*∏.%∏.,∏.&x.,	⁄][T›]\‘€X⁄Y\”õ‹õX[^ôYôYUŸ^Kú›]\Ÿ\Àöõ⁄[äà0≠»ä_H0≠»^\’[ù[ò[ô⁄€⁄œI⁄][T›]\‘€X⁄Y\”õ‹õX[^ôYôYUŸ^KõX]⁄^\’[ù[YPò[ô⁄€⁄ﬂXàà[ôYö[ôYàBà€\‹”ò[YO^ÿ€äàôõ^Z[ãZVÕLúHZ[ã]ÀVÕåç\ô[WHX^]ÀVÕ‹ô[WH⁄ö[öÀLõ^X€€][\ÀXŸ[ù\àù\›YûKXŸ[ù\àÿ\LHõ›[ôY^LàKLà^XŸ[ù\àò[ú⁄][€ãX€€‹ú»›X⁄[X[ö\[][€àãà€€ò\í][T›]\—ö[\ê⁄\€\‹Ÿ\ À][T›]\—ö[\úÀö\  JBà
+_BàÇà‹[à€\‹”ò[YOHõ[ôKX€[\L»X^]ÀYù[^^»õ€ù[YY][HXY[ôÀ\€ùY»èû‹›]\”Xô[
+ _O‹‹[èÇà‹[à€\‹”ò[YOHù^Xò\ŸHõ€ù\Ÿ[ZXõ€Xù[\ã[ù[\»èÇà‹»OOHUSW‘’UT◊—QW’—VH»YUŸ^R][P€›[ùà][T›]\–€›[ùÀôŸ]
+ Hœ»Bà‹‹[èÇàÿù]€èÇà
+J_BàŸ]èÇàŸ]èÇàŸ]èÇàœÇà⁄XY\èÇàXZ[à€\‹”ò[YOHúLãVÿÿ[ çÕ\ô[JŸ[ùäÿYôKX\ôXKZ[úŸ]Xõ›€K
+JWHL€NúL»èÇà]à€\‹”ò[YOHú‹XŸK^KL»ãMèÇà›ö\⁄XõTYŸYõ‹îô[ô\ãõX\
+
+‹ô\äHOà
+à‹ô\êÿ\ôàŸ^O^€‹ô\ãöYBà‹ô\è^€‹ô\üBàZS[ôœ^›ZS[ôﬂBà›Yôîõ‹›\ìò[Y\œ^‹›Yôîõ‹›\üBàÿ[P\‹⁄Y€ôY\–ûTÿ[O^‹ÿ[P\‹⁄Y€ôY\ﬂBà⁄\ôPò\ŸU\õ^‹⁄\ôPò\ŸU\õBà][T›]\”Xô[œ^⁄][T›]\”Xô[ﬂBà][T€X⁄Y\”õ‹õO^⁄][T›]\‘€X⁄Y\”õ‹õX[^ôYBà][T›]\‘õ‹›\ëõ‹êÿ\ô^⁄][T›]\‘õ‹›\üBà€€ò\î›Yôëö[\úœ^Ÿö[\ö[ô‘›Yôëö[\úﬂBà€€ò\î›]\—ö[\úœ^Ÿö[\ö[ô“][T›]\—ö[\úﬂBà€ì]ôR][\–⁄[ôŸO^⁄[ôS‹ô\ì]ôR][\–⁄[ôŸ_Bà[ôR[òõﬁX›]ôO^€[ôR[òõﬁõÿ›\”‹ô\íYOOH‹ô\ãöYBàœÇà
+J_Bà€‹ô\ê⁄\ÿX⁄Q^\ö[Y[ù[òXõY	âà^\ö[Y[ùÿY[ô—]Z[»	âà^\ö[Y[ùZ\‹⁄[ô’ÿ[ùY€›[ùà»
+à\úò^Kôúõ€J»[ô›àX]õZ[äÀ^\ö[Y[ùZ\‹⁄[ô’ÿ[ùY€›[ù
+HJKõX\
+
+À[ô^
+HOà
+à]ÇàŸ^O^ÿ^\ö[Y[ù\⁄Ÿ[]€ãI⁄[ô^XBà€\‹”ò[YOHúõ›[ôYLûôÀ]⁄]HM⁄Y›À\€Hö[ôÀLHö[ôÀ\€]KLåÕÃÇàÇà]à€\‹”ò[YOHöMHÀLÀÕ[ö[X]K\[ŸHõ›[ôYYù[ôÀ\€]KLåàœÇà]à€\‹”ò[YOHõ]L»L»ÀLKÃà[ö[X]K\[ŸHõ›[ôYYù[ôÀ\€]KLåàœÇà]à€\‹”ò[YOHõ]Mõ^ÿ\LàèÇà]à€\‹”ò[YOHöNÀLå[ö[X]K\[ŸHõ›[ôYYù[ôÀ\€]KLLàœÇà]à€\‹”ò[YOHöNÀLç[ö[X]K\[ŸHõ›[ôYYù[ôÀ\€]KLLàœÇàŸ]èÇà]à€\‹”ò[YOHõ]MLLà[ö[X]K\[ŸHõ›[ôYLûôÀ\€]KLLàœÇàŸ]èÇà
+JBà
+Hàù[Bà⁄\”[‹ôUö\⁄XõH»
+à]àôYè^€ÿY[‹ôTôYüH€\‹”ò[YOHöNHÀYù[õ›[ôYLûôÀ\€]KLL^XŸ[ù\à^\€Hõ€ù[YY][HXY[ôÀNH^\€]KMåèÇà€‹ô\ê⁄\ÿX⁄Q^\ö[Y[ù[òXõY	âà^\ö[Y[ùÿY[ô—]Z[¬à»
+ZS[ô»OOHô[àà»ìÿY[ô»ÿ\ô]Z[Àããààà∏. x.,¯.)x.,x.!¯.`∏.*¯.)x.%8.(¯.,∏.(∏.)x.,8.`8.+x.-x.(∏.%8. x.,∏.(¯.c8.%ããàäBàà
+ZS[ô»OOHô[àà»ìÿY[ô»[‹ôKããààà∏. x.,¯.)x.,x.!¯.`∏.*¯.)x.%8.`8.'∏.-8.b8.(Kããàä_H
+›ö\⁄XõTYŸYõ‹îô[ô\ãõ[ô›Kﬁ›ö\⁄XõKõ[ô›JBàŸ]èÇà
+Hàù[Bà»]ö\⁄XõKõ[ô›»
+à]à€\‹”ò[YOHúõ›[ôYLûôÀ]⁄]HMà^XŸ[ù\à⁄Y›À\€Hö[ôÀLHö[ôÀ\€]KLåÕåèÇà€\‹”ò[YOHù^Xò\ŸHõ€ù\Ÿ[ZXõ€XY[ôÀ\€ùY»^\€]KNèÇà€X\Y‹ô\úÀõ[ô›OOHà»
+ZS[ô»OOHô[àà»ìõ»‹ô\ú»õ›[ô[àﬁ\›[HY]àà∏.(∏.,x.!¯.a8.(x.b8.(x.-x.!¯.,∏.&x.`¯.&x.(¯.,8.&∏.&àäBàà
+ZS[ô»OOHô[àà»ìõ»‹ô\ú»X]⁄›\úô[ùö[\ú»àà∏.a8.(x.b8.'∏.&∏.!¯.,∏.&x.%¯.-x.b8.%x.(¯.!¯. x.,x.&∏.%x.,x.)¯. x.(¯.+x.!»ä_Bà‹Çà€X\Y‹ô\úÀõ[ô›à»
+àÇà€\‹”ò[YOHõ]Là^^»õ€ù\Ÿ[ZXõ€XY[ôÀ\ô[^Y^\€]KMLèÇà›ZS[ô»OOHô[àÇà»ïûH€X\ö[ô»ŸX\ò⁄‹à⁄[ô⁄[ô»ÿ[H€ŸH»ÿ[H›]\»»›€ô\à»][H›]\»ö[\úÀàÇàà∏.)x.+x.!¯.)x.bx.,∏.!¯."∏.b8.+x.!¯.!8.bx.&x.*¯.,à8.*¯.(¯.-¯.+x.`8.&¯.)x.-x.b8.(∏.&x.`8."¯.)x.)x.c»8.*∏.%∏.,∏.&x.,8. ∏.,∏.(à»8.'∏.&x.,x. x.!¯.,∏.&H»8.*∏.%∏.,∏.&x.,8.(¯.,∏.(∏. x.,∏.(»üBà‹Çàù]€à\OHòù]€àà€ê€X⁄œ^ÿ€X\ëö[\ú‘›Xõ_H€\‹”ò[YOHõ]MLLHÀYù[X^]ÀVÃéHõ›[ôYLûôÀ\€]KNML^\€Hõ€ù\Ÿ[ZXõ€^]⁄]H›X⁄[X[ö\[][€àèÇà›ZS[ô»OOHô[àà»ê€X\àö[\ú»àà∏.)x.bx.,∏.!¯.%x.,x.)¯. x.(¯.+x.!»üBàÿù]€èÇàœÇà
+Hàù[BàŸ]èÇà
+Hàù[BàŸ]èÇà€XZ[èÇàŸ]èÇàŸ]èÇà[ôR[òõﬁõÿ][ô”ò]öYÿ]‹àœÇà”[ôR[òõﬁúöYŸTõ›öY\èÇàœÇà
+N¬üB

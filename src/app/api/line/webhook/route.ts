@@ -24,7 +24,6 @@ import {
 } from "@/lib/line-inbox/line-inbox-attachments";
 
 export const dynamic = "force-dynamic";
-export const runtime = "nodejs";
 
 type LineEvent = {
   type?: string;
@@ -273,7 +272,7 @@ export async function POST(request: Request) {
     return new Response("OK", { status: 200 });
   }
 
-  if (!verifyLineWebhookSignature(secret, rawBody, signature)) {
+  if (!(await verifyLineWebhookSignature(secret, rawBody, signature))) {
     console.warn("[line-webhook] signature verification failed");
     return new Response("Forbidden", { status: 403 });
   }

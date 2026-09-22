@@ -872,7 +872,7 @@ const sampleThaiPlateReviewUrl = buildLineOrderReviewUrl({
 });
 assert.strictEqual(
   sampleThaiPlateReviewUrl,
-  "https://used-car-export-dashboard.vercel.app/m/orders?load=full&focusCarRowId=ignored-row-id&search=6286",
+  "https://vigo4u-operations.pennat.chatgpt.site/m/orders?load=full&focusCarRowId=ignored-row-id&search=6286",
   "review URL encodes focused car row id and Thai plate search fallback"
 );
 const searchOnlyReviewUrl = buildLineOrderReviewUrl({
@@ -880,7 +880,7 @@ const searchOnlyReviewUrl = buildLineOrderReviewUrl({
 });
 assert.strictEqual(
   searchOnlyReviewUrl,
-  "https://used-car-export-dashboard.vercel.app/m/orders?load=full&search=51072",
+  "https://vigo4u-operations.pennat.chatgpt.site/m/orders?load=full&search=51072",
   "review URL falls back to search when focused car row id is missing"
 );
 
@@ -911,7 +911,7 @@ const travo95295ReviewUrl = buildLineOrderReviewUrl({
 });
 assert.strictEqual(
   travo95295ReviewUrl,
-  "https://used-car-export-dashboard.vercel.app/m/orders?load=full&focusCarRowId=a18c7942-10fc-4d32-8059-5b97f86ec9e8&search=95295",
+  "https://vigo4u-operations.pennat.chatgpt.site/m/orders?load=full&focusCarRowId=a18c7942-10fc-4d32-8059-5b97f86ec9e8&search=95295",
   "review URL focuses 95295 by car_row_id with short search fallback"
 );
 

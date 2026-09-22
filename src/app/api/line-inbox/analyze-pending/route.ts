@@ -1,10 +1,8 @@
 import { NextResponse } from "next/server";
-import { timingSafeEqual } from "crypto";
 import { requireMutateRole } from "@/lib/auth/mutation-guard";
 import { runAnalyzePendingJob } from "@/lib/line-inbox/analyze-pending-job";
 
 export const dynamic = "force-dynamic";
-export const runtime = "nodejs";
 
 type AnalyzePendingBody = {
   limit?: unknown;
@@ -20,10 +18,12 @@ function readBearerToken(request: Request): string {
 }
 
 function safeTokenEquals(input: string, expected: string): boolean {
-  const inputBytes = Buffer.from(input);
-  const expectedBytes = Buffer.from(expected);
-  if (inputBytes.length !== expectedBytes.length) return false;
-  return timingSafeEqual(inputBytes, expectedBytes);
+  if (input.length !== expected.length) return false;
+  let mismatch = 0;
+  for (let index = 0; index < input.length; index += 1) {
+    mismatch |= input.charCodeAt(index) ^ expected.charCodeAt(index);
+  }
+  return mismatch === 0;
 }
 
 async function authorizeAnalyzePending(request: Request) {
