@@ -22,6 +22,7 @@ type MigrationBody =
   | { action: "table"; table: string; offset?: number; limit?: number }
   | { action: "profiles" }
   | { action: "storage"; prefix?: string; offset?: number; limit?: number }
+  | { action: "storage-referenced"; offset?: number; limit?: number }
   | { action: "verify" };
 
 function sourceConfig() {
@@ -190,6 +191,73 @@ async function migrateStorage(body: Extract<MigrationBody, { action: "storage" }
   return { prefix, offset, limit, listed: entries.length, copied, skipped, directories, done: entries.length < limit };
 }
 
+function collectStoragePaths(value: unknown, paths: Set<string>, key = "") {
+  if (value == null) return;
+  if (Array.isArray(value)) {
+    for (const entry of value) collectStoragePaths(entry, paths, key);
+    return;
+  }
+  if (typeof value === "object") {
+    for (const [childKey, child] of Object.entries(value as Record<string, unknown>)) {
+      collectStoragePaths(child, paths, childKey);
+    }
+    return;
+  }
+  if (typeof value !== "string") return;
+  const candidate = value.trim().replace(/^\/+/, "");
+  if (!candidate || candidate.includes("://")) return;
+  if (
+    key === "storage_path" ||
+    key === "image_storage_path" ||
+    /^(?:car|item|line-inbox)\//.test(candidate)
+  ) paths.add(candidate);
+}
+
+async function referencedStoragePaths(): Promise<string[]> {
+  const db = getD1();
+  const paths = new Set<string>();
+  const photoRows = await db.prepare("SELECT storage_path FROM order_tracking_photos WHERE storage_path IS NOT NULL").all<{ storage_path: string }>();
+  for (const row of photoRows.results ?? []) collectStoragePaths(row.storage_path, paths, "storage_path");
+  const inboxRows = await db.prepare("SELECT analyze_payload,image_storage_path FROM line_inbox_messages WHERE analyze_payload IS NOT NULL OR image_storage_path IS NOT NULL").all<{ analyze_payload: string | null; image_storage_path: string | null }>();
+  for (const row of inboxRows.results ?? []) {
+    collectStoragePaths(row.image_storage_path, paths, "image_storage_path");
+    if (!row.analyze_payload) continue;
+    try { collectStoragePaths(JSON.parse(row.analyze_payload), paths); } catch { /* ignore malformed legacy payload */ }
+  }
+  return [...paths].sort();
+}
+
+async function migrateReferencedStorage(body: Extract<MigrationBody, { action: "storage-referenced" }>) {
+  const offset = safeInt(body.offset, 0, 0, 10_000_000);
+  const limit = safeInt(body.limit, 25, 1, 50);
+  const paths = await referencedStoragePaths();
+  const selected = paths.slice(offset, offset + limit);
+  const { url, key } = sourceConfig();
+  const bucket = getR2();
+  let copied = 0;
+  let skipped = 0;
+  const missing: string[] = [];
+  for (const path of selected) {
+    const existing = await bucket.head(path);
+    if (existing) { skipped += 1; continue; }
+    const response = await fetch(
+      `${url}/storage/v1/object/authenticated/order-tracking-photos/${encodeObjectPath(path)}`,
+      { headers: sourceHeaders(key), cache: "no-store" },
+    );
+    if (response.status === 404) { missing.push(path); continue; }
+    if (!response.ok || !response.body) throw new Error(`Storage object ${path} returned ${response.status}`);
+    await bucket.put(path, response.body, {
+      httpMetadata: {
+        contentType: response.headers.get("content-type") ?? "application/octet-stream",
+        cacheControl: response.headers.get("cache-control") ?? "public, max-age=3600",
+      },
+      customMetadata: { migrated_from: "supabase", migrated_at: new Date().toISOString() },
+    });
+    copied += 1;
+  }
+  return { offset, limit, referenced: paths.length, selected: selected.length, copied, skipped, missing, done: offset + selected.length >= paths.length };
+}
+
 async function verify() {
   const db = getD1();
   const tableCounts: Record<string, number> = {};
@@ -222,6 +290,8 @@ export async function POST(request: Request) {
         ? await migrateProfiles()
         : body.action === "storage"
           ? await migrateStorage(body)
+          : body.action === "storage-referenced"
+            ? await migrateReferencedStorage(body)
           : body.action === "verify"
             ? await verify()
             : null;
