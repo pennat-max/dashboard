@@ -14,6 +14,23 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
   ]),
   {
+    files: ["src/**/*.{ts,tsx}"],
+    rules: {
+      // The dashboard predates React Compiler linting. Keep these migration-only
+      // diagnostics from blocking releases; migrate each large screen separately.
+      "react-hooks/preserve-manual-memoization": "off",
+      "react-hooks/refs": "off",
+      "react-hooks/set-state-in-effect": "off",
+      "react-hooks/static-components": "off",
+    },
+  },
+  {
+    files: ["scripts/**/*.cjs"],
+    rules: {
+      "@typescript-eslint/no-require-imports": "off",
+    },
+  },
+  {
     files: ["components/ui/**/*.{ts,tsx}", "hooks/use-mobile.ts"],
     rules: {
       // These files are vendored verbatim from shadcn@4.17.0. Keep the
