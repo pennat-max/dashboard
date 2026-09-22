@@ -1,4 +1,4 @@
-import { createAnonClient } from "@/lib/supabase/anon";
+import { createAnonClient } from "@/lib/site/data";
 import {
   carPriceNumber,
   isBookedNotExported,

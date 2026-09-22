@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireMutateRole } from "@/lib/auth/mutation-guard";
-import { createServiceRoleClient } from "@/lib/supabase/service-role";
+import { createServiceRoleClient } from "@/lib/site/data";
 import { itemStatusForOrderItemsRow } from "@/lib/orders/order-item-status";
 import { createOrderTaskUpdate } from "@/lib/orders/task-update-log";
 import { buildItemNameEnglishMap } from "@/lib/orders/item-name-translation";

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireMutateRole } from "@/lib/auth/mutation-guard";
-import { createServiceRoleClient } from "@/lib/supabase/service-role";
+import { createServiceRoleClient } from "@/lib/site/data";
 import { LINE_INBOX_MESSAGES_TABLE } from "@/lib/line-inbox/line-inbox-messages";
 import { buildFallbackAnalyzeItemsFromRawText } from "@/lib/line-inbox/fallback-analyze-items";
 import { buildFallbackAnalyzePayloadFromRawText } from "@/lib/line-inbox/fallback-analyze-payload";
@@ -39,7 +39,7 @@ const LINE_PENDING_QUEUE_ROW_LIMIT = 500;
 const LINE_PENDING_QUEUE_SUMMARY_ATTACHMENT_LIMIT = 3;
 const LINE_PENDING_QUEUE_SUMMARY_RECENT_ATTACHMENT_LIMIT = 12;
 const LINE_PENDING_QUEUE_FALLBACK_CONCURRENCY = 8;
-const CARS_TABLE = process.env.NEXT_PUBLIC_SUPABASE_CARS_TABLE ?? "cars";
+const CARS_TABLE = "cars";
 const MANUAL_CAR_CANDIDATE_SELECT = [
   "id",
   "row_id",

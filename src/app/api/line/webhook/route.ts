@@ -1,4 +1,4 @@
-import { createServiceRoleClient } from "@/lib/supabase/service-role";
+import { createServiceRoleClient } from "@/lib/site/data";
 import { verifyLineWebhookSignature } from "@/lib/line/verify-line-signature";
 import { isLineGroupAllowed, parseLineAllowedGroups } from "@/lib/line/allowed-groups";
 import {

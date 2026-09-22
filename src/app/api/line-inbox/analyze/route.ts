@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireMutateRole } from "@/lib/auth/mutation-guard";
-import { createServiceRoleClient } from "@/lib/supabase/service-role";
+import { createServiceRoleClient } from "@/lib/site/data";
 import type { LineInboxAnalyzeResponse } from "@/lib/line-inbox/types";
 import { formatZodIssues, lineInboxAnalyzeBodySchema } from "@/lib/line-inbox/api-schemas";
 import { runLineInboxAnalyzeCore } from "@/lib/line-inbox/run-analyze-core";

@@ -1,4 +1,4 @@
-import type { createServiceRoleClient } from "@/lib/supabase/service-role";
+import type { createServiceRoleClient } from "@/lib/site/data";
 
 const TABLE = "order_tracking_photos";
 const BUCKET = "order-tracking-photos";

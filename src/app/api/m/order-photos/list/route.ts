@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createServiceRoleClient } from "@/lib/supabase/service-role";
+import { createServiceRoleClient } from "@/lib/site/data";
 
 const TABLE = "order_tracking_photos";
 const BUCKET = "order-tracking-photos";

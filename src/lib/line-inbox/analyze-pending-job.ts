@@ -16,7 +16,7 @@ import {
   type LineReplyAnalyzeContext,
 } from "@/lib/line-inbox/reply-context";
 import { runLineInboxAnalyzeCore } from "@/lib/line-inbox/run-analyze-core";
-import { createServiceRoleClient } from "@/lib/supabase/service-role";
+import { createServiceRoleClient } from "@/lib/site/data";
 import type { LineInboxAnalyzeResponse } from "@/lib/line-inbox/types";
 
 export type AnalyzePendingOptions = {

@@ -1,5 +1,5 @@
 import { getChatGPTUser, type ChatGPTUser } from "@/lib/auth/chatgpt-auth";
-import { createAnonClient } from "@/lib/supabase/anon";
+import { createAnonClient } from "@/lib/site/data";
 import { normalizeRole, type UserRole } from "@/lib/auth/user-role";
 
 export type SessionWithRole = {

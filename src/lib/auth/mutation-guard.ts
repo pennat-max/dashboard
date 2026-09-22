@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { isOpenOrderTrackingMutations } from "@/lib/auth/open-order-tracking-mutations";
 import { getChatGPTUser, type ChatGPTUser } from "@/lib/auth/chatgpt-auth";
-import { createAnonClient } from "@/lib/supabase/anon";
+import { createAnonClient } from "@/lib/site/data";
 import { canManageUsers, canMutate, normalizeRole, type UserRole } from "@/lib/auth/user-role";
 
 const OPEN_MODE_USER_ID = "00000000-0000-4000-8000-000000000001";

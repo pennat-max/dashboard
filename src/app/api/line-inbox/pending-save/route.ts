@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import type { SiteDataClient as SupabaseClient } from "@/lib/site/db-client";
 import { requireMutateRole } from "@/lib/auth/mutation-guard";
-import { createServiceRoleClient } from "@/lib/supabase/service-role";
+import { createServiceRoleClient } from "@/lib/site/data";
 import {
   LINE_INBOX_MESSAGES_TABLE,
 } from "@/lib/line-inbox/line-inbox-messages";

@@ -1,5 +1,5 @@
 import type { SiteDataClient as SupabaseClient } from "@/lib/site/db-client";
-import { createAnonClient } from "@/lib/supabase/anon";
+import { createAnonClient } from "@/lib/site/data";
 import { carTitleLine } from "@/lib/car-fields";
 import { matchesRole, normalizeOrderPriority, normalizeOrderRole, normalizeOrderStatus } from "@/lib/order-fields";
 import type { Car } from "@/types/car";

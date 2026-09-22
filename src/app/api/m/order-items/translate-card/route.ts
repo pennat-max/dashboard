@@ -11,7 +11,7 @@ import {
   translateOrderItemNoteToEnglish,
   translationApiKeysConfigured,
 } from "@/lib/orders/item-name-translation";
-import { createServiceRoleClient } from "@/lib/supabase/service-role";
+import { createServiceRoleClient } from "@/lib/site/data";
 
 const ORDER_ITEMS_TABLE = "order_items";
 

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { requireMutateRole } from "@/lib/auth/mutation-guard";
 
-import { createServiceRoleClient } from "@/lib/supabase/service-role";
+import { createServiceRoleClient } from "@/lib/site/data";
 
 import { formatZodIssues, lineInboxConfirmBodySchema } from "@/lib/line-inbox/api-schemas";
 

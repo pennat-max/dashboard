@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireManageUsersRole } from "@/lib/auth/mutation-guard";
 import { isUserRole, normalizeRole, type UserRole } from "@/lib/auth/user-role";
-import { createServiceRoleClient } from "@/lib/supabase/service-role";
+import { createServiceRoleClient } from "@/lib/site/data";
 
 type Body = { email?: string; role?: number };
 

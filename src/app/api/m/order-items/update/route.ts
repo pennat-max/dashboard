@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireMutateRole } from "@/lib/auth/mutation-guard";
 import { coalesceOrderItemNote } from "@/lib/data/orders";
-import { createServiceRoleClient } from "@/lib/supabase/service-role";
+import { createServiceRoleClient } from "@/lib/site/data";
 import { itemStatusForOrderItemsRow } from "@/lib/orders/order-item-status";
 import { orderItemLabelContainsTamRoop } from "@/lib/orders/order-item-tam-roop-token";
 import { deleteAllPhotosForOrderItem } from "@/lib/orders/order-item-photos-cleanup";

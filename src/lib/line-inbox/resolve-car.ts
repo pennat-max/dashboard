@@ -2,7 +2,7 @@ import type { SiteDataClient as SupabaseClient } from "@/lib/site/db-client";
 import { splitLineTextForInbox } from "@/lib/line-inbox/split-line-text";
 import type { LineInboxCarCandidate } from "@/lib/line-inbox/types";
 
-const CARS_TABLE = process.env.NEXT_PUBLIC_SUPABASE_CARS_TABLE ?? "cars";
+const CARS_TABLE = "cars";
 const CAR_MATCH_SELECT = [
   "id",
   "row_id",
