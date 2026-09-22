@@ -14,7 +14,7 @@ export function AuthLoginLink({ className }: { className?: string }) {
       href={`/login?next=${encodeURIComponent(next)}`}
       className={cn(buttonVariants({ variant: "default", size: "sm" }), className)}
     >
-      Sign in / Create account
+      เข้าสู่โหมดแก้ไข
     </Link>
   );
 }
