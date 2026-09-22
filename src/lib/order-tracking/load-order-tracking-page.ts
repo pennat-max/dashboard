@@ -7,9 +7,9 @@ import { fetchOrderItemFilterIndexByCars, fetchOrderItemsAndUpdatesByCars } from
 import type { Car } from "@/types/car";
 import { headers } from "next/headers";
 
-function resolveRequestOrigin(): string {
+async function resolveRequestOrigin(): Promise<string> {
   try {
-    const h = headers();
+    const h = await headers();
     const host = h.get("x-forwarded-host")?.split(",")[0]?.trim() ?? h.get("host")?.trim();
     if (!host) return "";
     const rawProto = h.get("x-forwarded-proto")?.split(",")[0]?.trim()?.toLowerCase() ?? "https";
@@ -130,7 +130,7 @@ export async function loadOrderTrackingPageData(
     (v): v is string => typeof v === "string" && v.length > 0
   );
   const initialFocusedOrderId = parseOrderSearchParam(searchParams?.order);
-  const origin = resolveRequestOrigin();
+  const origin = await resolveRequestOrigin();
   const shareBaseUrl = origin || null;
 
   return {

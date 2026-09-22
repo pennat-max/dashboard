@@ -14,6 +14,7 @@
     "build:next": "next build",
     "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",
     "lint": "bash scripts/sites-env.sh -- eslint . --ignore-pattern dist --ignore-pattern .next",
+    "db:generate": "drizzle-kit generate",
     "test:line-inbox": "node scripts/line-inbox-smoke-tests.cjs",
     "db:patch-storage-mobile": "supabase db query --linked -f supabase/patch-order-storage-items-mobile-schema.sql"
   },
@@ -26,6 +27,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "date-fns": "^4.4.0",
+    "drizzle-orm": "0.45.2",
     "lucide-react": "^1.31.0",
     "next": "16.3.5",
     "postcss": "^8.5.23",
@@ -39,6 +41,7 @@
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.37.1",
+    "@cloudflare/workers-types": "4.20260515.1",
     "@types/node": "22.19.19",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
@@ -46,6 +49,7 @@
     "@vitejs/plugin-rsc": "0.5.26",
     "eslint": "9.39.4",
     "eslint-config-next": "16.3.5",
+    "drizzle-kit": "0.31.10",
     "react-server-dom-webpack": "19.2.6",
     "supabase": "^2.98.0",
     "typescript": "5.9.3",
