@@ -178,6 +178,8 @@ Import `docs/line-n8n-chang-joe-dry-run.workflow.json` into n8n.
 
 Use `docs/line-n8n-chang-joe-runbook.md` as the step-by-step checklist for Chang Joe's first import and manual dry-run test.
 
+Use `docs/chatgpt-site-cutover-line-n8n-checklist.md` for the ChatGPT Site cutover/rollback smoke checklist while LINE and n8n stay dry-run.
+
 The workflow:
 
 - is inactive,
