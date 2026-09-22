@@ -13,17 +13,11 @@ import React, {
   startTransition,
 } from "react";
 import { flushSync } from "react-dom";
-import { createClient } from "@supabase/supabase-js";
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { Car } from "@/types/car";
-import type { OrderTrackingSaleStatusSummary, OrderTrackingSummarySnapshot } from "@/lib/data/cars";
-import {
-  ORDER_ITEMS_TABLE_NAME,
-  ORDER_TASK_UPDATES_TABLE_NAME,
-  type OrderItemFilterIndexLite,
-} from "@/lib/data/orders";
+import type { OrderItemFilterIndexLite, OrderTrackingSaleStatusSummary, OrderTrackingSummarySnapshot } from "@/types/order-tracking";
 import {
   ORDER_TRACKING_SALE_CODES,
   normalizeSaleAssigneesMap,
@@ -923,8 +917,6 @@ function resolveShareAppBase(publicOriginProp: string | undefined | null): strin
   }
   const pub = String(process.env.NEXT_PUBLIC_APP_URL ?? "").trim().replace(/\/$/, "");
   if (pub) return pub;
-  const vc = String(process.env.VERCEL_URL ?? "").trim();
-  if (vc) return (vc.startsWith("http") ? vc : `https://${vc}`).replace(/\/$/, "");
   return "";
 }
 
@@ -2892,8 +2884,8 @@ const OrderCard = React.memo(function OrderCard({
       } else if (ts === "no_keys" || nts === "no_keys") {
         setTranslationNotice(
           uiLang === "en"
-            ? "English names/notes need GEMINI_API_KEY or GROQ_API_KEY on the server (.env.local or Vercel env)."
-            : "ตั้ง GEMINI_API_KEY หรือ GROQ_API_KEY บนเซิร์ฟเวอร์ (.env.local / Vercel) ถึงจะแปลชื่อและหมายเหตุเป็นภาษาอังกฤษได้"
+            ? "English names/notes need GEMINI_API_KEY or GROQ_API_KEY in the Site settings."
+            : "ตั้ง GEMINI_API_KEY หรือ GROQ_API_KEY ในการตั้งค่า Site ถึงจะแปลชื่อและหมายเหตุเป็นภาษาอังกฤษได้"
         );
       } else if (ts === "failed" || nts === "failed") {
         setTranslationNotice(
@@ -6677,49 +6669,6 @@ export function MobileOrderTrackingHome({
     });
   }, [saleStatusFilters, vehicleSearch, itemStatusFilters, staffFilters, visibleLimit, saleFilters, experimentRequestedCount]);
 
-  /** ซิงก์ข้ามเครื่อง: เมื่อมีคนแก้ order_items / order_task_updates ให้ดึงข้อมูลหน้าใหม่ (ต้องเปิด Realtime ในคอนโซล Supabase) */
-  useEffect(() => {
-    if (usingDemoFallback) return;
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
-    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim();
-    if (!url || !key) return;
-
-    let cancelled = false;
-    let debounce: ReturnType<typeof setTimeout> | undefined;
-    const scheduleRefresh = () => {
-      if (cancelled) return;
-      if (debounce) clearTimeout(debounce);
-      debounce = setTimeout(() => {
-        debounce = undefined;
-        router.refresh();
-      }, 500);
-    };
-
-    const supabase = createClient(url, key, {
-      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-    });
-
-    const channel = supabase
-      .channel("mobile-order-tracking-sync")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: ORDER_ITEMS_TABLE_NAME },
-        scheduleRefresh
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: ORDER_TASK_UPDATES_TABLE_NAME },
-        scheduleRefresh
-      )
-      .subscribe();
-
-    return () => {
-      cancelled = true;
-      if (debounce) clearTimeout(debounce);
-      void supabase.removeChannel(channel);
-    };
-  }, [router, usingDemoFallback]);
-
   /** ดึงลงเมื่ออยู่บนสุดของหน้า → router.refresh() (ชดเชยกรณี Realtime ไม่ทำงานหรือหน้าอื่นไม่ได้ subscribe) */
   useEffect(() => {
     const el = orderTrackingRootRef.current;
@@ -6975,8 +6924,8 @@ export function MobileOrderTrackingHome({
           {usingDemoFallback ? (
             <div className="mb-2 rounded-2xl bg-amber-50 px-3 py-2.5 text-sm font-medium leading-snug text-amber-900">
               {uiLang === "en"
-                ? "Demo fallback mode: live cars data not found from Supabase"
-                : "Demo fallback mode: ไม่พบข้อมูลรถจริงจาก Supabase"}
+                ? "Demo fallback mode: live cars data was not found"
+                : "Demo fallback mode: ไม่พบข้อมูลรถจริงในระบบ"}
             </div>
           ) : null}
           {isDeferredHydrationLoading ? (

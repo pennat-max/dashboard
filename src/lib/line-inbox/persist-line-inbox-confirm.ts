@@ -1,4 +1,4 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
+import type { SiteDataClient as SupabaseClient } from "@/lib/site/db-client";
 import { buildItemNameEnglishMap } from "@/lib/orders/item-name-translation";
 import { itemStatusForOrderItemsRow } from "@/lib/orders/order-item-status";
 import { createOrderTaskUpdate } from "@/lib/orders/task-update-log";

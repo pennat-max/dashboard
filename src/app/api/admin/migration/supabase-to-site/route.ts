@@ -273,13 +273,17 @@ async function verify() {
     tableCounts[table] = Number(row?.count ?? 0);
   }
   let r2Count = 0;
+  const r2Keys = new Set<string>();
   let cursor: string | undefined;
   do {
     const page = await getR2().list({ limit: 1000, cursor });
     r2Count += page.objects.length;
+    for (const object of page.objects) r2Keys.add(object.key);
     cursor = page.truncated ? page.cursor : undefined;
   } while (cursor);
-  return { tableCounts, r2Count };
+  const referenced = await referencedStoragePaths();
+  const missingReferenced = referenced.filter((path) => !r2Keys.has(path));
+  return { tableCounts, r2Count, referencedCount: referenced.length, missingReferenced };
 }
 
 export async function POST(request: Request) {

@@ -1,4 +1,4 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
+import type { SiteDataClient as SupabaseClient } from "@/lib/site/db-client";
 import { fetchOrderItemsForTask, fetchOrderTaskIdForCar } from "@/lib/line-inbox/fetch-task-items";
 import { resolveCarFromContext } from "@/lib/line-inbox/resolve-car";
 import { classifyDuplicateLine, suggestCategoryAndStatus } from "@/lib/line-inbox/heuristic-suggest";

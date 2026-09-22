@@ -17,7 +17,7 @@
     "eyebrow": "Dashboard",
     "title": "ภาพรวมสต็อก",
     "subtitleBefore": "สรุปจากตาราง",
-    "subtitleAfter": "— อัปเดตตามข้อมูลล่าสุดใน Supabase",
+    "subtitleAfter": "— อัปเดตตามข้อมูลล่าสุดในระบบ",
     "statusesBreakdownLink": "ดูแยกตามสถานะ",
     "sectionSalesEyebrow": "Sales",
     "sectionSalesTitle": "ขายให้ใคร",
@@ -203,7 +203,7 @@
     "notFound": "ไม่พบงานที่ต้องการ",
     "noItems": "ยังไม่มีรายการอะไหล่/งาน",
     "noUpdates": "ยังไม่มีอัปเดต",
-    "tableNotReady": "ตาราง Order Tracking ใน Supabase ยังไม่พร้อมใช้งาน"
+    "tableNotReady": "ตาราง Order Tracking ยังไม่พร้อมใช้งาน"
   },
   "error": {
     "title": "เชื่อมต่อฐานข้อมูลไม่ได้",

@@ -1,4 +1,4 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
+import type { SiteDataClient as SupabaseClient } from "@/lib/site/db-client";
 
 const ORDER_UPDATES_TABLE = "order_task_updates";
 

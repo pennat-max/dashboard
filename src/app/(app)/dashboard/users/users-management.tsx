@@ -11,9 +11,9 @@ export function UsersManagement() {
     <div className="space-y-12">
       <UsersRoleTable listVersion={listVersion} />
       <div>
-        <h2 className="font-heading text-lg font-semibold text-foreground">Create user manually</h2>
+        <h2 className="font-heading text-lg font-semibold text-foreground">Grant staff access</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Optional — same as inviting from Supabase; self‑signup users appear in the table above.
+          Add the email address the staff member uses to sign in with ChatGPT, then assign a role.
         </p>
         <div className="mt-4">
           <UsersAdminForm onCreated={() => setListVersion((v) => v + 1)} />

@@ -1,4 +1,4 @@
-import { parseSort } from "@/lib/data/cars";
+import { parseSort } from "@/lib/cars-sort";
 import type { Car, CarsSortField } from "@/types/car";
 
 export type CarsInventoryFilterState = {

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import type { SupabaseClient } from "@supabase/supabase-js";
+import type { SiteDataClient as SupabaseClient } from "@/lib/site/db-client";
 import { requireMutateRole } from "@/lib/auth/mutation-guard";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import {

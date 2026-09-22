@@ -27,7 +27,7 @@ export async function deleteAllPhotosForOrderItem(supabase: ServiceClient, order
     throw new Error(error.message);
   }
   if (!rows?.length) return;
-  const paths = rows.map((r) => String((r as { storage_path?: string }).storage_path ?? "")).filter(Boolean);
+  const paths = rows.map((r: unknown) => String((r as { storage_path?: string }).storage_path ?? "")).filter(Boolean);
   if (paths.length) {
     const rm = await supabase.storage.from(BUCKET).remove(paths);
     if (rm.error) throw new Error(rm.error.message);

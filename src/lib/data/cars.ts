@@ -7,8 +7,9 @@ import {
   isWebsitePending,
   isWebsitePendingBeForward,
 } from "@/lib/car-fields";
-import type { Car, CarsSortField, SortOrder } from "@/types/car";
-const TABLE = process.env.NEXT_PUBLIC_SUPABASE_CARS_TABLE ?? "cars";
+import type { Car } from "@/types/car";
+import { parseSort } from "@/lib/cars-sort";
+const TABLE = "cars";
 
 /** PostgREST / Supabase จำกัดจำนวนแถวต่อคำขอ (ปกติ 1,000) — ต้องดึงหลายรอบ */
 const PAGE_SIZE = 1000;
@@ -187,43 +188,6 @@ function rowsAsCars(data: unknown): Car[] {
 
 function rowAsCar(data: unknown): Car | null {
   return data as Car | null;
-}
-
-/** คอลัมน์ที่มีในตารางจริง (สคีมา sheet) — ห้ามส่งชื่ออื่นไปที่ .order() */
-const ORDERABLE_COLUMNS = new Set<string>([
-  "updated_at",
-  "income_date",
-  "id",
-  "brand",
-  "model",
-  "buy_price",
-  "mileage",
-]);
-
-/** พารามิเตอร์เก่า / สคีมาเดิมใน repo → คอลัมน์ที่มีจริง */
-const SORT_LEGACY: Record<string, CarsSortField> = {
-  created_at: "updated_at",
-  make: "brand",
-  price_thb: "buy_price",
-  mileage_km: "mileage",
-  year: "id",
-  destination_country: "updated_at",
-};
-
-function coerceSortField(sort: string | undefined): CarsSortField {
-  const raw = (sort ?? "").trim();
-  if (raw && SORT_LEGACY[raw]) return SORT_LEGACY[raw];
-  if (raw && ORDERABLE_COLUMNS.has(raw)) return raw as CarsSortField;
-  return "updated_at";
-}
-
-export function parseSort(
-  sort: string | undefined,
-  order: string | undefined
-): { field: CarsSortField; order: SortOrder } {
-  const field = coerceSortField(sort);
-  const ord: SortOrder = order === "asc" ? "asc" : "desc";
-  return { field, order: ord };
 }
 
 export type CarsQueryResult = { cars: Car[]; error: string | null };

@@ -1,4 +1,4 @@
-import { createClient } from "@supabase/supabase-js";
+import { createSiteDataClient } from "@/lib/site/db-client";
 
 /**
  * Next.js จะ cache ผล fetch เริ่มต้น — response จาก Supabase ใหญ่ (เช่น มี raw_data) เกิน 2MB จะ error
@@ -18,19 +18,5 @@ function fetchNoStore(
  * Client สำหรับอ่านข้อมูลแบบไม่ล็อกอิน — ไม่ใช้ cookie/session
  */
 export function createAnonClient() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!url || !key) {
-    throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY");
-  }
-  return createClient(url, key, {
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-      detectSessionInUrl: false,
-    },
-    global: {
-      fetch: fetchNoStore,
-    },
-  });
+  return createSiteDataClient();
 }

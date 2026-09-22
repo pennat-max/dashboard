@@ -18,9 +18,8 @@ export default async function DashboardUsersPage() {
         <p className="text-[0.65rem] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Admin</p>
         <h1 className="mt-2 font-heading text-2xl font-semibold tracking-tight text-foreground">User management</h1>
         <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-          Users who sign up on their own appear below with role <strong>1</strong>. Change their role and click{" "}
-          <strong>Apply</strong>. Requires <code className="rounded bg-muted px-1 py-0.5 text-xs">public.profiles</code>{" "}
-          and <code className="rounded bg-muted px-1 py-0.5 text-xs">SUPABASE_SERVICE_ROLE_KEY</code> on the server.
+          Access is matched to each staff member’s ChatGPT email. Change a role and click <strong>Apply</strong>,
+          or add another approved email below.
         </p>
         <Link
           href="/dashboard"

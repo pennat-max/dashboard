@@ -1,20 +1,17 @@
 import { NextResponse } from "next/server";
-import type { User } from "@supabase/supabase-js";
 import { isOpenOrderTrackingMutations } from "@/lib/auth/open-order-tracking-mutations";
-import { createServerSupabase } from "@/lib/supabase/server";
+import { getChatGPTUser, type ChatGPTUser } from "@/lib/auth/chatgpt-auth";
+import { createAnonClient } from "@/lib/supabase/anon";
 import { canManageUsers, canMutate, normalizeRole, type UserRole } from "@/lib/auth/user-role";
 
 const OPEN_MODE_USER_ID = "00000000-0000-4000-8000-000000000001";
 
-function syntheticOpenModeUser(): User {
+function syntheticOpenModeUser(): ChatGPTUser {
   return {
     id: OPEN_MODE_USER_ID,
-    aud: "authenticated",
-    role: "authenticated",
-    app_metadata: {},
-    user_metadata: { open_order_tracking: true },
-    created_at: new Date(0).toISOString(),
-  } as User;
+    email: "open-order-tracking@site.local",
+    fullName: "Open order tracking",
+  };
 }
 
 let warnedOpenOrderTrackingMutations = false;
@@ -22,17 +19,14 @@ let warnedOpenOrderTrackingMutations = false;
 type Ok<T> = { ok: true } & T;
 type Err = { ok: false; response: NextResponse };
 
-async function loadRole(): Promise<{ user: User | null; role: UserRole }> {
-  const supabase = await createServerSupabase();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+async function loadRole(): Promise<{ user: ChatGPTUser | null; role: UserRole }> {
+  const user = await getChatGPTUser();
   if (!user) return { user: null, role: 1 };
 
-  const { data: profile, error } = await supabase
+  const { data: profile, error } = await createAnonClient()
     .from("profiles")
     .select("role")
-    .eq("id", user.id)
+    .eq("email", user.email)
     .maybeSingle();
 
   if (error) {
@@ -42,12 +36,12 @@ async function loadRole(): Promise<{ user: User | null; role: UserRole }> {
   return { user, role: normalizeRole(profile?.role ?? 1) };
 }
 
-export async function requireMutateRole(): Promise<Ok<{ user: User; role: UserRole }> | Err> {
+export async function requireMutateRole(): Promise<Ok<{ user: ChatGPTUser; role: UserRole }> | Err> {
   if (isOpenOrderTrackingMutations()) {
     if (!warnedOpenOrderTrackingMutations) {
       warnedOpenOrderTrackingMutations = true;
       console.warn(
-        "[auth] OPEN_ORDER_TRACKING_MUTATIONS allows mutations without login — set OPEN_ORDER_TRACKING_MUTATIONS=false to require Supabase session"
+        "[auth] OPEN_ORDER_TRACKING_MUTATIONS allows mutations without login"
       );
     }
     return { ok: true, user: syntheticOpenModeUser(), role: 4 };
@@ -69,7 +63,7 @@ export async function requireMutateRole(): Promise<Ok<{ user: User; role: UserRo
   return { ok: true, user, role };
 }
 
-export async function requireManageUsersRole(): Promise<Ok<{ user: User; role: UserRole }> | Err> {
+export async function requireManageUsersRole(): Promise<Ok<{ user: ChatGPTUser; role: UserRole }> | Err> {
   const { user, role } = await loadRole();
   if (!user) {
     return { ok: false, response: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) };

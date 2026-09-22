@@ -1,4 +1,4 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
+import type { SiteDataClient as SupabaseClient } from "@/lib/site/db-client";
 import { isLineGroupAllowed, parseLineAllowedGroups } from "@/lib/line/allowed-groups";
 import { pushLineTextMessage } from "@/lib/line/push-message";
 import { resolveSaleStaffForOrder, normalizeSaleAssigneesMap } from "@/lib/orders/sale-assignees-shared";

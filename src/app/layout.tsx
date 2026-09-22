@@ -29,16 +29,13 @@ function metadataBaseUrl(): URL {
     const u = manual.replace(/\/$/, "");
     return new URL(u.startsWith("http") ? u : `https://${u}`);
   }
-  if (process.env.VERCEL_URL?.trim()) {
-    return new URL(`https://${process.env.VERCEL_URL.trim()}`);
-  }
-  return new URL("http://localhost:3000");
+  return new URL("https://vigo4u-operations.pennat.chatgpt.site");
 }
 
 export const metadata: Metadata = {
   metadataBase: metadataBaseUrl(),
   title: "Export Cars Dashboard",
-  description: "Used export car stock dashboard — Supabase + Next.js",
+  description: "VIGO4U used export car stock and order operations dashboard",
 };
 
 export const viewport: Viewport = {

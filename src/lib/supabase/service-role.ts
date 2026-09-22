@@ -1,4 +1,4 @@
-import { createClient } from "@supabase/supabase-js";
+import { createSiteDataClient } from "@/lib/site/db-client";
 
 function fetchNoStore(
   input: Parameters<typeof fetch>[0],
@@ -55,28 +55,5 @@ export function getServiceRoleEnvDiagnostics(): {
  * เพื่อดำเนินการที่ RLS ไม่อนุญาตให้ role `anon`
  */
 export function createServiceRoleClient() {
-  const { url, key } = getServiceRoleEnv();
-  const onVercel = Boolean(process.env.VERCEL);
-  if (!url) {
-    throw new Error(
-      onVercel
-        ? "Missing project URL: in Vercel → Project → Settings → Environment Variables, set NEXT_PUBLIC_SUPABASE_URL (or SUPABASE_URL), then redeploy."
-        : "Missing project URL: set NEXT_PUBLIC_SUPABASE_URL or SUPABASE_URL in .env.local (project root) and restart npm run dev"
-    );
-  }
-  if (!key) {
-    throw new Error(
-      onVercel
-        ? "Missing SUPABASE_SERVICE_ROLE_KEY: add it in Vercel → Project → Settings → Environment Variables (server-only, no NEXT_PUBLIC_ prefix), then redeploy. .env.local is not used on Vercel."
-        : "Missing SUPABASE_SERVICE_ROLE_KEY in .env.local (server-only, no NEXT_PUBLIC_ prefix). Restart dev server after saving."
-    );
-  }
-  return createClient(url, key, {
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-      detectSessionInUrl: false,
-    },
-    global: { fetch: fetchNoStore },
-  });
+  return createSiteDataClient();
 }

@@ -1,4 +1,4 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
+import type { SiteDataClient as SupabaseClient } from "@/lib/site/db-client";
 import { createAnonClient } from "@/lib/supabase/anon";
 import { carTitleLine } from "@/lib/car-fields";
 import { matchesRole, normalizeOrderPriority, normalizeOrderRole, normalizeOrderStatus } from "@/lib/order-fields";
@@ -13,7 +13,7 @@ const ORDER_UPDATES_TABLE = "order_task_updates";
 export const ORDER_ITEMS_TABLE_NAME = ORDER_ITEMS_TABLE;
 export const ORDER_TASK_UPDATES_TABLE_NAME = ORDER_UPDATES_TABLE;
 const ORDER_STORAGE_TABLE = "order_storage_items";
-const CARS_TABLE = process.env.NEXT_PUBLIC_SUPABASE_CARS_TABLE ?? "cars";
+const CARS_TABLE = "cars";
 
 export type OrderItemLite = {
   id?: string | null;

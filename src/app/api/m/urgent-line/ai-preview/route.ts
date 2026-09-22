@@ -192,7 +192,7 @@ export async function POST(request: Request) {
         ok: false,
         code: "no_gemini",
         message:
-          "ตั้ง GEMINI_API_KEY ใน .env.local (หรือ Vercel env) จาก https://aistudio.google.com/apikey แล้วรีสตาร์ทเซิร์ฟเวอร์",
+          "ตั้ง GEMINI_API_KEY ใน .env.local หรือการตั้งค่า Site จาก https://aistudio.google.com/apikey แล้ว deploy ใหม่",
       },
       { status: 503 }
     );

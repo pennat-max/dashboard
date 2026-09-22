@@ -3,112 +3,33 @@ import { requireManageUsersRole } from "@/lib/auth/mutation-guard";
 import { isUserRole, normalizeRole, type UserRole } from "@/lib/auth/user-role";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 
-type Body = {
-  email?: string;
-  password?: string;
-  role?: number;
-};
+type Body = { email?: string; role?: number };
 
 export async function POST(request: Request) {
   const gate = await requireManageUsersRole();
   if (!gate.ok) return gate.response;
-
   let body: Body;
-  try {
-    body = await request.json();
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
-  }
-
+  try { body = await request.json(); } catch { return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 }); }
   const email = String(body.email ?? "").trim().toLowerCase();
-  const password = String(body.password ?? "");
   const requestedRole = Number(body.role);
-
-  if (!email || !email.includes("@")) {
-    return NextResponse.json({ error: "Valid email required" }, { status: 400 });
-  }
-  if (password.length < 6) {
-    return NextResponse.json({ error: "Password must be at least 6 characters" }, { status: 400 });
-  }
-  if (!isUserRole(requestedRole)) {
-    return NextResponse.json({ error: "role must be 1–4" }, { status: 400 });
-  }
-
-  const admin = createServiceRoleClient();
-  const { data: created, error } = await admin.auth.admin.createUser({
-    email,
-    password,
-    email_confirm: true,
-  });
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 400 });
-  }
-
-  const newId = created.user?.id;
-  if (!newId) {
-    return NextResponse.json({ error: "Failed to create user" }, { status: 500 });
-  }
-
-  const newRole = requestedRole as UserRole;
-  const { error: upErr } = await admin.from("profiles").upsert(
-    { id: newId, role: newRole, updated_at: new Date().toISOString() },
-    { onConflict: "id" }
-  );
-
-  if (upErr) {
-    return NextResponse.json(
-      {
-        error: `${upErr.message} · apply public.profiles migration (see supabase/migrations/20260502120000_profiles_roles.sql)`,
-      },
-      { status: 500 }
-    );
-  }
-
-  return NextResponse.json({ ok: true, userId: newId, email, role: newRole });
+  if (!email || !email.includes("@")) return NextResponse.json({ error: "Valid email required" }, { status: 400 });
+  if (!isUserRole(requestedRole)) return NextResponse.json({ error: "role must be 1–4" }, { status: 400 });
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const { data, error } = await createServiceRoleClient().from("profiles").upsert(
+    { id, email, role: requestedRole as UserRole, created_at: now, updated_at: now },
+    { onConflict: "email" },
+  ).select("id,email,role").single();
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  return NextResponse.json({ ok: true, userId: data.id, email: data.email, role: normalizeRole(data.role) });
 }
 
-/** List Auth users + roles from `profiles` (role 4 only). */
 export async function GET() {
   const gate = await requireManageUsersRole();
   if (!gate.ok) return gate.response;
-
-  const admin = createServiceRoleClient();
-  const { data: page1, error: listErr } = await admin.auth.admin.listUsers({
-    page: 1,
-    perPage: 1000,
-  });
-
-  if (listErr) {
-    return NextResponse.json({ error: listErr.message }, { status: 500 });
-  }
-
-  const authUsers = page1?.users ?? [];
-  const ids = authUsers.map((u) => u.id);
-
-  const roleById = new Map<string, number>();
-  if (ids.length > 0) {
-    const { data: rows, error: profErr } = await admin.from("profiles").select("id, role").in("id", ids);
-    if (profErr) {
-      return NextResponse.json({ error: profErr.message }, { status: 500 });
-    }
-    for (const row of rows ?? []) {
-      if (row.id != null && row.role != null) {
-        roleById.set(String(row.id), Number(row.role));
-      }
-    }
-  }
-
-  const users = authUsers.map((u) => ({
-    id: u.id,
-    email: u.email ?? "",
-    created_at: u.created_at,
-    role: normalizeRole(roleById.get(u.id) ?? 1),
-  }));
-
-  return NextResponse.json({
-    ok: true,
-    currentUserId: gate.user.id,
-    users,
-  });
+  const { data, error } = await createServiceRoleClient().from("profiles").select("id,email,created_at,role").order("created_at", { ascending: true });
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  const users = (data ?? []).map((row: Record<string, unknown>) => ({ ...row, role: normalizeRole(row.role) }));
+  const current = users.find((row: Record<string, unknown>) => String(row.email).toLowerCase() === gate.user.email)?.id ?? gate.user.id;
+  return NextResponse.json({ ok: true, currentUserId: current, users });
 }

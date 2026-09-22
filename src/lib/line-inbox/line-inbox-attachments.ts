@@ -1,4 +1,4 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
+import type { SiteDataClient as SupabaseClient } from "@/lib/site/db-client";
 import type {
   LineInboxAnalyzeResponse,
   LineInboxAttachmentMeta,

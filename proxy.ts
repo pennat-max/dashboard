@@ -1,4 +1,3 @@
-import { createServerClient } from "@supabase/ssr";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { LOCALE_COOKIE } from "@/lib/locale-constants";
@@ -16,58 +15,32 @@ function isProtectedPath(pathname: string): boolean {
 }
 
 export async function proxy(request: NextRequest) {
-  let supabaseResponse = NextResponse.next({ request });
+  const response = NextResponse.next({ request });
+  const pathname = request.nextUrl.pathname;
+  const isApi = pathname.startsWith("/api");
+  const signedIn = Boolean(request.headers.get("oai-authenticated-user-id") && request.headers.get("oai-authenticated-user-email"));
 
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-  if (url && anonKey) {
-    const supabase = createServerClient(url, anonKey, {
-      cookies: {
-        getAll() {
-          return request.cookies.getAll();
-        },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
-          supabaseResponse = NextResponse.next({ request });
-          cookiesToSet.forEach(({ name, value, options }) => {
-            supabaseResponse.cookies.set(name, value, options);
-          });
-        },
-      },
-    });
-
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
-    const pathname = request.nextUrl.pathname;
-    const isApi = pathname.startsWith("/api");
-
-    if (!isApi && user && pathname === "/login") {
-      const next = request.nextUrl.searchParams.get("next");
-      const dest =
-        next && next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard";
-      return NextResponse.redirect(new URL(dest, request.url));
-    }
-
-    if (!isApi && !user && isProtectedPath(pathname)) {
-      const loginUrl = new URL("/login", request.url);
-      loginUrl.searchParams.set("next", pathname === "/" ? "/dashboard" : pathname);
-      return NextResponse.redirect(loginUrl);
-    }
+  if (!isApi && signedIn && pathname === "/login") {
+    const next = request.nextUrl.searchParams.get("next");
+    const dest = next && next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard";
+    return NextResponse.redirect(new URL(dest, request.url));
+  }
+  if (!isApi && !signedIn && isProtectedPath(pathname)) {
+    const signInUrl = new URL("/signin-with-chatgpt", request.url);
+    signInUrl.searchParams.set("return_to", pathname);
+    return NextResponse.redirect(signInUrl);
   }
 
   const current = request.cookies.get(LOCALE_COOKIE)?.value;
   if (current !== "en") {
-    supabaseResponse.cookies.set(LOCALE_COOKIE, "en", {
+    response.cookies.set(LOCALE_COOKIE, "en", {
       path: "/",
       maxAge: 60 * 60 * 24 * 365,
       sameSite: "lax",
     });
   }
 
-  return supabaseResponse;
+  return response;
 }
 
 export const proxyConfig = {

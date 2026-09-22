@@ -35,7 +35,7 @@ export async function POST(request: Request) {
   let hint: string | undefined;
   if (!groq && !gemini) {
     hint =
-      "ตั้ง GEMINI_API_KEY หรือ GROQ_API_KEY ใน .env.local (หรือ Environment Variables บน Vercel) แล้วรีสตาร์ท / redeploy";
+      "ตั้ง GEMINI_API_KEY หรือ GROQ_API_KEY ใน .env.local หรือการตั้งค่า Site แล้ว deploy ใหม่";
   } else if (!translated && !error) {
     hint = "มี API key แล้วแต่ได้คำว่าง — เช็คโควตา Groq/Gemini หรือดู log เทอร์มินัลเซิร์ฟเวอร์";
   }

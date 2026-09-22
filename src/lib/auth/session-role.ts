@@ -1,9 +1,9 @@
-import type { User } from "@supabase/supabase-js";
-import { createServerSupabase } from "@/lib/supabase/server";
+import { getChatGPTUser, type ChatGPTUser } from "@/lib/auth/chatgpt-auth";
+import { createAnonClient } from "@/lib/supabase/anon";
 import { normalizeRole, type UserRole } from "@/lib/auth/user-role";
 
 export type SessionWithRole = {
-  user: User | null;
+  user: ChatGPTUser | null;
   /** null เมื่อยังไม่ล็อกอิน */
   role: UserRole | null;
 };
@@ -14,16 +14,13 @@ export type SessionWithRole = {
  */
 export async function getSessionAndRole(): Promise<SessionWithRole> {
   try {
-    const supabase = await createServerSupabase();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const user = await getChatGPTUser();
     if (!user) return { user: null, role: null };
 
-    const { data: profile, error } = await supabase
+    const { data: profile, error } = await createAnonClient()
       .from("profiles")
       .select("role")
-      .eq("id", user.id)
+      .eq("email", user.email)
       .maybeSingle();
 
     if (error) {

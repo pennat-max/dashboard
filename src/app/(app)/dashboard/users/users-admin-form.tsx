@@ -20,7 +20,6 @@ type FormProps = {
 
 export function UsersAdminForm({ onCreated }: FormProps) {
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const [role, setRole] = useState<string>("1");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -37,7 +36,6 @@ export function UsersAdminForm({ onCreated }: FormProps) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           email: email.trim(),
-          password,
           role: Number(role),
         }),
       });
@@ -46,9 +44,8 @@ export function UsersAdminForm({ onCreated }: FormProps) {
         setError(data.error ?? "Could not create user");
         return;
       }
-      setMessage("User created");
+      setMessage("Access granted");
       setEmail("");
-      setPassword("");
       setRole("1");
       onCreated?.();
     } catch {
@@ -73,18 +70,6 @@ export function UsersAdminForm({ onCreated }: FormProps) {
         />
       </div>
       <div className="space-y-2">
-        <Label htmlFor="admin-password">Initial password</Label>
-        <Input
-          id="admin-password"
-          type="password"
-          autoComplete="new-password"
-          value={password}
-          onChange={(ev) => setPassword(ev.target.value)}
-          required
-          minLength={6}
-        />
-      </div>
-      <div className="space-y-2">
         <Label>Role</Label>
         <Select value={role} onValueChange={(v) => setRole(v ?? "1")}>
           <SelectTrigger>
@@ -102,7 +87,7 @@ export function UsersAdminForm({ onCreated }: FormProps) {
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
       {message ? <p className="text-sm text-emerald-700 dark:text-emerald-400">{message}</p> : null}
       <Button type="submit" disabled={loading} className="w-full">
-        {loading ? "Creating…" : "Create user"}
+        {loading ? "Saving…" : "Grant access"}
       </Button>
     </form>
   );
