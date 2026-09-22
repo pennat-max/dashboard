@@ -7,7 +7,6 @@ import { getDictionary } from "@/i18n/dictionaries";
 import { aggregateByAgent, aggregateByBuyer } from "@/lib/data/aggregate";
 import { computeDashboardKpi, fetchCarsForDashboard } from "@/lib/data/cars";
 import { getSessionAndRole } from "@/lib/auth/session-role";
-import { canViewDashboardInsights } from "@/lib/auth/user-role";
 import { getLocale } from "@/lib/locale";
 
 export const dynamic = "force-dynamic";
@@ -18,8 +17,6 @@ export default async function DashboardPage() {
   const { user, role } = await getSessionAndRole();
   const isAuthenticated = Boolean(user);
   const activeRole = role ?? undefined;
-  const showInsights =
-    isAuthenticated && activeRole != null && canViewDashboardInsights(activeRole);
 
   const kpiLinkMode: KpiLinkMode = !isAuthenticated
     ? "none"
@@ -45,19 +42,21 @@ export default async function DashboardPage() {
 
   const { cars, error } = await fetchCarsForDashboard();
   const kpi = computeDashboardKpi(cars);
-  const byBuyer = showInsights ? aggregateByBuyer(cars) : [];
-  const byAgentCurrentMonthBeForward = showInsights ? aggregateByAgent(cars, "currentMonth", "beForward") : [];
-  const byAgentPreviousMonthBeForward = showInsights ? aggregateByAgent(cars, "last3Months", "beForward") : [];
-  const byAgentTwoMonthsAgoBeForward = showInsights ? aggregateByAgent(cars, "twoMonthsAgo", "beForward") : [];
-  const byAgentAllMonthsBeForward = showInsights ? aggregateByAgent(cars, "all", "beForward") : [];
-  const byAgentCurrentMonthStock = showInsights ? aggregateByAgent(cars, "currentMonth", "stock") : [];
-  const byAgentPreviousMonthStock = showInsights ? aggregateByAgent(cars, "last3Months", "stock") : [];
-  const byAgentTwoMonthsAgoStock = showInsights ? aggregateByAgent(cars, "twoMonthsAgo", "stock") : [];
-  const byAgentAllMonthsStock = showInsights ? aggregateByAgent(cars, "all", "stock") : [];
-  const byAgentCurrentMonthAllBuyer = showInsights ? aggregateByAgent(cars, "currentMonth", "all") : [];
-  const byAgentPreviousMonthAllBuyer = showInsights ? aggregateByAgent(cars, "last3Months", "all") : [];
-  const byAgentTwoMonthsAgoAllBuyer = showInsights ? aggregateByAgent(cars, "twoMonthsAgo", "all") : [];
-  const byAgentAllMonthsAllBuyer = showInsights ? aggregateByAgent(cars, "all", "all") : [];
+  // The Site itself is owner-private, so dashboard insights do not need a
+  // second Supabase login. Supabase auth is still required for mutations.
+  const byBuyer = aggregateByBuyer(cars);
+  const byAgentCurrentMonthBeForward = aggregateByAgent(cars, "currentMonth", "beForward");
+  const byAgentPreviousMonthBeForward = aggregateByAgent(cars, "last3Months", "beForward");
+  const byAgentTwoMonthsAgoBeForward = aggregateByAgent(cars, "twoMonthsAgo", "beForward");
+  const byAgentAllMonthsBeForward = aggregateByAgent(cars, "all", "beForward");
+  const byAgentCurrentMonthStock = aggregateByAgent(cars, "currentMonth", "stock");
+  const byAgentPreviousMonthStock = aggregateByAgent(cars, "last3Months", "stock");
+  const byAgentTwoMonthsAgoStock = aggregateByAgent(cars, "twoMonthsAgo", "stock");
+  const byAgentAllMonthsStock = aggregateByAgent(cars, "all", "stock");
+  const byAgentCurrentMonthAllBuyer = aggregateByAgent(cars, "currentMonth", "all");
+  const byAgentPreviousMonthAllBuyer = aggregateByAgent(cars, "last3Months", "all");
+  const byAgentTwoMonthsAgoAllBuyer = aggregateByAgent(cars, "twoMonthsAgo", "all");
+  const byAgentAllMonthsAllBuyer = aggregateByAgent(cars, "all", "all");
 
   return (
     <div className="dashboard-stack mx-auto flex max-w-6xl flex-col gap-12">
@@ -86,28 +85,26 @@ export default async function DashboardPage() {
         <KpiCards kpi={kpi} locale={locale} kpiDict={dict.kpi} kpiLinkMode={kpiLinkMode} />
       </section>
 
-      {showInsights ? (
-        <section className="space-y-5">
-          <DashboardInsights
-            byBuyer={byBuyer}
-            byAgentCurrentMonthBeForward={byAgentCurrentMonthBeForward}
-            byAgentPreviousMonthBeForward={byAgentPreviousMonthBeForward}
-            byAgentTwoMonthsAgoBeForward={byAgentTwoMonthsAgoBeForward}
-            byAgentAllMonthsBeForward={byAgentAllMonthsBeForward}
-            byAgentCurrentMonthStock={byAgentCurrentMonthStock}
-            byAgentPreviousMonthStock={byAgentPreviousMonthStock}
-            byAgentTwoMonthsAgoStock={byAgentTwoMonthsAgoStock}
-            byAgentAllMonthsStock={byAgentAllMonthsStock}
-            byAgentCurrentMonthAllBuyer={byAgentCurrentMonthAllBuyer}
-            byAgentPreviousMonthAllBuyer={byAgentPreviousMonthAllBuyer}
-            byAgentTwoMonthsAgoAllBuyer={byAgentTwoMonthsAgoAllBuyer}
-            byAgentAllMonthsAllBuyer={byAgentAllMonthsAllBuyer}
-            insights={dict.insights}
-            agentPreviousMonthLabel={agentPreviousMonthLabel}
-            agentTwoMonthsAgoLabel={agentTwoMonthsAgoLabel}
-          />
-        </section>
-      ) : null}
+      <section className="space-y-5">
+        <DashboardInsights
+          byBuyer={byBuyer}
+          byAgentCurrentMonthBeForward={byAgentCurrentMonthBeForward}
+          byAgentPreviousMonthBeForward={byAgentPreviousMonthBeForward}
+          byAgentTwoMonthsAgoBeForward={byAgentTwoMonthsAgoBeForward}
+          byAgentAllMonthsBeForward={byAgentAllMonthsBeForward}
+          byAgentCurrentMonthStock={byAgentCurrentMonthStock}
+          byAgentPreviousMonthStock={byAgentPreviousMonthStock}
+          byAgentTwoMonthsAgoStock={byAgentTwoMonthsAgoStock}
+          byAgentAllMonthsStock={byAgentAllMonthsStock}
+          byAgentCurrentMonthAllBuyer={byAgentCurrentMonthAllBuyer}
+          byAgentPreviousMonthAllBuyer={byAgentPreviousMonthAllBuyer}
+          byAgentTwoMonthsAgoAllBuyer={byAgentTwoMonthsAgoAllBuyer}
+          byAgentAllMonthsAllBuyer={byAgentAllMonthsAllBuyer}
+          insights={dict.insights}
+          agentPreviousMonthLabel={agentPreviousMonthLabel}
+          agentTwoMonthsAgoLabel={agentTwoMonthsAgoLabel}
+        />
+      </section>
     </div>
   );
 }
