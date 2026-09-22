@@ -51,13 +51,18 @@ Run manually once.
 Expected behavior:
 
 - The workflow calls the pending queue summary endpoint.
+- If the pending queue returns `401`, `403`, or another HTTP failure after retry, the workflow routes to `HTTP Error Queue No-Op` and stops without saving or replying.
 - Messages are classified into:
   - `high_confidence`
   - `human_review`
   - `blocked`
+- The classifier accepts both pending queue shapes:
+  - `action_lines` from the newer grouped queue payload
+  - `new_lines` from the older/simple queue payload
 - High-confidence rows go to a no-op node.
 - Human-review rows go to a no-op node.
 - Blocked rows go to a no-op error queue node.
+- Empty queues go to `Empty Queue No-Op`.
 - No call is made to `pending-save`, `confirm`, LINE reply, LINE push, Supabase migration, or production webhook settings.
 
 Stop immediately if any node attempts to:
@@ -95,7 +100,11 @@ Pass criteria:
 
 ### 401 or 403
 
-Auth is missing or not accepted by the target app. Keep the workflow dry-run and fix server-side auth design before continuing.
+Auth is missing or not accepted by the target app. In workflow v2 this should route to `HTTP Error Queue No-Op`; keep the workflow dry-run and fix server-side auth design before continuing.
+
+### Pending queue shape mismatch
+
+Workflow v2 handles both `action_lines` and `new_lines`. If a future API shape changes again, keep the row in human review or blocked; do not add save/reply behavior until the parser contract is updated.
 
 ### 404
 
@@ -135,4 +144,3 @@ Before any write/reply behavior is enabled, owners must approve:
 - attachment storage plan,
 - rollback steps to Vercel,
 - dry-run evidence from Chang Joe's machine.
-

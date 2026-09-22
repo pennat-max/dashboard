@@ -184,7 +184,9 @@ The workflow:
 - starts manually,
 - defaults to dry-run,
 - fetches pending queue summary,
+- keeps HTTP/auth failures in an explicit no-op error queue,
 - splits pending messages/groups,
+- accepts both `action_lines` and legacy/simple `new_lines` queue payloads,
 - classifies each item into `high_confidence`, `human_review`, or `blocked`,
 - prepares a dry-run payload for a future ChatGPT Site callback,
 - routes real save/reply paths to no-op while `AUTO_SAVE=false` and `LINE_REPLY=false`.

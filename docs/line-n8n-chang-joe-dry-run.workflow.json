@@ -90,7 +90,8 @@
         "options": {
           "response": {
             "response": {
-              "responseFormat": "json"
+              "responseFormat": "json",
+              "neverError": true
             }
           },
           "timeout": 30000
@@ -106,11 +107,12 @@
       ],
       "retryOnFail": true,
       "maxTries": 3,
-      "waitBetweenTries": 5000
+      "waitBetweenTries": 5000,
+      "continueOnFail": true
     },
     {
       "parameters": {
-        "jsCode": "const body = $json;\nconst groups = Array.isArray(body.groups) ? body.groups : [];\nconst messages = Array.isArray(body.messages) ? body.messages : [];\nconst source = groups.length ? groups.flatMap((group) => {\n  const ms = Array.isArray(group.messages) ? group.messages : [];\n  return ms.map((message) => ({ group, message }));\n}) : messages.map((message) => ({ group: null, message }));\n\nreturn source.map(({ group, message }) => {\n  const inboxId = String(message.inbox_id || '').trim();\n  const lineMessageId = String(message.line_message_id || message.related_text_message_id || message.relatedTextMessageId || '').trim();\n  const actionLines = Array.isArray(message.action_lines) ? message.action_lines : [];\n  const hasCar = Boolean(String(message.car_row_id || message.detected_car?.car_row_id || '').trim());\n  const needsHumanReview = Boolean(message.needs_human_review || group?.total_manual_reviews > 0);\n  const matchStatus = String(message.matchStatus || group?.matchStatus || '').trim();\n  const blocked = !inboxId || matchStatus === 'waiting_for_car_record' || matchStatus === 'ambiguous_vehicle' || matchStatus === 'unresolved';\n  const bucket = blocked\n    ? 'blocked'\n    : needsHumanReview || actionLines.length === 0\n      ? 'human_review'\n      : hasCar\n        ? 'high_confidence'\n        : 'blocked';\n\n  return {\n    json: {\n      idempotency_key: inboxId || lineMessageId,\n      inbox_id: inboxId,\n      line_message_id: lineMessageId,\n      bucket,\n      dry_run: true,\n      auto_save: false,\n      line_reply: false,\n      has_car: hasCar,\n      match_status: matchStatus,\n      needs_human_review: needsHumanReview,\n      action_line_count: actionLines.length,\n      car_row_id: String(message.car_row_id || message.detected_car?.car_row_id || '').trim(),\n      review_url: String(message.reviewUrl || message.review_url || group?.reviewUrl || group?.review_url || '').trim(),\n      raw_text_preview: String(message.raw_text_preview || message.rawTextPreview || '').slice(0, 240),\n      action_lines: actionLines.map((line) => ({\n        item_index: line.item_index,\n        suggested_item_name: line.suggested_item_name,\n        suggested_status: line.suggested_status,\n        duplicate_status: line.duplicate_status,\n        confidence: line.confidence,\n        default_action: line.default_action\n      }))\n    }\n  };\n});"
+        "jsCode": "const response = $json;\n\nfunction statusCodeOf(value) {\n  const raw = value?.statusCode ?? value?.status ?? value?.response?.statusCode ?? value?.response?.status;\n  const n = Number(raw);\n  return Number.isFinite(n) ? n : 0;\n}\n\nfunction responseBody(value) {\n  if (value?.body && typeof value.body === 'object') return value.body;\n  if (value?.data && typeof value.data === 'object') return value.data;\n  if (value?.json && typeof value.json === 'object') return value.json;\n  return value;\n}\n\nconst statusCode = statusCodeOf(response);\nconst fetchError = response.error || response.message || response.response?.error;\nconst body = responseBody(response);\n\nif (fetchError || statusCode >= 400 || body?.error) {\n  return [{\n    json: {\n      idempotency_key: 'pending-queue-fetch',\n      bucket: 'http_error',\n      dry_run: true,\n      auto_save: false,\n      line_reply: false,\n      http_status: statusCode || null,\n      error_message: String(fetchError || body?.error?.message || body?.error || 'pending queue request failed').slice(0, 500),\n      next_action: statusCode === 401 || statusCode === 403\n        ? 'Fix server-side n8n auth before import/use.'\n        : 'Review retry/error queue before replay.',\n    }\n  }];\n}\n\nconst groups = Array.isArray(body.groups) ? body.groups : [];\nconst messages = Array.isArray(body.messages) ? body.messages : [];\nconst source = groups.length ? groups.flatMap((group) => {\n  const ms = Array.isArray(group.messages) ? group.messages : [];\n  return ms.map((message) => ({ group, message }));\n}) : messages.map((message) => ({ group: null, message }));\n\nif (source.length === 0) {\n  return [{\n    json: {\n      idempotency_key: 'pending-queue-empty',\n      bucket: 'empty',\n      dry_run: true,\n      auto_save: false,\n      line_reply: false,\n      action_line_count: 0,\n      next_action: 'No pending rows returned; dry-run can proceed once test data exists.',\n    }\n  }];\n}\n\nreturn source.map(({ group, message }) => {\n  const inboxId = String(message.inbox_id || '').trim();\n  const lineMessageId = String(message.line_message_id || message.related_text_message_id || message.relatedTextMessageId || '').trim();\n  const actionLines = Array.isArray(message.action_lines)\n    ? message.action_lines\n    : Array.isArray(message.new_lines)\n      ? message.new_lines.map((line) => ({ ...line, duplicate_status: line.duplicate_status || 'new', default_action: 'create' }))\n      : [];\n  const hasCar = Boolean(String(message.car_row_id || message.detected_car?.car_row_id || group?.car_row_id || '').trim());\n  const needsHumanReview = Boolean(message.needs_human_review || group?.total_manual_reviews > 0);\n  const matchStatus = String(message.matchStatus || group?.matchStatus || '').trim();\n  const blocked = !inboxId || matchStatus === 'waiting_for_car_record' || matchStatus === 'ambiguous_vehicle' || matchStatus === 'unresolved';\n  const bucket = blocked\n    ? 'blocked'\n    : needsHumanReview || actionLines.length === 0\n      ? 'human_review'\n      : hasCar\n        ? 'high_confidence'\n        : 'blocked';\n\n  return {\n    json: {\n      idempotency_key: inboxId || lineMessageId,\n      inbox_id: inboxId,\n      line_message_id: lineMessageId,\n      bucket,\n      dry_run: true,\n      auto_save: false,\n      line_reply: false,\n      has_car: hasCar,\n      match_status: matchStatus,\n      needs_human_review: needsHumanReview,\n      action_line_count: actionLines.length,\n      source_line_field: Array.isArray(message.action_lines) ? 'action_lines' : Array.isArray(message.new_lines) ? 'new_lines' : 'none',\n      car_row_id: String(message.car_row_id || message.detected_car?.car_row_id || group?.car_row_id || '').trim(),\n      review_url: String(message.reviewUrl || message.review_url || group?.reviewUrl || group?.review_url || '').trim(),\n      raw_text_preview: String(message.raw_text_preview || message.rawTextPreview || '').slice(0, 240),\n      action_lines: actionLines.map((line) => ({\n        item_index: line.item_index,\n        suggested_item_name: line.suggested_item_name,\n        suggested_status: line.suggested_status,\n        duplicate_status: line.duplicate_status,\n        confidence: line.confidence,\n        default_action: line.default_action || 'create'\n      }))\n    }\n  };\n});"
       },
       "id": "1556a4d6-e37c-4df8-b761-578e65c3ad44",
       "name": "Classify Pending Items",
@@ -190,6 +192,50 @@
               },
               "renameOutput": true,
               "outputKey": "Blocked"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.bucket}}",
+                    "rightValue": "http_error",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "HTTP error"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.bucket}}",
+                    "rightValue": "empty",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Empty queue"
             }
           ]
         },
@@ -287,6 +333,52 @@
         -760,
         -300
       ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "dry-run-http-error",
+              "name": "dry_run_result",
+              "type": "string",
+              "value": "HTTP/auth failure after retry. No save and no LINE reply. Fix auth/base URL before import/use."
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "0a18d8be-182e-4363-9256-6a309034eb53",
+      "name": "HTTP Error Queue No-Op",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "dry-run-empty",
+              "name": "dry_run_result",
+              "type": "string",
+              "value": "Pending queue returned no rows. Dry-run stayed read-only."
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "44394e3a-88a7-498b-974c-473829e3df37",
+      "name": "Empty Queue No-Op",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        540
+      ]
     }
   ],
   "connections": {
@@ -356,12 +448,26 @@
             "type": "main",
             "index": 0
           }
+        ],
+        [
+          {
+            "node": "HTTP Error Queue No-Op",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Empty Queue No-Op",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     }
   },
   "pinData": {},
-  "versionId": "line-n8n-chang-joe-dry-run-v1",
+  "versionId": "line-n8n-chang-joe-dry-run-v2",
   "meta": {
     "templateCredsSetupCompleted": false,
     "dryRunDefaults": {
