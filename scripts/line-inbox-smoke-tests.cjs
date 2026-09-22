@@ -1688,4 +1688,29 @@ assert(
   "image-only queue card has a non-blank fallback title"
 );
 
+const lineBridgeSource = fs.readFileSync(
+  path.join(root, "supabase/functions/line-bot/index.ts"),
+  "utf8"
+);
+assert(
+  lineBridgeSource.includes("if (!(await verifySignature(body, signature)))") &&
+    lineBridgeSource.includes('return new Response("Forbidden", { status: 403 })'),
+  "Supabase LINE bridge rejects an invalid webhook signature"
+);
+assert(
+  lineBridgeSource.includes("SUPABASE_SERVICE_ROLE_KEY") &&
+    !lineBridgeSource.includes("SUPABASE_ANON_KEY"),
+  "Supabase LINE bridge uses the server-only service role for durable inbox writes"
+);
+assert(
+  lineBridgeSource.includes('error.code === "23505"') &&
+    lineBridgeSource.includes("duplicate: true"),
+  "Supabase LINE bridge treats repeated LINE message IDs as idempotent duplicates"
+);
+assert(
+  lineBridgeSource.includes('mode: "capture-only"') &&
+    !lineBridgeSource.includes("generativelanguage.googleapis.com"),
+  "Supabase LINE bridge is capture-only and does not run inline AI"
+);
+
 console.log("line-inbox smoke tests passed");
