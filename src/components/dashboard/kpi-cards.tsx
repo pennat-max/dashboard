@@ -130,7 +130,14 @@ export function KpiCards({ kpi, locale, kpiDict, kpiLinkMode, clickable = true }
                 : "h-full cursor-default"
             )}
           >
-            <CardHeader className="flex flex-row items-start justify-between gap-2 pb-2 pt-4">
+            {targetHref ? (
+              <Link
+                href={targetHref}
+                className="absolute inset-0 z-20 touch-manipulation rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                aria-label={linkLabel ?? title}
+              />
+            ) : null}
+            <CardHeader className="relative z-10 flex flex-row items-start justify-between gap-2 pb-2 pt-4">
               <div className="min-w-0 space-y-1">
                 <CardTitle className="text-xs font-medium leading-snug text-muted-foreground">{title}</CardTitle>
               </div>
@@ -138,7 +145,7 @@ export function KpiCards({ kpi, locale, kpiDict, kpiLinkMode, clickable = true }
                 <Icon className="size-4" aria-hidden />
               </span>
             </CardHeader>
-            <CardContent className="pt-0">
+            <CardContent className="relative z-10 pt-0">
               <p
                 className={cn(
                   "font-heading text-3xl md:text-4xl font-semibold tabular-nums leading-none tracking-tight",
@@ -153,14 +160,9 @@ export function KpiCards({ kpi, locale, kpiDict, kpiLinkMode, clickable = true }
 
         if (targetHref) {
           return (
-            <Link
-              key={title}
-              href={targetHref}
-              className="group block rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-              aria-label={linkLabel ?? title}
-            >
+            <div key={title} className="group rounded-xl">
               {card}
-            </Link>
+            </div>
           );
         }
 
