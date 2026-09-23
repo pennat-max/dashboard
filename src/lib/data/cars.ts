@@ -16,13 +16,17 @@ const PAGE_SIZE = 1000;
 
 type PageFetchResult = Promise<{ data: unknown; error: { message: string } | null }>;
 const FILTER_OPTIONS_CACHE_MS = 60_000;
-const DASHBOARD_CARS_CACHE_MS = 5_000;
+const DASHBOARD_CARS_CACHE_MS = 60_000;
 let filterOptionsCache:
   | { at: number; cars: Car[] }
   | null = null;
 let dashboardCarsCache:
   | { at: number; result: CarsQueryResult }
   | null = null;
+
+export function invalidateDashboardCarsCache() {
+  dashboardCarsCache = null;
+}
 
 /** ดึงทุกแถวแบบหลาย range พร้อมกัน — เร็วกว่า await ทีละหน้า */
 async function fetchAllRowsInParallel(

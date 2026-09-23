@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getD1 } from "../../../../../../db";
+import { invalidateDashboardCarsCache } from "@/lib/data/cars";
 
 export const dynamic = "force-dynamic";
 
@@ -359,6 +360,7 @@ export async function POST(request: Request) {
 
   if (applyRequested && changedRows.length) {
     await upsertRows(changedRows);
+    invalidateDashboardCarsCache();
     await writeAudit({
       source: body.source ?? "google_sheet",
       applied_at: now,
