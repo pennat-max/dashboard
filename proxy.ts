@@ -8,9 +8,10 @@ function isProtectedPath(pathname: string): boolean {
   if (pathname === "/" || pathname === "") return false;
   /** Order Tracking มือถือ + LIFF — ไม่บังคับ login */
   if (pathname.startsWith("/liff") || pathname.startsWith("/m")) return false;
+  if (pathname === "/dashboard/users" || pathname.startsWith("/dashboard/users/")) return true;
   if (pathname === "/dashboard" || pathname === "/dashboard/") return false;
-  if (pathname.startsWith("/dashboard/")) return true;
-  if (pathname.startsWith("/cars")) return true;
+  if (pathname.startsWith("/dashboard/")) return false;
+  if (pathname.startsWith("/cars")) return false;
   return false;
 }
 
