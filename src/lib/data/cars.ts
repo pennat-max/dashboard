@@ -204,7 +204,7 @@ function rowAsCar(data: unknown): Car | null {
   return data as Car | null;
 }
 
-export type CarsQueryResult = { cars: Car[]; error: string | null };
+export type CarsQueryResult = { cars: Car[]; error: string | null; total?: number };
 
 export async function fetchCarsForDashboard(): Promise<CarsQueryResult> {
   try {
@@ -553,6 +553,7 @@ export type CarsListParams = {
   cYear?: string;
   sort?: string;
   order?: string;
+  maxRows?: number;
 };
 
 /** ตัวกรองเริ่มต้น — ใช้ชุดข้อมูลเดียวกับ `fetchCarsForDashboard` ได้ */
@@ -659,6 +660,11 @@ export async function fetchCarsList(
     }
 
     const total = count ?? 0;
+    if (params.maxRows && params.maxRows > 0) {
+      const { data, error } = await buildOrderedDataQuery().range(0, Math.max(0, params.maxRows - 1));
+      if (error) return { cars: [], error: error.message, total };
+      return { cars: rowsAsCars(data), error: null, total };
+    }
     return fetchAllRowsInParallel(total, async (from, to) => buildOrderedDataQuery().range(from, to));
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
