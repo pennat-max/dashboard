@@ -21,6 +21,7 @@ import { getLocale, numberFormatLocale } from "@/lib/locale";
 import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
+const DETAIL_ROW_LIMIT = 250;
 
 export default async function IncomeSchedulePage() {
   const locale = await getLocale();
@@ -49,12 +50,12 @@ export default async function IncomeSchedulePage() {
     if (!y || !m || !d) return isoDate;
     return `${d}-${m}-${y.slice(-2)}`;
   };
+  const normalizedBuyer = (value?: string | null) => (value ?? "").trim().toLowerCase();
   const displayIncomeDate = (value?: string | null) => {
     const key = (value ?? "").trim().slice(0, 10);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) return c.dash;
     return toDisplayDate(key);
   };
-  const normalizedBuyer = (value?: string | null) => (value ?? "").trim().toLowerCase();
   const ageDaysFromIncomeDate = (value?: string | null) => {
     const key = (value ?? "").trim().slice(0, 10);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) return null;
@@ -184,6 +185,14 @@ export default async function IncomeSchedulePage() {
 
   const totalCars = dailyRows.reduce((sum, row) => sum + row.count, 0);
   const totalValueThb = dailyRows.reduce((sum, row) => sum + row.totalValueThb, 0);
+  const visibleDetailGroups = detailGroups.reduce<typeof detailGroups>((acc, group) => {
+    const usedRows = acc.reduce((sum, item) => sum + item.rows.length, 0);
+    const remainingRows = DETAIL_ROW_LIMIT - usedRows;
+    if (remainingRows <= 0) return acc;
+    const rowsForGroup = group.rows.slice(0, remainingRows);
+    return rowsForGroup.length > 0 ? [...acc, { ...group, rows: rowsForGroup }] : acc;
+  }, []);
+  const hiddenDetailRows = Math.max(0, totalCars - DETAIL_ROW_LIMIT);
 
   return (
     <div
@@ -270,6 +279,11 @@ export default async function IncomeSchedulePage() {
       </div>
 
       <div className="overflow-x-auto rounded-xl border border-indigo-200/60 bg-gradient-to-b from-card via-card to-indigo-50/30 shadow-sm">
+        {hiddenDetailRows > 0 ? (
+          <p className="border-b border-indigo-200/60 px-4 py-2 text-xs text-muted-foreground">
+            Showing first {fmt(DETAIL_ROW_LIMIT)} of {fmt(totalCars)} detail rows for faster loading.
+          </p>
+        ) : null}
         <Table>
           <TableHeader>
             <TableRow className="bg-gradient-to-r from-indigo-100/75 via-violet-100/50 to-sky-100/70">
@@ -281,14 +295,14 @@ export default async function IncomeSchedulePage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {detailGroups.length === 0 ? (
+            {visibleDetailGroups.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={5} className="py-8 text-center text-muted-foreground">
                   {p.empty}
                 </TableCell>
               </TableRow>
             ) : (
-              detailGroups.flatMap((group) => [
+              visibleDetailGroups.flatMap((group) => [
                 <TableRow key={`date-${group.date}`}>
                   <TableCell
                     id={`income-day-${group.date}`}
@@ -336,7 +350,7 @@ export default async function IncomeSchedulePage() {
                           const aPrice = carPriceNumber(a) ?? 0;
                           const bPrice = carPriceNumber(b) ?? 0;
                           return aPrice - bPrice;
-                        });
+                        }).slice(0, 20);
                         if (modelYearCount > 0) {
                           return (
                             <details className="relative inline-block text-left">

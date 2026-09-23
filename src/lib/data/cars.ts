@@ -16,8 +16,12 @@ const PAGE_SIZE = 1000;
 
 type PageFetchResult = Promise<{ data: unknown; error: { message: string } | null }>;
 const FILTER_OPTIONS_CACHE_MS = 60_000;
+const DASHBOARD_CARS_CACHE_MS = 5_000;
 let filterOptionsCache:
   | { at: number; cars: Car[] }
+  | null = null;
+let dashboardCarsCache:
+  | { at: number; result: CarsQueryResult }
   | null = null;
 
 /** ดึงทุกแถวแบบหลาย range พร้อมกัน — เร็วกว่า await ทีละหน้า */
@@ -194,29 +198,38 @@ export type CarsQueryResult = { cars: Car[]; error: string | null };
 
 export async function fetchCarsForDashboard(): Promise<CarsQueryResult> {
   try {
+    const now = Date.now();
+    if (dashboardCarsCache && now - dashboardCarsCache.at < DASHBOARD_CARS_CACHE_MS) {
+      return dashboardCarsCache.result;
+    }
+
     const supabase = createAnonClient();
     const { count, error: countError } = await supabase
       .from(TABLE)
       .select("*", { count: "planned", head: true });
 
     if (countError) {
-      return fetchAllRowsSequential(async (from, to) =>
+      const result = await fetchAllRowsSequential(async (from, to) =>
         supabase
           .from(TABLE)
           .select(CARS_SELECT_LEAN)
           .order("updated_at", { ascending: false })
           .range(from, to)
       );
+      dashboardCarsCache = { at: now, result };
+      return result;
     }
 
     const total = count ?? 0;
-    return fetchAllRowsInParallel(total, async (from, to) =>
+    const result = await fetchAllRowsInParallel(total, async (from, to) =>
       supabase
         .from(TABLE)
         .select(CARS_SELECT_LEAN)
         .order("updated_at", { ascending: false })
         .range(from, to)
     );
+    dashboardCarsCache = { at: now, result };
+    return result;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return { cars: [], error: msg };

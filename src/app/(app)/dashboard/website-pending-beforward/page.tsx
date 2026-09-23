@@ -15,6 +15,7 @@ import { excludeCancelledCars, fetchCarsForDashboard } from "@/lib/data/cars";
 import { getLocale } from "@/lib/locale";
 
 export const dynamic = "force-dynamic";
+const DETAIL_ROW_LIMIT = 250;
 
 export default async function WebsitePendingBeForwardPage() {
   const locale = await getLocale();
@@ -31,6 +32,8 @@ export default async function WebsitePendingBeForwardPage() {
     const bi = (b.income_date ?? "").trim();
     return ai.localeCompare(bi);
   });
+  const visibleRows = sortedRows.slice(0, DETAIL_ROW_LIMIT);
+  const hiddenRows = Math.max(0, sortedRows.length - visibleRows.length);
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-8">
@@ -54,6 +57,11 @@ export default async function WebsitePendingBeForwardPage() {
       {error && <SupabaseErrorBanner message={error} labels={dict.error} />}
 
       <div className="overflow-x-auto rounded-xl border border-border bg-card shadow-sm">
+        {hiddenRows > 0 ? (
+          <p className="border-b border-border px-4 py-2 text-xs text-muted-foreground">
+            Showing first {visibleRows.length} of {sortedRows.length} cars for faster loading.
+          </p>
+        ) : null}
         <Table>
           <TableHeader>
             <TableRow>
@@ -72,7 +80,7 @@ export default async function WebsitePendingBeForwardPage() {
                 </TableCell>
               </TableRow>
             ) : (
-              sortedRows.map((car) => {
+              visibleRows.map((car) => {
                 const href = `/cars/${car.row_id ?? car.id}`;
                 return (
                   <TableRow key={String(car.row_id ?? car.id)}>

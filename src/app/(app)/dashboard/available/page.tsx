@@ -15,6 +15,7 @@ import { excludeCancelledCars, fetchCarsForDashboard } from "@/lib/data/cars";
 import { getLocale, numberFormatLocale } from "@/lib/locale";
 
 export const dynamic = "force-dynamic";
+const DETAIL_ROW_LIMIT = 250;
 
 export default async function AvailableStockPage() {
   const locale = await getLocale();
@@ -36,6 +37,8 @@ export default async function AvailableStockPage() {
       if (db == null) return -1;
       return db - da;
     });
+  const visibleRows = rows.slice(0, DETAIL_ROW_LIMIT);
+  const hiddenRows = Math.max(0, rows.length - visibleRows.length);
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-8">
@@ -59,6 +62,11 @@ export default async function AvailableStockPage() {
       {error && <SupabaseErrorBanner message={error} labels={dict.error} />}
 
       <div className="overflow-x-auto rounded-xl border border-border bg-card shadow-sm">
+        {hiddenRows > 0 ? (
+          <p className="border-b border-border px-4 py-2 text-xs text-muted-foreground">
+            Showing first {visibleRows.length} of {rows.length} cars for faster loading.
+          </p>
+        ) : null}
         <Table>
           <TableHeader>
             <TableRow>
@@ -75,7 +83,7 @@ export default async function AvailableStockPage() {
                 </TableCell>
               </TableRow>
             ) : (
-              rows.map((car) => {
+              visibleRows.map((car) => {
                 const days = daysSinceIncomeDate(car);
                 const incomeDate = (car.income_date ?? "").trim();
                 const href = `/cars/${car.row_id ?? car.id}`;

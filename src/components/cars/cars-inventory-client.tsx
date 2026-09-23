@@ -13,8 +13,8 @@ import {
 } from "@/lib/cars-inventory-filter";
 import type { Car } from "@/types/car";
 
-const INITIAL_VISIBLE_ROWS = 200;
-const VISIBLE_ROWS_STEP = 300;
+const INITIAL_VISIBLE_ROWS = 120;
+const VISIBLE_ROWS_STEP = 120;
 
 function uniqueByField(
   rows: Car[],

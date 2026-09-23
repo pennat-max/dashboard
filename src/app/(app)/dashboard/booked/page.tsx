@@ -25,6 +25,7 @@ import { excludeCancelledCars, fetchCarsForDashboard } from "@/lib/data/cars";
 import { getLocale, numberFormatLocale } from "@/lib/locale";
 
 export const dynamic = "force-dynamic";
+const DETAIL_ROW_LIMIT = 250;
 
 export default async function BookedNotExportedPage() {
   const locale = await getLocale();
@@ -103,7 +104,8 @@ export default async function BookedNotExportedPage() {
     return {
       owner: owner.buyer,
       count: owner.count,
-      cars: carsInGroup,
+      cars: carsInGroup.slice(0, DETAIL_ROW_LIMIT),
+      hiddenCount: Math.max(0, carsInGroup.length - DETAIL_ROW_LIMIT),
       headerClass: style.headerClass,
       rowClass: style.rowClass,
     };
@@ -183,6 +185,7 @@ export default async function BookedNotExportedPage() {
                       </span>
                       <span className="tabular-nums font-medium text-foreground">
                         {p.groupCount}: {fmt(group.count)}
+                        {group.hiddenCount > 0 ? ` · showing ${fmt(group.cars.length)}` : ""}
                       </span>
                     </div>
                   </TableCell>
