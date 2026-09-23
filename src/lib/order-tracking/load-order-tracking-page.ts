@@ -41,6 +41,7 @@ type LoadOrderTrackingPageOptions = {
   chipCacheExperiment?: boolean;
   initialDetailLimit?: number;
   initialSaleStatusFilters?: string[];
+  maxCars?: number;
 };
 
 function carSaleStatus(car: Car): string {
@@ -92,7 +93,10 @@ export async function loadOrderTrackingPageData(
   let itemIndexError: string | null = null;
 
   if (!summaryOnly || chipCacheExperiment) {
-    const carsPack = await fetchCarsForOrderTracking({ includeShipped: options?.includeShipped !== false });
+    const carsPack = await fetchCarsForOrderTracking({
+      includeShipped: options?.includeShipped !== false,
+      maxCars: options?.maxCars,
+    });
     cars = carsPack.cars;
     carsError = carsPack.error;
     if (chipCacheExperiment) {

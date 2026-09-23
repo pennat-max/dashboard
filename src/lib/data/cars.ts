@@ -251,8 +251,8 @@ export async function fetchCarsForDashboard(): Promise<CarsQueryResult> {
   }
 }
 
-/** จำกัดจำนวนรถที่โหลดในหน้า Order Tracking — ลดเวลาโหลดครั้งแรก (ไม่ตั้ง = ดึงทั้งหมด) */
-const DEFAULT_ORDER_TRACKING_MAX_CARS = 0;
+/** จำกัดจำนวนรถที่โหลดในหน้า Order Tracking รอบแรก — ลด payload บนมือถือ */
+const DEFAULT_ORDER_TRACKING_MAX_CARS = 300;
 
 /** จำกัดค่าในขอบเขตที่ใช้งานได้จริง (กัน config ผิดจนช้า/พัง) */
 function clampOrderTrackingMaxCars(n: number): number {
@@ -291,13 +291,19 @@ async function fetchCarsOrderTrackingCapped(
 
 type FetchCarsForOrderTrackingOptions = {
   includeShipped?: boolean;
+  maxCars?: number;
 };
 
 export async function fetchCarsForOrderTracking(
   options: FetchCarsForOrderTrackingOptions = {}
 ): Promise<CarsQueryResult> {
   const includeShipped = options.includeShipped !== false;
-  const maxCars = parseOrderTrackingMaxCars();
+  const maxCars =
+    typeof options.maxCars === "number"
+      ? options.maxCars > 0
+        ? clampOrderTrackingMaxCars(options.maxCars)
+        : 0
+      : parseOrderTrackingMaxCars();
   try {
     const supabase = createAnonClient();
     let countQuery = supabase
