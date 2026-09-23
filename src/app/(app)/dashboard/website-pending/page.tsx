@@ -15,7 +15,7 @@ import { excludeCancelledCars, fetchCarsForDashboard } from "@/lib/data/cars";
 import { getLocale } from "@/lib/locale";
 
 export const dynamic = "force-dynamic";
-const DETAIL_ROW_LIMIT = 250;
+const DETAIL_ROW_LIMIT = 120;
 
 export default async function WebsitePendingPage() {
   const locale = await getLocale();

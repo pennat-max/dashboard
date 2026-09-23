@@ -6,7 +6,7 @@ import { carsInventoryStateFromSearchParams } from "@/lib/cars-inventory-filter"
 import { fetchCarsForDashboard } from "@/lib/data/cars";
 
 export const dynamic = "force-dynamic";
-const PUBLIC_CARS_CLIENT_LIMIT = 250;
+const PUBLIC_CARS_CLIENT_LIMIT = 120;
 
 type PageProps = {
   searchParams: Record<string, string | string[] | undefined>;

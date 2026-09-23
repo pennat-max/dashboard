@@ -21,7 +21,7 @@ import { getLocale, numberFormatLocale } from "@/lib/locale";
 import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
-const DETAIL_ROW_LIMIT = 250;
+const DETAIL_ROW_LIMIT = 120;
 
 export default async function IncomeSchedulePage() {
   const locale = await getLocale();
@@ -350,7 +350,7 @@ export default async function IncomeSchedulePage() {
                           const aPrice = carPriceNumber(a) ?? 0;
                           const bPrice = carPriceNumber(b) ?? 0;
                           return aPrice - bPrice;
-                        }).slice(0, 20);
+                        } ).slice(0, 10);
                         if (modelYearCount > 0) {
                           return (
                             <details className="relative inline-block text-left">
