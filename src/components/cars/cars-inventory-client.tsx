@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CarsTable } from "@/components/cars/cars-table";
 import { CarsToolbar } from "@/components/cars/cars-toolbar";
 import { buttonVariants } from "@/components/ui/button";
@@ -12,6 +12,9 @@ import {
   sortCarsForInventory,
 } from "@/lib/cars-inventory-filter";
 import type { Car } from "@/types/car";
+
+const INITIAL_VISIBLE_ROWS = 200;
+const VISIBLE_ROWS_STEP = 300;
 
 function uniqueByField(
   rows: Car[],
@@ -33,6 +36,7 @@ type Props = {
 
 export function CarsInventoryClient({ allCars, initialFilters }: Props) {
   const [filters, setFilters] = useState<CarsInventoryFilterState>(initialFilters);
+  const [visibleLimit, setVisibleLimit] = useState(INITIAL_VISIBLE_ROWS);
 
   const options = useMemo(
     () => ({
@@ -51,6 +55,13 @@ export function CarsInventoryClient({ allCars, initialFilters }: Props) {
     const rows = filterCarsForInventory(allCars, filters);
     return sortCarsForInventory(rows, filters.sort, filters.order);
   }, [allCars, filters]);
+
+  const visibleCars = displayed.slice(0, visibleLimit);
+  const hiddenCount = Math.max(0, displayed.length - visibleCars.length);
+
+  useEffect(() => {
+    setVisibleLimit(INITIAL_VISIBLE_ROWS);
+  }, [filters]);
 
   function patchFilters(patch: Partial<CarsInventoryFilterState>) {
     setFilters((prev) => ({ ...prev, ...patch }));
@@ -92,7 +103,19 @@ export function CarsInventoryClient({ allCars, initialFilters }: Props) {
 
       <section className="space-y-2">
         <h2 className="text-lg font-semibold">ตารางรายการ</h2>
-        <CarsTable cars={displayed} />
+        <p className="text-xs text-muted-foreground">
+          Showing {visibleCars.length} of {displayed.length} matching cars
+        </p>
+        <CarsTable cars={visibleCars} />
+        {hiddenCount > 0 ? (
+          <button
+            type="button"
+            onClick={() => setVisibleLimit((n) => n + VISIBLE_ROWS_STEP)}
+            className="h-11 w-full rounded-xl border border-border bg-background px-4 text-sm font-semibold text-foreground shadow-sm transition-colors hover:bg-muted"
+          >
+            Show {Math.min(VISIBLE_ROWS_STEP, hiddenCount)} more ({hiddenCount} remaining)
+          </button>
+        ) : null}
       </section>
     </div>
   );
