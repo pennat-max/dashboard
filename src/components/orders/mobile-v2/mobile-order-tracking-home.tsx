@@ -6073,6 +6073,12 @@ export function MobileOrderTrackingHome({
     filterItemsForOrder,
   ]);
 
+  const openWorkItemCount = useMemo(
+    () => WAITING.reduce((sum, status) => sum + (itemStatusCounts.get(status) ?? 0), 0),
+    [itemStatusCounts]
+  );
+  const bookedOrWaitingShipCount = (saleStatusCounts["จอง"] ?? 0) + (saleStatusCounts["รอส่ง"] ?? 0);
+
   /** ชิปสถานะที่แสดง — ซ่อนเมื่อจำนวนรายการ = 0 (เฉพาะก่อนล็อกครั้งแรก; หลังล็อกใช้ itemStatusRosterForToolbar) */
   const itemStatusRosterVisible = useMemo(
     () => itemStatusRosterEffective.filter((s) => (itemStatusCounts.get(s) ?? 0) > 0),
@@ -6650,6 +6656,46 @@ export function MobileOrderTrackingHome({
       setVisibleLimit(ORDERS_INITIAL_PAGE_SIZE);
       setExperimentRequestedCount(ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT);
     });
+  const showDueTodayWorkStable = () =>
+    runWithStableScroll(() => {
+      setSaleFilters(new Set());
+      setSaleStatusFilters(new Set());
+      setVehicleSearch("");
+      setStaffFilters(new Set());
+      setItemStatusFilters(new Set([ITEM_STATUS_DUE_TODAY]));
+      setVisibleLimit(ORDERS_INITIAL_PAGE_SIZE);
+      setExperimentRequestedCount(ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT);
+    });
+  const showOpenWorkStable = () =>
+    runWithStableScroll(() => {
+      setSaleFilters(new Set());
+      setSaleStatusFilters(new Set());
+      setVehicleSearch("");
+      setStaffFilters(new Set());
+      setItemStatusFilters(new Set(WAITING));
+      setVisibleLimit(ORDERS_INITIAL_PAGE_SIZE);
+      setExperimentRequestedCount(ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT);
+    });
+  const showUnassignedWorkStable = () =>
+    runWithStableScroll(() => {
+      setSaleFilters(new Set());
+      setSaleStatusFilters(new Set());
+      setVehicleSearch("");
+      setStaffFilters(new Set([STAFF_FILTER_UNASSIGNED]));
+      setItemStatusFilters(new Set());
+      setVisibleLimit(ORDERS_INITIAL_PAGE_SIZE);
+      setExperimentRequestedCount(ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT);
+    });
+  const showBookedPipelineStable = () =>
+    runWithStableScroll(() => {
+      setSaleFilters(new Set());
+      setSaleStatusFilters(new Set(["จอง", "รอส่ง"]));
+      setVehicleSearch("");
+      setStaffFilters(new Set());
+      setItemStatusFilters(new Set());
+      setVisibleLimit(ORDERS_INITIAL_PAGE_SIZE);
+      setExperimentRequestedCount(ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT);
+    });
   const hasActiveFilters =
     saleFilters.size > 0 ||
     saleStatusFilters.size > 0 ||
@@ -6946,6 +6992,88 @@ export function MobileOrderTrackingHome({
               {experimentDetailError}
             </div>
           ) : null}
+          <section className="mb-2 rounded-2xl bg-white p-3 shadow-sm ring-1 ring-slate-200/70">
+            <div className="mb-2 flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h2 className="text-base font-bold leading-tight text-slate-950">
+                  {uiLang === "en" ? "Today Work" : "เริ่มงานวันนี้"}
+                </h2>
+                <p className="mt-0.5 text-xs font-medium leading-snug text-slate-500">
+                  {uiLang === "en"
+                    ? "Quick queues for staff. Open a car card to update its tasks."
+                    : "คิวงานหลักสำหรับพนักงาน เปิดการ์ดรถเพื่ออัปเดตรายการ"}
+                </p>
+              </div>
+              {hasActiveFilters ? (
+                <button
+                  type="button"
+                  onPointerDown={(e) => e.preventDefault()}
+                  onClick={clearFiltersStable}
+                  className="h-9 shrink-0 rounded-xl bg-slate-950 px-3 text-xs font-semibold text-white touch-manipulation active:bg-slate-800"
+                >
+                  {uiLang === "en" ? "All" : "ดูทั้งหมด"}
+                </button>
+              ) : null}
+            </div>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <button
+                type="button"
+                onPointerDown={(e) => e.preventDefault()}
+                onClick={showDueTodayWorkStable}
+                className={cn(
+                  "min-h-[76px] rounded-2xl p-3 text-left ring-1 transition-colors touch-manipulation active:scale-[0.99]",
+                  itemStatusFilters.has(ITEM_STATUS_DUE_TODAY)
+                    ? "bg-red-600 text-white ring-red-500"
+                    : "bg-rose-50 text-red-900 ring-rose-200 hover:bg-rose-100"
+                )}
+              >
+                <div className="text-xs font-semibold leading-snug opacity-80">{uiLang === "en" ? "Due today" : "มาวันนี้"}</div>
+                <div className="mt-1 text-2xl font-bold tabular-nums leading-none">{dueTodayItemCount}</div>
+              </button>
+              <button
+                type="button"
+                onPointerDown={(e) => e.preventDefault()}
+                onClick={showOpenWorkStable}
+                className={cn(
+                  "min-h-[76px] rounded-2xl p-3 text-left ring-1 transition-colors touch-manipulation active:scale-[0.99]",
+                  WAITING.some((status) => itemStatusFilters.has(status))
+                    ? "bg-amber-600 text-white ring-amber-500"
+                    : "bg-amber-50 text-amber-950 ring-amber-200 hover:bg-amber-100"
+                )}
+              >
+                <div className="text-xs font-semibold leading-snug opacity-80">{uiLang === "en" ? "Open work" : "งานค้าง"}</div>
+                <div className="mt-1 text-2xl font-bold tabular-nums leading-none">{openWorkItemCount}</div>
+              </button>
+              <button
+                type="button"
+                onPointerDown={(e) => e.preventDefault()}
+                onClick={showUnassignedWorkStable}
+                className={cn(
+                  "min-h-[76px] rounded-2xl p-3 text-left ring-1 transition-colors touch-manipulation active:scale-[0.99]",
+                  staffFilters.has(STAFF_FILTER_UNASSIGNED)
+                    ? "bg-slate-950 text-white ring-slate-800"
+                    : "bg-slate-100 text-slate-900 ring-slate-200 hover:bg-slate-200/80"
+                )}
+              >
+                <div className="text-xs font-semibold leading-snug opacity-80">{uiLang === "en" ? "Unassigned" : "ยังไม่ระบุชื่อ"}</div>
+                <div className="mt-1 text-2xl font-bold tabular-nums leading-none">{staffAssigneeItemCounts.unassigned}</div>
+              </button>
+              <button
+                type="button"
+                onPointerDown={(e) => e.preventDefault()}
+                onClick={showBookedPipelineStable}
+                className={cn(
+                  "min-h-[76px] rounded-2xl p-3 text-left ring-1 transition-colors touch-manipulation active:scale-[0.99]",
+                  saleStatusFilters.has("จอง") || saleStatusFilters.has("รอส่ง")
+                    ? "bg-emerald-700 text-white ring-emerald-600"
+                    : "bg-emerald-50 text-emerald-950 ring-emerald-200 hover:bg-emerald-100"
+                )}
+              >
+                <div className="text-xs font-semibold leading-snug opacity-80">{uiLang === "en" ? "Booked / ship" : "จอง / รอส่ง"}</div>
+                <div className="mt-1 text-2xl font-bold tabular-nums leading-none">{bookedOrWaitingShipCount}</div>
+              </button>
+            </div>
+          </section>
           <>
               <div className="mb-2 rounded-2xl bg-white p-2">
                 <div className="mb-2 rounded-2xl bg-slate-100/80 p-2">
