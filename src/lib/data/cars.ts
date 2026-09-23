@@ -19,6 +19,7 @@ type PageFetchResult = Promise<{ data: unknown; error: { message: string } | nul
 const FILTER_OPTIONS_CACHE_MS = 60_000;
 const DASHBOARD_CARS_CACHE_MS = 60_000;
 const DASHBOARD_OVERVIEW_CACHE_MS = 60_000;
+const ORDER_TRACKING_SUMMARY_CACHE_MS = 30_000;
 let filterOptionsCache:
   | { at: number; cars: Car[] }
   | null = null;
@@ -28,10 +29,14 @@ let dashboardCarsCache:
 let dashboardOverviewCache:
   | { at: number; result: DashboardOverviewResult }
   | null = null;
+let orderTrackingSummarySnapshotCache:
+  | { at: number; result: { snapshot: OrderTrackingSummarySnapshot | null; error: string | null } }
+  | null = null;
 
 export function invalidateDashboardCarsCache() {
   dashboardCarsCache = null;
   dashboardOverviewCache = null;
+  orderTrackingSummarySnapshotCache = null;
 }
 
 /** ดึงทุกแถวแบบหลาย range พร้อมกัน — เร็วกว่า await ทีละหน้า */
@@ -424,6 +429,14 @@ export async function fetchOrderTrackingSummarySnapshot(): Promise<{
   error: string | null;
 }> {
   try {
+    const now = Date.now();
+    if (
+      orderTrackingSummarySnapshotCache &&
+      now - orderTrackingSummarySnapshotCache.at < ORDER_TRACKING_SUMMARY_CACHE_MS
+    ) {
+      return orderTrackingSummarySnapshotCache.result;
+    }
+
     const supabase = createAnonClient();
     const res = await supabase
       .from("order_tracking_summary_cache")
@@ -444,7 +457,7 @@ export async function fetchOrderTrackingSummarySnapshot(): Promise<{
       computed_at?: unknown;
     };
     const sale = (row.sale_status_counts ?? {}) as Record<string, unknown>;
-    return {
+    const result = {
       snapshot: {
         saleStatusCounts: {
           ทั้งหมด: Number(sale["ทั้งหมด"] ?? 0),
@@ -462,6 +475,8 @@ export async function fetchOrderTrackingSummarySnapshot(): Promise<{
       },
       error: null,
     };
+    orderTrackingSummarySnapshotCache = { at: now, result };
+    return result;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return { snapshot: null, error: msg };

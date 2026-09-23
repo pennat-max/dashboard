@@ -34,8 +34,8 @@ export type OrderTrackingSearchParams = {
   search?: string | string[];
   plate?: string | string[];
 };
+
 type LoadOrderTrackingPageOptions = {
-  /** โหมดทดลองความเร็ว: โหลดเฉพาะสรุป ไม่โหลดรถ/รายการ */
   summaryOnly?: boolean;
   includeShipped?: boolean;
   chipCacheExperiment?: boolean;
@@ -64,8 +64,7 @@ function carKeys(car: Car): string[] {
 
 function pickInitialDetailCars(cars: Car[], filters: string[] | undefined, limit: number): Car[] {
   const normalizedFilters = new Set((filters ?? []).map((s) => String(s).trim()).filter(Boolean));
-  const source =
-    normalizedFilters.size > 0 ? cars.filter((car) => normalizedFilters.has(carSaleStatus(car))) : cars;
+  const source = normalizedFilters.size > 0 ? cars.filter((car) => normalizedFilters.has(carSaleStatus(car))) : cars;
   return source.slice(0, Math.max(1, limit));
 }
 
@@ -77,10 +76,10 @@ export async function loadOrderTrackingPageData(
   const summaryOnly = options?.summaryOnly === true;
   const chipCacheExperiment = options?.chipCacheExperiment === true;
   const initialDetailLimit = Math.max(1, Math.min(50, Math.floor(Number(options?.initialDetailLimit ?? 50))));
-  const [
-    { summary: saleStatusSummaryAllCars, error: saleSummaryError },
-    { snapshot: summarySnapshotAllCars, error: summarySnapshotError },
-  ] = await Promise.all([fetchOrderTrackingSaleStatusSummary(), fetchOrderTrackingSummarySnapshot()]);
+  const { snapshot: summarySnapshotAllCars, error: summarySnapshotError } = await fetchOrderTrackingSummarySnapshot();
+  const fallbackSaleSummary = summarySnapshotAllCars ? null : await fetchOrderTrackingSaleStatusSummary();
+  const saleStatusSummaryAllCars = summarySnapshotAllCars?.saleStatusCounts ?? fallbackSaleSummary?.summary ?? {};
+  const saleSummaryError = fallbackSaleSummary?.error ?? null;
 
   let cars: Awaited<ReturnType<typeof fetchCarsForOrderTracking>>["cars"] = [];
   let carsError: string | null = null;
@@ -126,9 +125,7 @@ export async function loadOrderTrackingPageData(
     itemsError,
     updatesError,
     itemIndexError,
-  ].filter(
-    (v): v is string => typeof v === "string" && v.length > 0
-  );
+  ].filter((v): v is string => typeof v === "string" && v.length > 0);
   const initialFocusedOrderId = parseOrderSearchParam(searchParams?.order);
   const origin = await resolveRequestOrigin();
   const shareBaseUrl = origin || null;
