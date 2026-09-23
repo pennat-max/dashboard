@@ -47,9 +47,9 @@ export default async function MobileOrdersPage({ searchParams }: PageProps) {
     summaryOnly: !isFullLoad && !orderChipCacheExperimentEnabled,
     includeShipped: isAllScope,
     chipCacheExperiment: orderChipCacheExperimentEnabled,
-    initialDetailLimit: 20,
+    initialDetailLimit: 12,
     initialSaleStatusFilters,
-    maxCars: isFullLoad ? 0 : 300,
+    maxCars: isFullLoad ? 0 : 150,
   });
   return (
     <MobileOrderTrackingHome

@@ -252,7 +252,7 @@ export async function fetchCarsForDashboard(): Promise<CarsQueryResult> {
 }
 
 /** จำกัดจำนวนรถที่โหลดในหน้า Order Tracking รอบแรก — ลด payload บนมือถือ */
-const DEFAULT_ORDER_TRACKING_MAX_CARS = 300;
+const DEFAULT_ORDER_TRACKING_MAX_CARS = 150;
 
 /** จำกัดค่าในขอบเขตที่ใช้งานได้จริง (กัน config ผิดจนช้า/พัง) */
 function clampOrderTrackingMaxCars(n: number): number {
