@@ -3,7 +3,7 @@ import { SupabaseErrorBanner } from "@/components/supabase-error-banner";
 import { getDictionary } from "@/i18n/dictionaries";
 import { getLocale } from "@/lib/locale";
 import { carsInventoryStateFromSearchParams } from "@/lib/cars-inventory-filter";
-import { fetchCarsList } from "@/lib/data/cars";
+import { fetchCarsForDashboard } from "@/lib/data/cars";
 
 export const dynamic = "force-dynamic";
 const PUBLIC_CARS_CLIENT_LIMIT = 250;
@@ -16,24 +16,9 @@ export default async function CarsPage({ searchParams }: PageProps) {
   const locale = await getLocale();
   const dict = getDictionary(locale);
 
+  const result = await fetchCarsForDashboard();
   const initialFilters = carsInventoryStateFromSearchParams(searchParams);
-  const result = await fetchCarsList({
-    q: initialFilters.q,
-    status: initialFilters.status,
-    brand: initialFilters.brand.join(","),
-    destination: initialFilters.destination,
-    driveType: initialFilters.driveType.join(","),
-    engineSize: initialFilters.engineSize.join(","),
-    grade: initialFilters.grade.join(","),
-    gearType: initialFilters.gearType.join(","),
-    cabin: initialFilters.cabin.join(","),
-    color: initialFilters.color.join(","),
-    cYear: initialFilters.cYear.join(","),
-    sort: initialFilters.sort,
-    order: initialFilters.order,
-    maxRows: PUBLIC_CARS_CLIENT_LIMIT,
-  });
-  const initialCars = result.cars;
+  const initialCars = result.cars.slice(0, PUBLIC_CARS_CLIENT_LIMIT);
 
   return (
     <>
@@ -44,7 +29,7 @@ export default async function CarsPage({ searchParams }: PageProps) {
       )}
       <CarsInventoryClient
         allCars={initialCars}
-        totalCars={result.total ?? result.cars.length}
+        totalCars={result.cars.length}
         initialFilters={initialFilters}
       />
     </>
