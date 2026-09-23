@@ -1,0 +1,363 @@
+{
+  "name": "VIGO4U LINE Inbox Dry Run",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Manual Dry Run",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [-700, -60]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule Every 5 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-700, 160],
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "site-url",
+              "name": "SITE_URL",
+              "type": "string",
+              "value": "https://vigo4u-operations.pennat.chatgpt.site"
+            },
+            {
+              "id": "active",
+              "name": "ACTIVE",
+              "type": "boolean",
+              "value": false
+            },
+            {
+              "id": "dry-run",
+              "name": "DRY_RUN",
+              "type": "boolean",
+              "value": true
+            },
+            {
+              "id": "auto-save",
+              "name": "AUTO_SAVE",
+              "type": "boolean",
+              "value": false
+            },
+            {
+              "id": "line-reply",
+              "name": "LINE_REPLY",
+              "type": "boolean",
+              "value": false
+            },
+            {
+              "id": "use-ai",
+              "name": "USE_AI",
+              "type": "boolean",
+              "value": false
+            },
+            {
+              "id": "limit",
+              "name": "LIMIT",
+              "type": "number",
+              "value": 10
+            },
+            {
+              "id": "bearer",
+              "name": "BEARER_TOKEN_PLACEHOLDER",
+              "type": "string",
+              "value": "PUT_N8N_WORKER_SECRET_IN_N8N_CREDENTIALS_NOT_HERE"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "runtime-guard",
+      "name": "Runtime Guard",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [-420, 40]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "active-false",
+              "leftValue": "={{ $json.ACTIVE }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "dry-run-true",
+              "leftValue": "={{ $json.DRY_RUN }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "auto-save-false",
+              "leftValue": "={{ $json.AUTO_SAVE }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "line-reply-false",
+              "leftValue": "={{ $json.LINE_REPLY }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "allow-dry-run",
+      "name": "Allow Dry Run Only",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [-160, 40]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.SITE_URL + '/api/n8n/line-inbox/health' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "health-check",
+      "name": "Health Check",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [120, -120],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "VIGO4U Site Bearer Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Runtime Guard').item.json.SITE_URL + '/api/n8n/line-inbox/analyze-pending' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { limit: $('Runtime Guard').item.json.LIMIT, use_ai: false } }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "analyze-pending",
+      "name": "Analyze Pending",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [420, -120],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "VIGO4U Site Bearer Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Runtime Guard').item.json.SITE_URL + '/api/n8n/line-inbox/pending-queue?analyze_status=all&limit=20' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "read-queue",
+      "name": "Read Queue Summary",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [720, -120],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "VIGO4U Site Bearer Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Runtime Guard').item.json.SITE_URL + '/api/n8n/line-inbox/replay-errors' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { limit: 10, dry_run: true } }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "replay-errors-dry-run",
+      "name": "Replay Errors Dry Run",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1020, -120],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "VIGO4U Site Bearer Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "blocked",
+              "name": "blocked_reason",
+              "type": "string",
+              "value": "Workflow guard blocked execution. Keep ACTIVE=false, DRY_RUN=true, AUTO_SAVE=false, LINE_REPLY=false until owner approves."
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "blocked-output",
+      "name": "Blocked Output",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [120, 180]
+    }
+  ],
+  "connections": {
+    "Manual Dry Run": {
+      "main": [
+        [
+          {
+            "node": "Runtime Guard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Every 5 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Runtime Guard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Runtime Guard": {
+      "main": [
+        [
+          {
+            "node": "Allow Dry Run Only",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Allow Dry Run Only": {
+      "main": [
+        [
+          {
+            "node": "Health Check",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Blocked Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Health Check": {
+      "main": [
+        [
+          {
+            "node": "Analyze Pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Pending": {
+      "main": [
+        [
+          {
+            "node": "Read Queue Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Queue Summary": {
+      "main": [
+        [
+          {
+            "node": "Replay Errors Dry Run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "versionId": "dry-run-template",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "vigo4u": {
+      "active": false,
+      "dry_run": true,
+      "auto_save": false,
+      "line_reply": false
+    }
+  },
+  "tags": ["vigo4u", "line", "dry-run"]
+}
