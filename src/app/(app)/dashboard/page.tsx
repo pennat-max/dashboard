@@ -1,12 +1,10 @@
 import Link from "next/link";
 import { DashboardInsights } from "@/components/dashboard/dashboard-insights";
-import type { KpiLinkMode } from "@/components/dashboard/kpi-cards";
 import { KpiCards } from "@/components/dashboard/kpi-cards";
 import { SupabaseErrorBanner } from "@/components/supabase-error-banner";
 import { getDictionary } from "@/i18n/dictionaries";
 import { aggregateByAgent, aggregateByBuyer } from "@/lib/data/aggregate";
 import { computeDashboardKpi, fetchCarsForDashboard } from "@/lib/data/cars";
-import { getSessionAndRole } from "@/lib/auth/session-role";
 import { getLocale } from "@/lib/locale";
 
 export const dynamic = "force-dynamic";
@@ -14,19 +12,6 @@ export const dynamic = "force-dynamic";
 export default async function DashboardPage() {
   const locale = await getLocale();
   const dict = getDictionary(locale);
-  const { user, role } = await getSessionAndRole();
-  const isAuthenticated = Boolean(user);
-  const activeRole = role ?? undefined;
-
-  const kpiLinkMode: KpiLinkMode = !isAuthenticated
-    ? "none"
-    : activeRole == null
-      ? "none"
-      : activeRole >= 3
-        ? "full"
-        : activeRole === 1
-          ? "subset"
-          : "none";
   const dateLocale = "en-GB";
   const now = new Date();
   const previous = new Date(now.getFullYear(), now.getMonth() - 1, 1);
@@ -72,17 +57,15 @@ export default async function DashboardPage() {
       {error && <SupabaseErrorBanner message={error} labels={dict.error} />}
 
       <section className="space-y-5">
-        {isAuthenticated ? (
-          <div className="flex justify-end border-b border-border pb-5">
-            <Link
-              href="/dashboard/statuses"
-              className="shrink-0 text-sm font-medium text-primary underline-offset-4 transition-colors hover:text-primary/90 hover:underline"
-            >
-              {dict.dashboard.statusesBreakdownLink}
-            </Link>
-          </div>
-        ) : null}
-        <KpiCards kpi={kpi} locale={locale} kpiDict={dict.kpi} kpiLinkMode={kpiLinkMode} />
+        <div className="flex justify-end border-b border-border pb-5">
+          <Link
+            href="/dashboard/statuses"
+            className="shrink-0 text-sm font-medium text-primary underline-offset-4 transition-colors hover:text-primary/90 hover:underline"
+          >
+            {dict.dashboard.statusesBreakdownLink}
+          </Link>
+        </div>
+        <KpiCards kpi={kpi} locale={locale} kpiDict={dict.kpi} kpiLinkMode="full" />
       </section>
 
       <section className="space-y-5">
