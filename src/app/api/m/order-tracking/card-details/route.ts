@@ -14,7 +14,7 @@ type CardDetailRequestBody = {
 };
 
 function isExperimentEnabled(): boolean {
-  return String(process.env.NEXT_PUBLIC_ORDER_CHIP_CACHE_ENABLED ?? "").trim().toLowerCase() === "true";
+  return String(process.env.NEXT_PUBLIC_ORDER_CHIP_CACHE_ENABLED ?? "true").trim().toLowerCase() !== "false";
 }
 
 function carKeys(car: CardDetailRequestCar): string[] {

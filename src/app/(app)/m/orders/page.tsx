@@ -20,7 +20,7 @@ type PageProps = {
 };
 
 function isOrderChipCacheExperimentEnabled(): boolean {
-  return String(process.env.NEXT_PUBLIC_ORDER_CHIP_CACHE_ENABLED ?? "").trim().toLowerCase() === "true";
+  return String(process.env.NEXT_PUBLIC_ORDER_CHIP_CACHE_ENABLED ?? "true").trim().toLowerCase() !== "false";
 }
 
 function getOrderChipCacheBadgeLabel(): string | null {
@@ -47,7 +47,7 @@ export default async function MobileOrdersPage({ searchParams }: PageProps) {
     summaryOnly: !isFullLoad && !orderChipCacheExperimentEnabled,
     includeShipped: isAllScope,
     chipCacheExperiment: orderChipCacheExperimentEnabled,
-    initialDetailLimit: 50,
+    initialDetailLimit: 20,
     initialSaleStatusFilters,
   });
   return (
