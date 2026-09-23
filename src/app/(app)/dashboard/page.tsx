@@ -3,8 +3,7 @@ import { DashboardInsights } from "@/components/dashboard/dashboard-insights";
 import { KpiCards } from "@/components/dashboard/kpi-cards";
 import { SupabaseErrorBanner } from "@/components/supabase-error-banner";
 import { getDictionary } from "@/i18n/dictionaries";
-import { aggregateByAgent, aggregateByBuyer } from "@/lib/data/aggregate";
-import { computeDashboardKpi, fetchCarsForDashboard } from "@/lib/data/cars";
+import { fetchDashboardOverview } from "@/lib/data/cars";
 import { getLocale } from "@/lib/locale";
 
 export const dynamic = "force-dynamic";
@@ -25,23 +24,8 @@ export default async function DashboardPage() {
     year: "numeric",
   }).format(twoMonthsAgo);
 
-  const { cars, error } = await fetchCarsForDashboard();
-  const kpi = computeDashboardKpi(cars);
-  // The Site itself is owner-private, so dashboard insights do not need a
-  // second Supabase login. Supabase auth is still required for mutations.
-  const byBuyer = aggregateByBuyer(cars);
-  const byAgentCurrentMonthBeForward = aggregateByAgent(cars, "currentMonth", "beForward");
-  const byAgentPreviousMonthBeForward = aggregateByAgent(cars, "last3Months", "beForward");
-  const byAgentTwoMonthsAgoBeForward = aggregateByAgent(cars, "twoMonthsAgo", "beForward");
-  const byAgentAllMonthsBeForward = aggregateByAgent(cars, "all", "beForward");
-  const byAgentCurrentMonthStock = aggregateByAgent(cars, "currentMonth", "stock");
-  const byAgentPreviousMonthStock = aggregateByAgent(cars, "last3Months", "stock");
-  const byAgentTwoMonthsAgoStock = aggregateByAgent(cars, "twoMonthsAgo", "stock");
-  const byAgentAllMonthsStock = aggregateByAgent(cars, "all", "stock");
-  const byAgentCurrentMonthAllBuyer = aggregateByAgent(cars, "currentMonth", "all");
-  const byAgentPreviousMonthAllBuyer = aggregateByAgent(cars, "last3Months", "all");
-  const byAgentTwoMonthsAgoAllBuyer = aggregateByAgent(cars, "twoMonthsAgo", "all");
-  const byAgentAllMonthsAllBuyer = aggregateByAgent(cars, "all", "all");
+  const overview = await fetchDashboardOverview();
+  const { kpi, error } = overview;
 
   return (
     <div className="dashboard-stack mx-auto flex max-w-6xl flex-col gap-12">
@@ -70,19 +54,19 @@ export default async function DashboardPage() {
 
       <section className="space-y-5">
         <DashboardInsights
-          byBuyer={byBuyer}
-          byAgentCurrentMonthBeForward={byAgentCurrentMonthBeForward}
-          byAgentPreviousMonthBeForward={byAgentPreviousMonthBeForward}
-          byAgentTwoMonthsAgoBeForward={byAgentTwoMonthsAgoBeForward}
-          byAgentAllMonthsBeForward={byAgentAllMonthsBeForward}
-          byAgentCurrentMonthStock={byAgentCurrentMonthStock}
-          byAgentPreviousMonthStock={byAgentPreviousMonthStock}
-          byAgentTwoMonthsAgoStock={byAgentTwoMonthsAgoStock}
-          byAgentAllMonthsStock={byAgentAllMonthsStock}
-          byAgentCurrentMonthAllBuyer={byAgentCurrentMonthAllBuyer}
-          byAgentPreviousMonthAllBuyer={byAgentPreviousMonthAllBuyer}
-          byAgentTwoMonthsAgoAllBuyer={byAgentTwoMonthsAgoAllBuyer}
-          byAgentAllMonthsAllBuyer={byAgentAllMonthsAllBuyer}
+          byBuyer={overview.byBuyer}
+          byAgentCurrentMonthBeForward={overview.byAgentCurrentMonthBeForward}
+          byAgentPreviousMonthBeForward={overview.byAgentPreviousMonthBeForward}
+          byAgentTwoMonthsAgoBeForward={overview.byAgentTwoMonthsAgoBeForward}
+          byAgentAllMonthsBeForward={overview.byAgentAllMonthsBeForward}
+          byAgentCurrentMonthStock={overview.byAgentCurrentMonthStock}
+          byAgentPreviousMonthStock={overview.byAgentPreviousMonthStock}
+          byAgentTwoMonthsAgoStock={overview.byAgentTwoMonthsAgoStock}
+          byAgentAllMonthsStock={overview.byAgentAllMonthsStock}
+          byAgentCurrentMonthAllBuyer={overview.byAgentCurrentMonthAllBuyer}
+          byAgentPreviousMonthAllBuyer={overview.byAgentPreviousMonthAllBuyer}
+          byAgentTwoMonthsAgoAllBuyer={overview.byAgentTwoMonthsAgoAllBuyer}
+          byAgentAllMonthsAllBuyer={overview.byAgentAllMonthsAllBuyer}
           insights={dict.insights}
           agentPreviousMonthLabel={agentPreviousMonthLabel}
           agentTwoMonthsAgoLabel={agentTwoMonthsAgoLabel}

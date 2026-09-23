@@ -1,4 +1,5 @@
 import { createAnonClient } from "@/lib/site/data";
+import { getD1 } from "../../../db";
 import {
   carPriceNumber,
   isBookedNotExported,
@@ -17,15 +18,20 @@ const PAGE_SIZE = 1000;
 type PageFetchResult = Promise<{ data: unknown; error: { message: string } | null }>;
 const FILTER_OPTIONS_CACHE_MS = 60_000;
 const DASHBOARD_CARS_CACHE_MS = 60_000;
+const DASHBOARD_OVERVIEW_CACHE_MS = 60_000;
 let filterOptionsCache:
   | { at: number; cars: Car[] }
   | null = null;
 let dashboardCarsCache:
   | { at: number; result: CarsQueryResult }
   | null = null;
+let dashboardOverviewCache:
+  | { at: number; result: DashboardOverviewResult }
+  | null = null;
 
 export function invalidateDashboardCarsCache() {
   dashboardCarsCache = null;
+  dashboardOverviewCache = null;
 }
 
 /** ดึงทุกแถวแบบหลาย range พร้อมกัน — เร็วกว่า await ทีละหน้า */
@@ -678,6 +684,234 @@ export type DashboardKpi = {
   /** เงินที่ต้องจ่ายพรุ่งนี้ (รวม buy_price / price_thb) */
   incomeTomorrowValueThb: number;
 };
+
+export type DashboardBuyerCount = {
+  buyer: string;
+  count: number;
+  totalValueThb: number;
+};
+
+export type DashboardOverviewResult = {
+  kpi: DashboardKpi;
+  byBuyer: DashboardBuyerCount[];
+  byAgentCurrentMonthBeForward: DashboardBuyerCount[];
+  byAgentPreviousMonthBeForward: DashboardBuyerCount[];
+  byAgentTwoMonthsAgoBeForward: DashboardBuyerCount[];
+  byAgentAllMonthsBeForward: DashboardBuyerCount[];
+  byAgentCurrentMonthStock: DashboardBuyerCount[];
+  byAgentPreviousMonthStock: DashboardBuyerCount[];
+  byAgentTwoMonthsAgoStock: DashboardBuyerCount[];
+  byAgentAllMonthsStock: DashboardBuyerCount[];
+  byAgentCurrentMonthAllBuyer: DashboardBuyerCount[];
+  byAgentPreviousMonthAllBuyer: DashboardBuyerCount[];
+  byAgentTwoMonthsAgoAllBuyer: DashboardBuyerCount[];
+  byAgentAllMonthsAllBuyer: DashboardBuyerCount[];
+  error: string | null;
+};
+
+type CountRow = { count: number; totalValueThb?: number | null };
+type GroupRow = { buyer: string | null; count: number; totalValueThb?: number | null };
+
+const ACTIVE_CARS_SQL = `
+  lower(trim(coalesce(status, ''))) NOT LIKE '%cancel%'
+`;
+const PRICE_SQL = "coalesce(cast(nullif(trim(cast(buy_price as text)), '') as real), 0)";
+const READY_SQL = `
+  trim(coalesce(buyer, '')) = ''
+  AND trim(coalesce(shipped, '')) = ''
+  AND trim(coalesce(booked_shipping, '')) = ''
+`;
+const EXPORTED_SQL = `(trim(coalesce(shipped, '')) != '' OR trim(coalesce(booked_shipping, '')) != '')`;
+const BOOKED_NOT_EXPORTED_SQL = `
+  trim(coalesce(buyer, '')) != ''
+  AND trim(coalesce(shipped, '')) = ''
+  AND trim(coalesce(booked_shipping, '')) = ''
+`;
+const P_OFFICE_SQL = `lower(replace(trim(coalesce(status, '')), ' ', '')) IN ('p.office', 'poffice')`;
+
+function localDateKey(offsetDays = 0): string {
+  const now = new Date();
+  const value = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offsetDays);
+  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(
+    value.getDate()
+  ).padStart(2, "0")}`;
+}
+
+function localMonthKey(offsetMonths = 0): string {
+  const now = new Date();
+  const value = new Date(now.getFullYear(), now.getMonth() + offsetMonths, 1);
+  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function groupRows(rows: GroupRow[]): DashboardBuyerCount[] {
+  return rows.map((row) => ({
+    buyer: (row.buyer ?? "").trim(),
+    count: Number(row.count ?? 0),
+    totalValueThb: Number(row.totalValueThb ?? 0),
+  }));
+}
+
+async function firstCount(sql: string, ...binds: unknown[]): Promise<CountRow> {
+  return (await getD1().prepare(sql).bind(...binds).first<CountRow>()) ?? { count: 0, totalValueThb: 0 };
+}
+
+async function allGroups(sql: string, ...binds: unknown[]): Promise<DashboardBuyerCount[]> {
+  const result = await getD1().prepare(sql).bind(...binds).all<GroupRow>();
+  return groupRows(result.results ?? []);
+}
+
+function agentSql(rangeWhere: string, buyerWhere: string) {
+  return `
+    SELECT trim(agent) AS buyer, count(*) AS count, sum(${PRICE_SQL}) AS totalValueThb
+    FROM cars
+    WHERE ${ACTIVE_CARS_SQL}
+      AND trim(coalesce(agent, '')) != ''
+      ${rangeWhere}
+      ${buyerWhere}
+    GROUP BY trim(agent)
+    ORDER BY count DESC, buyer ASC
+  `;
+}
+
+export async function fetchDashboardOverview(): Promise<DashboardOverviewResult> {
+  const now = Date.now();
+  if (dashboardOverviewCache && now - dashboardOverviewCache.at < DASHBOARD_OVERVIEW_CACHE_MS) {
+    return dashboardOverviewCache.result;
+  }
+
+  try {
+    const today = localDateKey(0);
+    const tomorrow = localDateKey(1);
+    const currentMonth = localMonthKey(0);
+    const previousMonth = localMonthKey(-1);
+    const twoMonthsAgo = localMonthKey(-2);
+    const rangeCurrent = "AND substr(trim(coalesce(income_date, '')), 1, 7) = ?";
+    const rangePrevious = "AND substr(trim(coalesce(income_date, '')), 1, 7) = ?";
+    const rangeAll = "";
+    const scopeBeForward = "AND lower(trim(coalesce(buyer, ''))) = 'be forward'";
+    const scopeStock = "AND lower(trim(coalesce(buyer, ''))) != 'be forward'";
+    const scopeAll = "";
+
+    const [
+      total,
+      exported,
+      booked,
+      available,
+      websitePending,
+      websitePendingBeForward,
+      incomeTomorrow,
+      byBuyer,
+      byAgentCurrentMonthBeForward,
+      byAgentPreviousMonthBeForward,
+      byAgentTwoMonthsAgoBeForward,
+      byAgentAllMonthsBeForward,
+      byAgentCurrentMonthStock,
+      byAgentPreviousMonthStock,
+      byAgentTwoMonthsAgoStock,
+      byAgentAllMonthsStock,
+      byAgentCurrentMonthAllBuyer,
+      byAgentPreviousMonthAllBuyer,
+      byAgentTwoMonthsAgoAllBuyer,
+      byAgentAllMonthsAllBuyer,
+    ] = await Promise.all([
+      firstCount(`SELECT count(*) AS count, sum(${PRICE_SQL}) AS totalValueThb FROM cars WHERE ${ACTIVE_CARS_SQL}`),
+      firstCount(`SELECT count(*) AS count FROM cars WHERE ${ACTIVE_CARS_SQL} AND ${EXPORTED_SQL}`),
+      firstCount(`SELECT count(*) AS count FROM cars WHERE ${ACTIVE_CARS_SQL} AND ${BOOKED_NOT_EXPORTED_SQL}`),
+      firstCount(`SELECT count(*) AS count FROM cars WHERE ${ACTIVE_CARS_SQL} AND ${READY_SQL}`),
+      firstCount(`SELECT count(*) AS count FROM cars WHERE ${ACTIVE_CARS_SQL} AND ${READY_SQL} AND ${P_OFFICE_SQL} AND trim(coalesce(picture, '')) = ''`),
+      firstCount(`SELECT count(*) AS count FROM cars WHERE ${ACTIVE_CARS_SQL} AND ${READY_SQL} AND ${P_OFFICE_SQL} AND lower(trim(coalesce(bf_on_web, ''))) LIKE '%not%'`),
+      firstCount(
+        `SELECT count(*) AS count, sum(${PRICE_SQL}) AS totalValueThb
+         FROM cars
+         WHERE ${ACTIVE_CARS_SQL}
+           AND substr(trim(coalesce(income_date, '')), 1, 10) = ?
+           AND substr(trim(coalesce(income_date, '')), 1, 10) > ?
+           AND lower(trim(coalesce(status, ''))) NOT IN ('comming', 'coming')`,
+        tomorrow,
+        today
+      ),
+      allGroups(
+        `SELECT trim(buyer) AS buyer, count(*) AS count, sum(${PRICE_SQL}) AS totalValueThb
+         FROM cars
+         WHERE ${ACTIVE_CARS_SQL} AND trim(coalesce(buyer, '')) != ''
+         GROUP BY trim(buyer)
+         ORDER BY count DESC, buyer ASC
+         LIMIT 25`
+      ),
+      allGroups(agentSql(rangeCurrent, scopeBeForward), currentMonth),
+      allGroups(agentSql(rangePrevious, scopeBeForward), previousMonth),
+      allGroups(agentSql(rangePrevious, scopeBeForward), twoMonthsAgo),
+      allGroups(agentSql(rangeAll, scopeBeForward)),
+      allGroups(agentSql(rangeCurrent, scopeStock), currentMonth),
+      allGroups(agentSql(rangePrevious, scopeStock), previousMonth),
+      allGroups(agentSql(rangePrevious, scopeStock), twoMonthsAgo),
+      allGroups(agentSql(rangeAll, scopeStock)),
+      allGroups(agentSql(rangeCurrent, scopeAll), currentMonth),
+      allGroups(agentSql(rangePrevious, scopeAll), previousMonth),
+      allGroups(agentSql(rangePrevious, scopeAll), twoMonthsAgo),
+      allGroups(agentSql(rangeAll, scopeAll)),
+    ]);
+
+    const result: DashboardOverviewResult = {
+      kpi: {
+        totalCars: Number(total.count ?? 0),
+        totalValueThb: Number(total.totalValueThb ?? 0),
+        bookedNotExportedCount: Number(booked.count ?? 0),
+        exportedCount: Number(exported.count ?? 0),
+        availableCount: Number(available.count ?? 0),
+        websitePendingCount: Number(websitePending.count ?? 0),
+        websitePendingBeForwardCount: Number(websitePendingBeForward.count ?? 0),
+        incomeTomorrowCount: Number(incomeTomorrow.count ?? 0),
+        incomeTomorrowValueThb: Number(incomeTomorrow.totalValueThb ?? 0),
+      },
+      byBuyer,
+      byAgentCurrentMonthBeForward,
+      byAgentPreviousMonthBeForward,
+      byAgentTwoMonthsAgoBeForward,
+      byAgentAllMonthsBeForward,
+      byAgentCurrentMonthStock,
+      byAgentPreviousMonthStock,
+      byAgentTwoMonthsAgoStock,
+      byAgentAllMonthsStock,
+      byAgentCurrentMonthAllBuyer,
+      byAgentPreviousMonthAllBuyer,
+      byAgentTwoMonthsAgoAllBuyer,
+      byAgentAllMonthsAllBuyer,
+      error: null,
+    };
+    dashboardOverviewCache = { at: now, result };
+    return result;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return {
+      kpi: {
+        totalCars: 0,
+        totalValueThb: 0,
+        bookedNotExportedCount: 0,
+        exportedCount: 0,
+        availableCount: 0,
+        websitePendingCount: 0,
+        websitePendingBeForwardCount: 0,
+        incomeTomorrowCount: 0,
+        incomeTomorrowValueThb: 0,
+      },
+      byBuyer: [],
+      byAgentCurrentMonthBeForward: [],
+      byAgentPreviousMonthBeForward: [],
+      byAgentTwoMonthsAgoBeForward: [],
+      byAgentAllMonthsBeForward: [],
+      byAgentCurrentMonthStock: [],
+      byAgentPreviousMonthStock: [],
+      byAgentTwoMonthsAgoStock: [],
+      byAgentAllMonthsStock: [],
+      byAgentCurrentMonthAllBuyer: [],
+      byAgentPreviousMonthAllBuyer: [],
+      byAgentTwoMonthsAgoAllBuyer: [],
+      byAgentAllMonthsAllBuyer: [],
+      error: msg,
+    };
+  }
+}
 
 /** ไม่นับรวมใน KPI ภาพรวม (เช่น รถทั้งหมด) */
 export function isCancelledStatus(car: Car): boolean {
