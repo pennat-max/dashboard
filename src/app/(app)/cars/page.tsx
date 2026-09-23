@@ -6,6 +6,7 @@ import { carsInventoryStateFromSearchParams } from "@/lib/cars-inventory-filter"
 import { fetchCarsForDashboard } from "@/lib/data/cars";
 
 export const dynamic = "force-dynamic";
+const PUBLIC_CARS_CLIENT_LIMIT = 500;
 
 type PageProps = {
   searchParams: Record<string, string | string[] | undefined>;
@@ -17,6 +18,7 @@ export default async function CarsPage({ searchParams }: PageProps) {
 
   const result = await fetchCarsForDashboard();
   const initialFilters = carsInventoryStateFromSearchParams(searchParams);
+  const initialCars = result.cars.slice(0, PUBLIC_CARS_CLIENT_LIMIT);
 
   return (
     <>
@@ -25,7 +27,11 @@ export default async function CarsPage({ searchParams }: PageProps) {
           <SupabaseErrorBanner message={result.error} labels={dict.error} />
         </div>
       )}
-      <CarsInventoryClient allCars={result.cars} initialFilters={initialFilters} />
+      <CarsInventoryClient
+        allCars={initialCars}
+        totalCars={result.cars.length}
+        initialFilters={initialFilters}
+      />
     </>
   );
 }

@@ -31,10 +31,11 @@ function uniqueByField(
 
 type Props = {
   allCars: Car[];
+  totalCars?: number;
   initialFilters: CarsInventoryFilterState;
 };
 
-export function CarsInventoryClient({ allCars, initialFilters }: Props) {
+export function CarsInventoryClient({ allCars, totalCars = allCars.length, initialFilters }: Props) {
   const [filters, setFilters] = useState<CarsInventoryFilterState>(initialFilters);
   const [visibleLimit, setVisibleLimit] = useState(INITIAL_VISIBLE_ROWS);
 
@@ -84,7 +85,7 @@ export function CarsInventoryClient({ allCars, initialFilters }: Props) {
           filters.driveType.length ||
           filters.status !== "all" ||
           filters.destination !== "all"
-            ? ` (จากทั้งหมด ${allCars.length})`
+            ? ` (จากทั้งหมด ${totalCars})`
             : null}
         </p>
       </section>
