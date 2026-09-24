@@ -1,4 +1,5 @@
 import {
+  fetchCarById,
   fetchCarsForOrderTracking,
   fetchOrderTrackingSaleStatusSummary,
   fetchOrderTrackingSummarySnapshot,
@@ -29,12 +30,19 @@ function parseOrderSearchParam(order: string | string[] | undefined): string | n
 
 export type OrderTrackingSearchParams = {
   order?: string | string[];
+  focusCarRowId?: string | string[];
   carRowId?: string | string[];
   focusCar?: string | string[];
   car_row_id?: string | string[];
   search?: string | string[];
   plate?: string | string[];
 };
+
+function parseFirstSearchParam(value: string | string[] | undefined): string | null {
+  if (typeof value === "string") return value.trim() || null;
+  if (Array.isArray(value)) return String(value[0] ?? "").trim() || null;
+  return null;
+}
 
 type LoadOrderTrackingPageOptions = {
   summaryOnly?: boolean;
@@ -93,14 +101,25 @@ export async function loadOrderTrackingPageData(
   let itemsError: string | null = null;
   let updatesError: string | null = null;
   let itemIndexError: string | null = null;
+  const focusedCarRef =
+    parseFirstSearchParam(searchParams?.focusCarRowId) ??
+    parseFirstSearchParam(searchParams?.carRowId) ??
+    parseFirstSearchParam(searchParams?.focusCar) ??
+    parseFirstSearchParam(searchParams?.car_row_id);
 
   if (!summaryOnly || chipCacheExperiment) {
-    const carsPack = await fetchCarsForOrderTracking({
-      includeShipped: options?.includeShipped !== false,
-      maxCars: options?.maxCars,
-    });
-    cars = carsPack.cars;
-    carsError = carsPack.error;
+    if (chipCacheExperiment && focusedCarRef) {
+      const focusedPack = await fetchCarById(focusedCarRef);
+      cars = focusedPack.car ? [focusedPack.car] : [];
+      carsError = focusedPack.error;
+    } else {
+      const carsPack = await fetchCarsForOrderTracking({
+        includeShipped: options?.includeShipped !== false,
+        maxCars: options?.maxCars,
+      });
+      cars = carsPack.cars;
+      carsError = carsPack.error;
+    }
     if (chipCacheExperiment) {
       const initialCars = pickInitialDetailCars(cars, options?.initialSaleStatusFilters, initialDetailLimit);
       experimentInitialHydratedCarKeys = Array.from(new Set(initialCars.flatMap(carKeys)));
