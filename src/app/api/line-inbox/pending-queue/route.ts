@@ -396,6 +396,15 @@ function lineMessageTimeMs(row: Pick<PendingQueueDbRow, "received_at">): number 
   return Number.isFinite(t) ? t : 0;
 }
 
+function bangkokDayRangeIso(ymd: string): { start: string; end: string } | null {
+  const startMs = Date.parse(`${ymd}T00:00:00+07:00`);
+  if (!Number.isFinite(startMs)) return null;
+  return {
+    start: new Date(startMs).toISOString(),
+    end: new Date(startMs + 24 * 60 * 60 * 1000).toISOString(),
+  };
+}
+
 function sourceScopeKey(row: Pick<PendingQueueDbRow, "source_type" | "group_id" | "user_id">): string {
   const sourceType = cleanString(row.source_type) || "unknown";
   const id = cleanString(row.group_id) || cleanString(row.user_id);
@@ -1039,8 +1048,18 @@ export async function GET(request: Request) {
     const summaryMode = mode === "summary";
     const filter = parseLineInboxQueueFilter(url.searchParams.get("filter"));
     const todayYmd = todayYmdBangkokForLineInboxQueue();
+    const queryYmd =
+      filter === "today"
+        ? todayYmd
+        : filter === "yesterday"
+          ? new Date(Date.parse(`${todayYmd}T12:00:00+07:00`) - 24 * 60 * 60 * 1000).toLocaleDateString("en-CA", {
+              timeZone: "Asia/Bangkok",
+            })
+          : "";
+    const queryDateRange = queryYmd ? bangkokDayRangeIso(queryYmd) : null;
     const supabase = createServiceRoleClient();
-    const { data, error } = await supabase
+
+    let query = supabase
       .from(LINE_INBOX_MESSAGES_TABLE)
       .select(
         "id,line_message_id,received_at,raw_text,source_type,group_id,user_id,workflow_status,analyze_status,analyze_payload,car_row_id,needs_human_review"
@@ -1048,6 +1067,13 @@ export async function GET(request: Request) {
       .eq("workflow_status", "pending")
       .order("received_at", { ascending: false })
       .limit(LINE_PENDING_QUEUE_ROW_LIMIT);
+
+    if (queryDateRange) {
+      const receivedAtColumn = "received_at";
+      query = query.gte(receivedAtColumn, queryDateRange.start).lt(receivedAtColumn, queryDateRange.end);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       const m = error.message.toLowerCase();
