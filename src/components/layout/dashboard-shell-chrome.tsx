@@ -5,7 +5,7 @@ import { AuthLoginLink } from "@/components/auth/auth-login-link";
 import { AuthSignOutButton } from "@/components/auth/auth-sign-out-button";
 import type { UserRole } from "@/lib/auth/user-role";
 import { cn } from "@/lib/utils";
-import { Users } from "lucide-react";
+import { MessageCircle, Users } from "lucide-react";
 import { usePathname } from "next/navigation";
 
 type Props = {
@@ -30,6 +30,16 @@ export function DashboardShellChrome({ children, userEmail = null, userRole = nu
         <div className="flex flex-wrap items-start justify-end gap-3 px-4 pt-4 md:px-8 lg:px-10">
           {userEmail ? (
             <>
+              <Link
+                href="/line-jobs"
+                className={cn(
+                  "inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-background px-3 text-sm font-medium text-foreground shadow-sm",
+                  "transition-colors hover:bg-muted/80"
+                )}
+              >
+                <MessageCircle className="size-4 opacity-80" aria-hidden />
+                LINE Jobs
+              </Link>
               {userRole === 4 ? (
                 <Link
                   href="/dashboard/users"

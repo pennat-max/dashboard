@@ -3,12 +3,13 @@ import { requireManageUsersRole } from "@/lib/auth/mutation-guard";
 import { isUserRole } from "@/lib/auth/user-role";
 import { createServiceRoleClient } from "@/lib/site/data";
 
-type RouteContext = { params: { userId: string } };
+type RouteContext = { params: Promise<{ userId: string }> };
 
 export async function PATCH(request: Request, context: RouteContext) {
   const gate = await requireManageUsersRole();
   if (!gate.ok) return gate.response;
-  const userId = context.params.userId?.trim();
+  const params = await context.params;
+  const userId = params.userId?.trim();
   if (!userId) return NextResponse.json({ error: "Missing user id" }, { status: 400 });
   let body: { role?: number };
   try { body = await request.json(); } catch { return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 }); }

@@ -2,6 +2,7 @@ import {
   fetchCarsForOrderTracking,
   fetchOrderTrackingSaleStatusSummary,
   fetchOrderTrackingSummarySnapshot,
+  type OrderTrackingSaleStatusSummary,
 } from "@/lib/data/cars";
 import { fetchOrderItemFilterIndexByCars, fetchOrderItemsAndUpdatesByCars } from "@/lib/data/orders";
 import type { Car } from "@/types/car";
@@ -79,7 +80,8 @@ export async function loadOrderTrackingPageData(
   const initialDetailLimit = Math.max(1, Math.min(50, Math.floor(Number(options?.initialDetailLimit ?? 50))));
   const { snapshot: summarySnapshotAllCars, error: summarySnapshotError } = await fetchOrderTrackingSummarySnapshot();
   const fallbackSaleSummary = summarySnapshotAllCars ? null : await fetchOrderTrackingSaleStatusSummary();
-  const saleStatusSummaryAllCars = summarySnapshotAllCars?.saleStatusCounts ?? fallbackSaleSummary?.summary ?? {};
+  const saleStatusSummaryAllCars: OrderTrackingSaleStatusSummary =
+    summarySnapshotAllCars?.saleStatusCounts ?? fallbackSaleSummary?.summary ?? ({} as OrderTrackingSaleStatusSummary);
   const saleSummaryError = fallbackSaleSummary?.error ?? null;
 
   let cars: Awaited<ReturnType<typeof fetchCarsForOrderTracking>>["cars"] = [];
