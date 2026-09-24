@@ -309,7 +309,7 @@ assert.deepStrictEqual(
   "pending queue filter counts separate ready, manual, and waiting-car groups"
 );
 const receiptReply = buildLineWebhookReceiptAcknowledgementText();
-assert(receiptReply.includes("รับข้อความแล้วค่ะ"), "webhook receipt acknowledgement says the message was received");
+assert.strictEqual(receiptReply, "รับทราบ", "webhook receipt acknowledgement stays short");
 assert(!receiptReply.includes("บันทึกงาน"), "webhook receipt acknowledgement must not claim work was saved");
 assert(isLineInboxSystemAcknowledgementText(receiptReply), "webhook receipt acknowledgement is ignored by the analyzer loop guard");
 assert.strictEqual(classifyLineSendError(429, "You have reached your monthly limit."), "line_quota_limit", "LINE monthly quota errors are classified");
@@ -893,16 +893,8 @@ const approvalReply = buildLineApprovalAcknowledgementText({
     { name: "เปลี่ยนแม็ก+ยาง ตามรูป", assignee: "AOR", status: "" },
   ],
 });
-assert(approvalReply.includes("รถ: กท-2692 ROCCO PRE"), "approval reply includes non-duplicated car label");
-assert(!approvalReply.includes("กท-2692 กท-2692 ROCCO"), "approval reply does not duplicate plate");
-assert(approvalReply.includes("บันทึกงานเรียบร้อย"), "approval reply uses compact saved header");
-assert(approvalReply.includes("รายการ:"), "approval reply uses compact item header");
-assert(approvalReply.includes("1. แต่งเหมือนรูปทุกอย่าง : PREW/สั่ง"), "approval reply uses compact assignee/status format");
-assert(approvalReply.includes("2. ยกเลิกติดกันแมลง+กันสาด : ยังไม่ระบุ/เช็ค"), "approval reply shows compact missing-assignee fallback");
-assert(approvalReply.includes("3. เปลี่ยนแม็ก+ยาง ตามรูป : AOR/ยังไม่ระบุ"), "approval reply shows compact missing-status fallback");
-assert(!approvalReply.includes("ผู้รับผิดชอบ:"), "approval reply does not use verbose assignee label");
-assert(!approvalReply.includes("สถานะ:"), "approval reply does not use verbose status label");
-assert(approvalReply.includes("ดูงาน:"), "approval reply uses compact review link label");
+assert.strictEqual(approvalReply, `รับทราบ\n${koTho2692ReviewUrl}`, "approval reply is only acknowledgement plus review link");
+assert(!approvalReply.includes("รายการ:"), "approval reply does not list work items in LINE");
 assert(approvalReply.includes("focusCarRowId=64ceddf5-2f7b-4e63-b8aa-71cf6d8d537b"), "approval reply includes focused car row id link");
 assert(approvalReply.includes("search=2692"), "approval reply includes short search deep link");
 const travo95295ReviewUrl = buildLineOrderReviewUrl({
@@ -1288,12 +1280,11 @@ const autoSaveReply = buildLineAutoSaveAcknowledgementText({
   attachedPhotoCount: 2,
   reviewUrl: "https://used-car-export-dashboard.vercel.app/m/orders?load=full&focusCarRowId=car-row-2211&search=2211",
 });
-assert(autoSaveReply.includes("บันทึกงานอัตโนมัติแล้ว"), "auto-save reply says the work was auto-saved");
-assert(autoSaveReply.includes("งานที่เพิ่ม:"), "auto-save reply includes created section");
-assert(autoSaveReply.includes("1. กลับสี rocco ขาวมุก : PREW/ต้องสั่ง"), "auto-save reply includes created item");
-assert(autoSaveReply.includes("งานที่อัปเดต:"), "auto-save reply includes updated section");
-assert(autoSaveReply.includes("1. กรอไมล์ 32,000 KM : PREW/เช็ค → PREW/ต้องสั่ง"), "auto-save reply includes before/after update");
-assert(autoSaveReply.includes("แนบรูปแล้ว 2 รูป"), "auto-save reply includes attached photo count");
+assert.strictEqual(
+  autoSaveReply,
+  "รับทราบ\nhttps://used-car-export-dashboard.vercel.app/m/orders?load=full&focusCarRowId=car-row-2211&search=2211",
+  "auto-save reply is only acknowledgement plus review link"
+);
 assert(autoSaveReply.includes("focusCarRowId=car-row-2211&search=2211"), "auto-save reply includes review deep link");
 assert(!autoSaveReply.includes("skipped item"), "auto-save reply does not include skipped/blocked items");
 
@@ -1316,15 +1307,11 @@ const sectionedApprovalReply = buildLineApprovalAcknowledgementText({
     { name: "ทำงานสีรอบคัน", assignee: "PREW", status: "เช็ค" },
   ],
 });
-assert(sectionedApprovalReply.includes("งานใหม่ที่เพิ่ม:"), "sectioned reply has created item heading");
-assert(sectionedApprovalReply.includes("1. ทำเบาะหนัง : PREW/เช็ค"), "sectioned reply lists created items compactly");
-assert(sectionedApprovalReply.includes("งานที่แก้ไข/อัปเดต:"), "sectioned reply has updated item heading");
-assert(
-  sectionedApprovalReply.includes("1. กรอไมล์ 32,000 KM : PREW/เช็ค → PREW/ต้องสั่ง"),
-  "sectioned reply shows updated item before/after"
+assert.strictEqual(
+  sectionedApprovalReply,
+  "รับทราบ\nhttps://used-car-export-dashboard.vercel.app/m/orders?load=full&focusCarRowId=row-4055&search=4055",
+  "sectioned approval reply is only acknowledgement plus review link"
 );
-assert(sectionedApprovalReply.includes("งานเดิมในรถคันนี้:"), "sectioned reply has existing item heading");
-assert(sectionedApprovalReply.includes("1. กันสาด : PREW/เช็ค"), "sectioned reply lists existing work");
 assert(sectionedApprovalReply.includes("focusCarRowId=row-4055&search=4055"), "sectioned reply keeps review deep link");
 assert(!sectionedApprovalReply.includes("รายการ:"), "sectioned reply does not use the legacy generic list heading");
 assert(!sectionedApprovalReply.includes("ข้ามรายการนี้"), "sectioned reply excludes skipped/unapproved items");
@@ -1334,8 +1321,11 @@ const newOnlyApprovalReply = buildLineApprovalAcknowledgementText({
   reviewUrl: "https://used-car-export-dashboard.vercel.app/m/orders?load=full&search=51072",
   createdItems: [{ name: "กันสาด", assignee: "", status: "เช็ค" }],
 });
-assert(newOnlyApprovalReply.includes("งานใหม่ที่เพิ่ม:"), "new-only reply uses created section");
-assert(newOnlyApprovalReply.includes("1. กันสาด : ยังไม่ระบุ/เช็ค"), "new-only reply keeps missing assignee fallback");
+assert.strictEqual(
+  newOnlyApprovalReply,
+  "รับทราบ\nhttps://used-car-export-dashboard.vercel.app/m/orders?load=full&search=51072",
+  "new-only reply is only acknowledgement plus review link"
+);
 assert(!newOnlyApprovalReply.includes("งานเดิมในรถคันนี้:"), "new-only reply omits empty existing section");
 
 const cappedExistingReply = buildLineApprovalAcknowledgementText({
@@ -1347,10 +1337,9 @@ const cappedExistingReply = buildLineApprovalAcknowledgementText({
   })),
   reviewUrl: travo95295ReviewUrl,
 });
-assert(cappedExistingReply.includes("งานเดิมในรถคันนี้:"), "existing-only section is rendered when provided");
-assert(cappedExistingReply.includes("10. งานเดิม 10 : PREW/เช็ค"), "existing section shows first ten items");
+assert.strictEqual(cappedExistingReply, `รับทราบ\n${travo95295ReviewUrl}`, "existing-only reply is only acknowledgement plus review link");
 assert(!cappedExistingReply.includes("งานเดิม 11 : PREW/เช็ค"), "existing section hides item eleven by default");
-assert(cappedExistingReply.includes("...และอีก 2 รายการ"), "existing section caps long LINE reply lists");
+assert(!cappedExistingReply.includes("...และอีก 2 รายการ"), "existing section is not listed in LINE reply");
 
 const pendingQueueRoute = fs.readFileSync(
   path.join(root, "src/app/api/line-inbox/pending-queue/route.ts"),

@@ -36,6 +36,7 @@ const UNKNOWN_LINE_VALUE = "ยังไม่ระบุ";
 const DEFAULT_EXISTING_ITEM_LIMIT = 10;
 
 const SYSTEM_ACK_PATTERNS = [
+  /^รับทราบ$/i,
   /รับข้อความแล้วค่ะ\s*✅?/i,
   /ระบบกำลังตรวจและจัดเข้าคิวงาน/i,
   /รับทราบค่ะ\s*✅?/i,
@@ -224,6 +225,10 @@ function appendExistingItemSection(
   lines.push("");
 }
 
+export function buildCompactLineOrderAcknowledgementText(reviewUrl?: string | null): string {
+  const safeReviewUrl = cleanLine(reviewUrl ?? "") || LINE_ORDER_REVIEW_URL;
+  return ["รับทราบ", safeReviewUrl].join("\n");
+}
 export function buildLineApprovalAcknowledgementText({
   carTitle,
   approvedItems,
@@ -241,38 +246,13 @@ export function buildLineApprovalAcknowledgementText({
   existingItemLimit?: number;
   reviewUrl?: string | null;
 }): string {
-  const car = cleanLine(carTitle ?? "");
-  const items = uniqueApprovalItems(approvedItems ?? []);
-  const created = uniqueApprovalItems(createdItems ?? []);
-  const updated = uniqueUpdatedItems(updatedItems ?? []);
-  const existing = uniqueApprovalItems(existingItems ?? []);
-  const usesSectionedItems = created.length > 0 || updated.length > 0 || existing.length > 0;
-  const safeReviewUrl = cleanLine(reviewUrl ?? "") || LINE_ORDER_REVIEW_URL;
-  const lines = [
-    "รับทราบค่ะ ✅",
-    "",
-    "บันทึกงานเรียบร้อย",
-    "",
-  ];
-
-  if (car) {
-    lines.push(`รถ: ${car}`, "");
-  }
-
-  if (usesSectionedItems) {
-    appendApprovalItemSection(lines, "งานใหม่ที่เพิ่ม:", created);
-    appendUpdatedItemSection(lines, "งานที่แก้ไข/อัปเดต:", updated);
-    appendExistingItemSection(lines, "งานเดิมในรถคันนี้:", existing, existingItemLimit);
-  } else if (items.length > 0) {
-    lines.push("รายการ:");
-    for (const [index, item] of items.entries()) {
-      lines.push(formatCompactItemLine(index, item));
-    }
-    lines.push("");
-  }
-
-  lines.push("ดูงาน:", safeReviewUrl);
-  return lines.join("\n");
+  void carTitle;
+  void approvedItems;
+  void createdItems;
+  void updatedItems;
+  void existingItems;
+  void existingItemLimit;
+  return buildCompactLineOrderAcknowledgementText(reviewUrl);
 }
 
 export function buildLineReviewLinkAcknowledgementText(carTitle?: string | null): string {
@@ -287,5 +267,5 @@ export function buildLineReviewLinkAcknowledgementText(carTitle?: string | null)
 }
 
 export function buildLineWebhookReceiptAcknowledgementText(): string {
-  return ["รับข้อความแล้วค่ะ ✅", "ระบบกำลังตรวจและจัดเข้าคิวงาน"].join("\n");
+  return "รับทราบ";
 }

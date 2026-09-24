@@ -9,6 +9,7 @@ import {
 } from "@/lib/line-inbox/line-inbox-messages";
 import { persistLineInboxConfirmations, type PersistConfirmRow } from "@/lib/line-inbox/persist-line-inbox-confirm";
 import {
+  buildCompactLineOrderAcknowledgementText,
   buildLineCarDisplayLabel,
   buildLineOrderReviewUrl,
   type LineApprovalAcknowledgementItem,
@@ -198,34 +199,9 @@ export function buildLineAutoSaveAcknowledgementText(params: {
   attachedPhotoCount?: number;
   reviewUrl?: string | null;
 }): string {
-  const carTitle = cleanLine(params.carTitle);
-  const createdItems = (params.createdItems ?? []).filter((item) =>
-    typeof item === "string" ? cleanLine(item) : cleanLine(item.name)
+  return buildCompactLineOrderAcknowledgementText(
+    cleanLine(params.reviewUrl) || buildLineOrderReviewUrl({ plate: params.carTitle })
   );
-  const updatedItems = (params.updatedItems ?? []).filter((entry) => cleanLine(entry.item.label));
-  const attachedPhotoCount = Math.max(0, Math.floor(Number(params.attachedPhotoCount ?? 0)));
-  const reviewUrl = cleanLine(params.reviewUrl);
-  const lines = ["รับทราบค่ะ ✅", "บันทึกงานอัตโนมัติแล้ว", ""];
-
-  if (carTitle) lines.push(`รถ: ${carTitle}`, "");
-  if (createdItems.length > 0) {
-    lines.push("งานที่เพิ่ม:");
-    for (const [index, item] of createdItems.entries()) lines.push(compactItemLine(index, item));
-    lines.push("");
-  }
-  if (updatedItems.length > 0) {
-    lines.push("งานที่อัปเดต:");
-    for (const [index, entry] of updatedItems.entries()) {
-      lines.push(updatedItemLine(index, entry.item, entry.previous));
-    }
-    lines.push("");
-  }
-  if (attachedPhotoCount > 0) {
-    lines.push("รูปแนบ:", `- แนบรูปแล้ว ${attachedPhotoCount} รูป`, "");
-  }
-  lines.push("ถ้ารายการผิด กรุณาเปิดลิงก์นี้เพื่อแก้ไข/ลบ:");
-  lines.push(reviewUrl || buildLineOrderReviewUrl({ plate: carTitle }));
-  return lines.join("\n");
 }
 
 export function evaluateLineAutoSaveEligibility(params: {
