@@ -552,6 +552,28 @@ type OrderItem = {
 
 type OrderPhotoEntry = { id: string; url: string; created_at?: string | null };
 
+type LineThreadMessage = {
+  id: string;
+  received_at: string;
+  raw_text: string;
+  workflow_status: string;
+  analyze_status: string;
+  needs_human_review: boolean;
+  source_label: string;
+  attachments: Array<{ url: string; file_name: string | null; mime_type: string | null }>;
+  suggested_items: Array<{ name: string; status: string; assignee: string }>;
+};
+
+type LineThreadSummary = {
+  total_messages: number;
+  total_photos: number;
+  pending_messages: number;
+  confirmed_messages: number;
+  review_messages: number;
+  latest_at: string;
+  messages: LineThreadMessage[];
+};
+
 type Order = {
   id: string;
   carRowId: string | null;
@@ -591,6 +613,7 @@ type Order = {
     createdAt: string;
   }>;
   items: OrderItem[];
+  lineThread?: LineThreadSummary | null;
 };
 
 /**
@@ -641,6 +664,7 @@ type MobileOrderTrackingHomeProps = {
       created_at?: string | null;
     }>
   >;
+  lineThreadsByCar?: Record<string, LineThreadSummary>;
   orderItemFilterIndexByCar?: Record<string, OrderItemFilterIndexLite[]>;
   orderChipCacheExperimentEnabled?: boolean;
   orderChipCacheBadgeLabel?: string | null;
@@ -1606,7 +1630,8 @@ function toOrderFromCar(
   car: Car,
   index: number,
   orderItemsByCar: NonNullable<MobileOrderTrackingHomeProps["orderItemsByCar"]>,
-  orderUpdatesByCar: NonNullable<MobileOrderTrackingHomeProps["orderUpdatesByCar"]>
+  orderUpdatesByCar: NonNullable<MobileOrderTrackingHomeProps["orderUpdatesByCar"]>,
+  lineThreadsByCar: NonNullable<MobileOrderTrackingHomeProps["lineThreadsByCar"]> = {}
 ): Order {
   const row = car as Car & {
     total_cost?: string | number | null;
@@ -1656,6 +1681,7 @@ function toOrderFromCar(
   const itemKeyByCarId = `id:${String(car.id ?? "").trim()}`;
   const sourceItems = [...(orderItemsByCar[itemKeyByRowId] ?? []), ...(orderItemsByCar[itemKeyByCarId] ?? [])];
   const sourceUpdates = [...(orderUpdatesByCar[itemKeyByRowId] ?? []), ...(orderUpdatesByCar[itemKeyByCarId] ?? [])];
+  const lineThread = lineThreadsByCar[itemKeyByRowId] ?? lineThreadsByCar[itemKeyByCarId] ?? null;
   const seen = new Set<string>();
   const items: OrderItem[] = [];
   for (const item of sourceItems) {
@@ -1743,6 +1769,7 @@ function toOrderFromCar(
     expensePdf: partAccessoriesLink,
     updates,
     items,
+    lineThread,
   };
 }
 
@@ -2275,6 +2302,120 @@ function orderCarSummaryFieldsHaveThai(order: Order): boolean {
   const repair = String(order.repairDetail || order.repairDetails || "").trim();
   const doc = String(order.documentDetail || "").trim();
   return /[\u0E00-\u0E7F]/.test(`${cost}\n${repair}\n${doc}`);
+}
+
+function formatLineThreadTime(value: string): string {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "-";
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return raw;
+  return date.toLocaleString("th-TH", {
+    timeZone: BANGKOK_TZ,
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function lineThreadStatusLabel(message: LineThreadMessage): string {
+  if (message.needs_human_review || message.analyze_status === "needs_human_review") return "รอตรวจ";
+  if (message.workflow_status === "confirmed") return "บันทึกแล้ว";
+  if (message.workflow_status === "pending") return "รอดำเนินการ";
+  return message.workflow_status || "LINE";
+}
+
+function LineThreadPanel({ thread, uiLang }: { thread: LineThreadSummary | null | undefined; uiLang: UiLang }) {
+  if (!thread || thread.total_messages <= 0) return null;
+  const latestMessages = (thread.messages ?? []).slice(0, 5);
+  return (
+    <section className="mb-2 rounded-2xl bg-sky-50/80 px-2.5 py-2 ring-1 ring-sky-100">
+      <div className="mb-2 flex items-start justify-between gap-2">
+        <div>
+          <div className="text-xs font-bold tracking-wide text-sky-950">
+            {uiLang === "en" ? "LINE thread for this car" : "LINE Thread ของรถคันนี้"}
+          </div>
+          <div className="mt-0.5 text-[11px] font-medium leading-relaxed text-sky-800">
+            {uiLang === "en"
+              ? "Messages, photos, and extracted tasks captured from the group."
+              : "รวมข้อความ รูป และงานที่ระบบจับจากกลุ่ม LINE ไว้กับรถคันนี้"}
+          </div>
+        </div>
+        <div className="shrink-0 rounded-full bg-white px-2 py-1 text-[11px] font-bold text-sky-900 ring-1 ring-sky-100">
+          {thread.total_messages} msg
+        </div>
+      </div>
+      <div className="mb-2 grid grid-cols-4 gap-1.5 text-center">
+        <div className="rounded-xl bg-white px-1.5 py-1.5 ring-1 ring-sky-100">
+          <div className="text-[10px] font-medium text-slate-500">{uiLang === "en" ? "Photos" : "รูป"}</div>
+          <div className="text-sm font-bold text-slate-900">{thread.total_photos}</div>
+        </div>
+        <div className="rounded-xl bg-white px-1.5 py-1.5 ring-1 ring-sky-100">
+          <div className="text-[10px] font-medium text-slate-500">{uiLang === "en" ? "Pending" : "รอ"}</div>
+          <div className="text-sm font-bold text-amber-700">{thread.pending_messages}</div>
+        </div>
+        <div className="rounded-xl bg-white px-1.5 py-1.5 ring-1 ring-sky-100">
+          <div className="text-[10px] font-medium text-slate-500">{uiLang === "en" ? "Saved" : "บันทึก"}</div>
+          <div className="text-sm font-bold text-emerald-700">{thread.confirmed_messages}</div>
+        </div>
+        <div className="rounded-xl bg-white px-1.5 py-1.5 ring-1 ring-sky-100">
+          <div className="text-[10px] font-medium text-slate-500">{uiLang === "en" ? "Review" : "ตรวจ"}</div>
+          <div className="text-sm font-bold text-rose-700">{thread.review_messages}</div>
+        </div>
+      </div>
+      <div className="space-y-1.5">
+        {latestMessages.map((message) => (
+          <div key={message.id} className="rounded-xl bg-white p-2 ring-1 ring-sky-100">
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <span className="min-w-0 truncate text-[11px] font-semibold text-slate-500">
+                {formatLineThreadTime(message.received_at)} · {message.source_label}
+              </span>
+              <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-700">
+                {lineThreadStatusLabel(message)}
+              </span>
+            </div>
+            {message.raw_text ? (
+              <p className="whitespace-pre-wrap break-words text-xs font-medium leading-relaxed text-slate-800">
+                {message.raw_text}
+              </p>
+            ) : null}
+            {message.attachments.length > 0 ? (
+              <div className="mt-2 flex gap-1.5 overflow-x-auto pb-0.5">
+                {message.attachments.slice(0, 6).map((attachment) => (
+                  <a
+                    key={attachment.url}
+                    href={attachment.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="block h-14 w-16 shrink-0 overflow-hidden rounded-lg bg-slate-100 ring-1 ring-slate-200"
+                  >
+                    <Image
+                      src={attachment.url}
+                      alt={attachment.file_name || "LINE image"}
+                      width={64}
+                      height={56}
+                      loading="lazy"
+                      className="h-14 w-16 object-cover"
+                    />
+                  </a>
+                ))}
+              </div>
+            ) : null}
+            {message.suggested_items.length > 0 ? (
+              <div className="mt-2 flex flex-wrap gap-1">
+                {message.suggested_items.slice(0, 5).map((item, index) => (
+                  <span key={`${message.id}-${index}`} className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-700">
+                    {item.name}
+                    {item.assignee || item.status ? ` · ${[item.assignee, item.status].filter(Boolean).join("/")}` : ""}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
 }
 
 const OrderCard = React.memo(function OrderCard({
@@ -4089,6 +4230,8 @@ const OrderCard = React.memo(function OrderCard({
         </div>
       ) : null}
 
+      <LineThreadPanel thread={order.lineThread} uiLang={uiLang} />
+
       <LineInboxCarAiSection
         orderId={order.id}
         carRowId={order.carRowId}
@@ -4707,6 +4850,7 @@ export function MobileOrderTrackingHome({
   carsData = [],
   orderItemsByCar = {},
   orderUpdatesByCar = {},
+  lineThreadsByCar = {},
   orderItemFilterIndexByCar = {},
   orderChipCacheExperimentEnabled = false,
   orderChipCacheBadgeLabel = null,
@@ -4743,6 +4887,7 @@ export function MobileOrderTrackingHome({
   const experimentScrollBufferRafRef = useRef<number | null>(null);
   const [experimentOrderItemsByCar, setExperimentOrderItemsByCar] = useState(orderItemsByCar);
   const [experimentOrderUpdatesByCar, setExperimentOrderUpdatesByCar] = useState(orderUpdatesByCar);
+  const [experimentLineThreadsByCar, setExperimentLineThreadsByCar] = useState(lineThreadsByCar);
   const [experimentHydratedCarKeys, setExperimentHydratedCarKeys] = useState<Set<string>>(
     () => new Set(experimentInitialHydratedCarKeys)
   );
@@ -4793,11 +4938,12 @@ export function MobileOrderTrackingHome({
     if (!orderChipCacheExperimentEnabled) return;
     setExperimentOrderItemsByCar(orderItemsByCar);
     setExperimentOrderUpdatesByCar(orderUpdatesByCar);
+    setExperimentLineThreadsByCar(lineThreadsByCar);
     setExperimentHydratedCarKeys(new Set(experimentInitialHydratedCarKeys));
     experimentInflightKeysRef.current.clear();
     setExperimentRequestedCount(ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT);
     setExperimentDetailError(null);
-  }, [orderChipCacheExperimentEnabled, orderItemsByCar, orderUpdatesByCar, experimentInitialHydratedCarKeys]);
+  }, [orderChipCacheExperimentEnabled, orderItemsByCar, orderUpdatesByCar, lineThreadsByCar, experimentInitialHydratedCarKeys]);
   const suppressDataWarningsDuringDeferredHydration =
     deferCarsHydration && String(searchParams?.get("load") ?? "").trim().toLowerCase() !== "full";
   const isDeferredHydrationLoading =
@@ -4832,6 +4978,7 @@ export function MobileOrderTrackingHome({
 
   const effectiveOrderItemsByCar = orderChipCacheExperimentEnabled ? experimentOrderItemsByCar : orderItemsByCar;
   const effectiveOrderUpdatesByCar = orderChipCacheExperimentEnabled ? experimentOrderUpdatesByCar : orderUpdatesByCar;
+  const effectiveLineThreadsByCar = orderChipCacheExperimentEnabled ? experimentLineThreadsByCar : lineThreadsByCar;
 
   useEffect(() => {
     liveItemsToolbarSigRef.current = {};
@@ -4843,12 +4990,14 @@ export function MobileOrderTrackingHome({
     const base =
       !disableDemoFallback && carsData.length === 0
         ? ORDERS
-        : carsData.map((car, index) => toOrderFromCar(car, index, effectiveOrderItemsByCar, effectiveOrderUpdatesByCar));
+        : carsData.map((car, index) =>
+            toOrderFromCar(car, index, effectiveOrderItemsByCar, effectiveOrderUpdatesByCar, effectiveLineThreadsByCar)
+          );
     return base.map((order) => {
       const live = liveOrderItemsById[order.id];
       return live ? { ...order, items: live } : order;
     });
-  }, [carsData, effectiveOrderItemsByCar, effectiveOrderUpdatesByCar, liveOrderItemsById, disableDemoFallback]);
+  }, [carsData, effectiveOrderItemsByCar, effectiveOrderUpdatesByCar, effectiveLineThreadsByCar, liveOrderItemsById, disableDemoFallback]);
   const experimentFilterItemsByOrderId = useMemo(() => {
     const map = new Map<string, Pick<OrderItem, "status" | "good" | "dueDate" | "assignee">[]>();
     if (!orderChipCacheExperimentEnabled) return map;
@@ -6290,21 +6439,24 @@ export function MobileOrderTrackingHome({
         const payload = (await res.json()) as {
           orderItemsByCar?: NonNullable<MobileOrderTrackingHomeProps["orderItemsByCar"]>;
           orderUpdatesByCar?: NonNullable<MobileOrderTrackingHomeProps["orderUpdatesByCar"]>;
+          lineThreadsByCar?: NonNullable<MobileOrderTrackingHomeProps["lineThreadsByCar"]>;
           hydratedCarKeys?: string[];
           itemsError?: string | null;
           updatesError?: string | null;
+          lineThreadsError?: string | null;
           error?: string;
         };
         if (!res.ok) throw new Error(payload.error ?? res.statusText);
         setExperimentOrderItemsByCar((prev) => ({ ...prev, ...(payload.orderItemsByCar ?? {}) }));
         setExperimentOrderUpdatesByCar((prev) => ({ ...prev, ...(payload.orderUpdatesByCar ?? {}) }));
+        setExperimentLineThreadsByCar((prev) => ({ ...prev, ...(payload.lineThreadsByCar ?? {}) }));
         setExperimentHydratedCarKeys((prev) => {
           const next = new Set(prev);
           for (const key of payload.hydratedCarKeys ?? []) next.add(key);
           for (const key of claimedKeys) next.add(key);
           return next;
         });
-        const detailError = payload.itemsError || payload.updatesError || null;
+        const detailError = payload.itemsError || payload.updatesError || payload.lineThreadsError || null;
         setExperimentDetailError(detailError);
       } catch (e) {
         setExperimentDetailError(e instanceof Error ? e.message : String(e));
