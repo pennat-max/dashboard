@@ -1392,9 +1392,9 @@ assert(
   "pending queue API does not default-hide older pending rows by date"
 );
 assert(
-  pendingQueueRoute.includes("LINE_PENDING_QUEUE_ROW_LIMIT = 500") &&
+  pendingQueueRoute.includes("LINE_PENDING_QUEUE_ROW_LIMIT = 180") &&
     pendingQueueRoute.includes(".limit(LINE_PENDING_QUEUE_ROW_LIMIT)"),
-  "pending queue can return a larger all-pending window"
+  "pending queue keeps the interactive all-pending window bounded"
 );
 assert(
   pendingQueueRoute.includes('mode === "summary"') &&
