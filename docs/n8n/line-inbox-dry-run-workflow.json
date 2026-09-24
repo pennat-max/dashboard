@@ -1,4 +1,5 @@
 {
+  "id": "VIGO4ULineDry001",
   "name": "VIGO4U LINE Inbox Dry Run",
   "active": false,
   "nodes": [
@@ -358,6 +359,5 @@
       "auto_save": false,
       "line_reply": false
     }
-  },
-  "tags": ["vigo4u", "line", "dry-run"]
+  }
 }
