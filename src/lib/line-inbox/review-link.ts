@@ -101,7 +101,6 @@ export function buildLineOrderSearchRef(value?: string | null): string {
 export function buildLineOrderReviewUrl({ carRowId, plate }: LineReviewUrlInput): string {
   const url = new URL(LINE_ORDER_REVIEW_URL);
   const searchRef = buildLineOrderSearchRef(plate);
-  url.searchParams.set("load", "full");
   const safeCarRowId = String(carRowId ?? "").trim();
   if (safeCarRowId) url.searchParams.set("focusCarRowId", safeCarRowId);
   // Search stays as the stable fallback if card hydration cannot focus the row.
