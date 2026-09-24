@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { requireMutateRole } from "@/lib/auth/mutation-guard";
 import { createServiceRoleClient } from "@/lib/site/data";
 import { LINE_INBOX_MESSAGES_TABLE } from "@/lib/line-inbox/line-inbox-messages";
 import { buildFallbackAnalyzeItemsFromRawText } from "@/lib/line-inbox/fallback-analyze-items";
@@ -1034,9 +1033,6 @@ async function mapLineInboxQueueWithConcurrency<T, R>(
  * Rows from webhook: workflow pending + analyze ok -> action queue suggestions for staff review.
  */
 export async function GET(request: Request) {
-  const gate = await requireMutateRole();
-  if (!gate.ok) return gate.response;
-
   try {
     const url = new URL(request.url);
     const mode = String(url.searchParams.get("mode") ?? "full").trim();
