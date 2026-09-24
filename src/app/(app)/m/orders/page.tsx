@@ -8,6 +8,7 @@ type InitialSaleStatusFilter = "จอง" | "รอส่ง" | "ส่งแ�
 type PageProps = {
   searchParams: {
     order?: string | string[];
+    focusCarRowId?: string | string[];
     carRowId?: string | string[];
     focusCar?: string | string[];
     car_row_id?: string | string[];
@@ -34,7 +35,10 @@ export default async function MobileOrdersPage({ searchParams }: PageProps) {
   const orderChipCacheBadgeLabel = orderChipCacheExperimentEnabled ? getOrderChipCacheBadgeLabel() : null;
   const loadRaw = searchParams?.load;
   const loadMode = typeof loadRaw === "string" ? loadRaw : Array.isArray(loadRaw) ? String(loadRaw[0] ?? "") : "";
-  const isFullLoad = loadMode.trim().toLowerCase() === "full";
+  const hasFocusedCarLink = Boolean(
+    searchParams?.focusCarRowId || searchParams?.carRowId || searchParams?.focusCar || searchParams?.car_row_id
+  );
+  const isFullLoad = loadMode.trim().toLowerCase() === "full" && !hasFocusedCarLink;
   const scopeRaw = searchParams?.scope;
   const scopeMode = typeof scopeRaw === "string" ? scopeRaw : Array.isArray(scopeRaw) ? String(scopeRaw[0] ?? "") : "";
   const isAllScope = scopeMode.trim().toLowerCase() === "all";
