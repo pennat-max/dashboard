@@ -201,7 +201,7 @@ export async function runAnalyzePendingJob(
       )
       .eq("workflow_status", "pending")
       .eq("analyze_status", "pending")
-      .order("received_at", { ascending: true })
+      .order("received_at", { ascending: false })
       .limit(limit);
 
     if (targetId) {

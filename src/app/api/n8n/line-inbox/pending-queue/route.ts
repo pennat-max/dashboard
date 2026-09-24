@@ -39,7 +39,7 @@ export async function GET(request: Request) {
       "id,line_message_id,received_at,source_type,workflow_status,analyze_status,analyze_error,needs_human_review,car_row_id,raw_text,analyze_payload"
     )
     .eq("workflow_status", workflowStatus)
-    .order("received_at", { ascending: true })
+    .order("received_at", { ascending: false })
     .limit(limit);
 
   if (analyzeStatus !== "all") query = query.eq("analyze_status", analyzeStatus);
