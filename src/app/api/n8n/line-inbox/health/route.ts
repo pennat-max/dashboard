@@ -37,6 +37,15 @@ export async function GET(request: Request) {
     auth: {
       bearer_configured: acceptedLineN8nSecrets().length > 0,
     },
+    readiness: {
+      line_channel_secret_configured: Boolean(process.env.LINE_CHANNEL_SECRET?.trim()),
+      line_channel_access_token_configured: Boolean(process.env.LINE_CHANNEL_ACCESS_TOKEN?.trim()),
+      line_allowed_groups_configured: Boolean(process.env.LINE_ALLOWED_GROUP_IDS?.trim()),
+      line_webhook_receipt_reply_enabled: process.env.LINE_WEBHOOK_RECEIPT_REPLY_ENABLED === "true",
+      line_auto_save_enabled: process.env.LINE_AUTO_SAVE_ENABLED === "true",
+      line_auto_save_reply_enabled: process.env.LINE_AUTO_SAVE_REPLY_ENABLED === "true",
+      line_auto_save_allowed_groups_configured: Boolean(process.env.LINE_AUTO_SAVE_ALLOWED_GROUP_IDS?.trim()),
+    },
     queue: {
       pending_messages: pending.count ?? 0,
       analyze_pending_messages: analyzePending.count ?? 0,
