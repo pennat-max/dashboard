@@ -7,6 +7,19 @@ export type LinePushTextResult =
 
 export type LineSendErrorReason = "line_quota_limit" | "line_error";
 
+type LineTextMessage = {
+  type: "text";
+  text: string;
+};
+
+type LineFlexMessage = {
+  type: "flex";
+  altText: string;
+  contents: Record<string, unknown>;
+};
+
+type LineOutboundMessage = LineTextMessage | LineFlexMessage;
+
 function cleanErrorMessage(value: unknown): string {
   const raw = value instanceof Error ? value.message : String(value ?? "");
   return raw.replace(/\s+/g, " ").trim().slice(0, 300) || "LINE push failed";
@@ -18,6 +31,132 @@ export function classifyLineSendError(status: number | undefined, error: string 
     return "line_quota_limit";
   }
   return "line_error";
+}
+
+async function sendLineMessages({
+  accessToken,
+  url,
+  body,
+  missingTargetError,
+}: {
+  accessToken: string;
+  url: string;
+  body: Record<string, unknown>;
+  missingTargetError: string;
+}): Promise<LinePushTextResult> {
+  const token = accessToken.trim();
+  if (!token) return { ok: false, error: "Missing LINE_CHANNEL_ACCESS_TOKEN" };
+  if (!body.to && !body.replyToken) return { ok: false, error: missingTargetError };
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8_000);
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (res.ok) return { ok: true };
+    let message = res.statusText || `HTTP ${res.status}`;
+    try {
+      const parsed = (await res.json()) as { message?: unknown };
+      message = cleanErrorMessage(parsed.message ?? message);
+    } catch {
+      // Keep status text when LINE returns a non-JSON response.
+    }
+    return { ok: false, status: res.status, error: message };
+  } catch (error) {
+    return { ok: false, error: cleanErrorMessage(error) };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function lineOrderReviewFlexMessage(reviewUrl: string): LineFlexMessage {
+  return {
+    type: "flex",
+    altText: "รับทราบ - ดูรายละเอียด",
+    contents: {
+      type: "bubble",
+      size: "micro",
+      body: {
+        type: "box",
+        layout: "vertical",
+        spacing: "sm",
+        contents: [
+          {
+            type: "text",
+            text: "รับทราบ",
+            weight: "bold",
+            size: "md",
+            color: "#111827",
+          },
+        ],
+      },
+      footer: {
+        type: "box",
+        layout: "vertical",
+        spacing: "sm",
+        contents: [
+          {
+            type: "button",
+            style: "primary",
+            height: "sm",
+            color: "#0f172a",
+            action: {
+              type: "uri",
+              label: "ดูรายละเอียด",
+              uri: reviewUrl,
+            },
+          },
+        ],
+      },
+    },
+  };
+}
+
+export async function pushLineMessages({
+  accessToken,
+  to,
+  messages,
+}: {
+  accessToken: string;
+  to: string;
+  messages: LineOutboundMessage[];
+}): Promise<LinePushTextResult> {
+  const target = to.trim();
+  const safeMessages = messages.filter(Boolean).slice(0, 5);
+  if (!target) return { ok: false, error: "Missing LINE push target" };
+  if (safeMessages.length === 0) return { ok: false, error: "Missing LINE messages" };
+  return sendLineMessages({
+    accessToken,
+    url: LINE_PUSH_MESSAGE_URL,
+    body: { to: target, messages: safeMessages },
+    missingTargetError: "Missing LINE push target",
+  });
+}
+
+export async function pushLineOrderReviewMessage({
+  accessToken,
+  to,
+  reviewUrl,
+}: {
+  accessToken: string;
+  to: string;
+  reviewUrl: string;
+}): Promise<LinePushTextResult> {
+  const safeUrl = reviewUrl.trim();
+  if (!safeUrl) return { ok: false, error: "Missing LINE review URL" };
+  return pushLineMessages({
+    accessToken,
+    to,
+    messages: [lineOrderReviewFlexMessage(safeUrl)],
+  });
 }
 
 export async function pushLineTextMessage({
@@ -35,37 +174,7 @@ export async function pushLineTextMessage({
   if (!token) return { ok: false, error: "Missing LINE_CHANNEL_ACCESS_TOKEN" };
   if (!target) return { ok: false, error: "Missing LINE push target" };
   if (!bodyText) return { ok: false, error: "Missing LINE message text" };
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8_000);
-  try {
-    const res = await fetch(LINE_PUSH_MESSAGE_URL, {
-      method: "POST",
-      signal: controller.signal,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        to: target,
-        messages: [{ type: "text", text: bodyText }],
-      }),
-    });
-
-    if (res.ok) return { ok: true };
-    let message = res.statusText || `HTTP ${res.status}`;
-    try {
-      const parsed = (await res.json()) as { message?: unknown };
-      message = cleanErrorMessage(parsed.message ?? message);
-    } catch {
-      // Keep status text when LINE returns a non-JSON response.
-    }
-    return { ok: false, status: res.status, error: message };
-  } catch (error) {
-    return { ok: false, error: cleanErrorMessage(error) };
-  } finally {
-    clearTimeout(timeout);
-  }
+  return pushLineMessages({ accessToken: token, to: target, messages: [{ type: "text", text: bodyText }] });
 }
 
 export async function replyLineTextMessage({
@@ -83,35 +192,10 @@ export async function replyLineTextMessage({
   if (!token) return { ok: false, error: "Missing LINE_CHANNEL_ACCESS_TOKEN" };
   if (!lineReplyToken) return { ok: false, error: "Missing LINE reply token" };
   if (!bodyText) return { ok: false, error: "Missing LINE message text" };
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8_000);
-  try {
-    const res = await fetch(LINE_REPLY_MESSAGE_URL, {
-      method: "POST",
-      signal: controller.signal,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        replyToken: lineReplyToken,
-        messages: [{ type: "text", text: bodyText }],
-      }),
-    });
-
-    if (res.ok) return { ok: true };
-    let message = res.statusText || `HTTP ${res.status}`;
-    try {
-      const parsed = (await res.json()) as { message?: unknown };
-      message = cleanErrorMessage(parsed.message ?? message);
-    } catch {
-      // Keep status text when LINE returns a non-JSON response.
-    }
-    return { ok: false, status: res.status, error: message };
-  } catch (error) {
-    return { ok: false, error: cleanErrorMessage(error) };
-  } finally {
-    clearTimeout(timeout);
-  }
+  return sendLineMessages({
+    accessToken: token,
+    url: LINE_REPLY_MESSAGE_URL,
+    body: { replyToken: lineReplyToken, messages: [{ type: "text", text: bodyText }] },
+    missingTargetError: "Missing LINE reply token",
+  });
 }

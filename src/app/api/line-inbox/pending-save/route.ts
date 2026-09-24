@@ -7,7 +7,7 @@ import {
 } from "@/lib/line-inbox/line-inbox-messages";
 import { buildFallbackAnalyzeItemsFromRawText } from "@/lib/line-inbox/fallback-analyze-items";
 import { buildFallbackAnalyzePayloadFromRawText } from "@/lib/line-inbox/fallback-analyze-payload";
-import { classifyLineSendError, pushLineTextMessage, type LineSendErrorReason } from "@/lib/line/push-message";
+import { classifyLineSendError, pushLineOrderReviewMessage, type LineSendErrorReason } from "@/lib/line/push-message";
 import {
   buildLineApprovalAcknowledgementText,
   buildLineCarDisplayLabel,
@@ -316,10 +316,10 @@ async function maybeSendApprovalAcknowledgement(params: {
     };
   }
 
-  const sent = await pushLineTextMessage({
+  const sent = await pushLineOrderReviewMessage({
     accessToken: token,
     to: target.target,
-    text: replyText,
+    reviewUrl: params.reviewUrl,
   });
 
   if (!sent.ok) {

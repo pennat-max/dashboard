@@ -1,6 +1,6 @@
 import type { SiteDataClient as SupabaseClient } from "@/lib/site/db-client";
 import { isLineGroupAllowed, parseLineAllowedGroups } from "@/lib/line/allowed-groups";
-import { pushLineTextMessage } from "@/lib/line/push-message";
+import { pushLineOrderReviewMessage } from "@/lib/line/push-message";
 import { resolveSaleStaffForOrder, normalizeSaleAssigneesMap } from "@/lib/orders/sale-assignees-shared";
 import { createOrderTaskUpdate } from "@/lib/orders/task-update-log";
 import {
@@ -450,13 +450,14 @@ function sourceTarget(row: AutoSaveInboxRow): string {
 async function maybeSendAutoSaveReply(params: {
   row: AutoSaveInboxRow;
   text: string;
+  reviewUrl: string;
 }): Promise<{ attempted: boolean; sent: boolean; error?: string }> {
   if (!isTruthyEnvFlag(process.env.LINE_AUTO_SAVE_REPLY_ENABLED)) return { attempted: false, sent: false };
   const token = cleanLine(process.env.LINE_CHANNEL_ACCESS_TOKEN);
   const target = sourceTarget(params.row);
   if (!token || !target) return { attempted: false, sent: false, error: !token ? "missing_token" : "missing_target" };
 
-  const sent = await pushLineTextMessage({ accessToken: token, to: target, text: params.text });
+  const sent = await pushLineOrderReviewMessage({ accessToken: token, to: target, reviewUrl: params.reviewUrl });
   if (sent.ok) return { attempted: true, sent: true };
   return { attempted: true, sent: false, error: sent.error };
 }
@@ -680,7 +681,7 @@ export async function maybeAutoSaveAnalyzedLineInbox(
 
   let reply: { attempted: boolean; sent: boolean; error?: string } = { attempted: false, sent: false };
   try {
-    reply = await maybeSendAutoSaveReply({ row: params.row, text: replyText });
+    reply = await maybeSendAutoSaveReply({ row: params.row, text: replyText, reviewUrl });
   } catch (error) {
     reply = { attempted: true, sent: false, error: cleanError(error) };
     console.warn("[line-auto-save] acknowledgement failed", { error: reply.error });

@@ -1575,7 +1575,7 @@ assert(pendingSaveRoute.includes("assignee_staff: item.assignee_staff"), "pendin
 assert(pendingSaveRoute.includes("status: item.status"), "pending-save response includes persisted status");
 assert(pendingSaveRoute.includes("buildLineOrderReviewUrl"), "pending-save reply uses search review link");
 assert(pendingSaveRoute.includes("LINE_AUTO_REPLY_AFTER_APPROVE_ENABLED"), "manual approval reply is gated by its own env flag");
-assert(pendingSaveRoute.includes("pushLineTextMessage"), "manual approval reply calls the LINE push API helper");
+assert(pendingSaveRoute.includes("pushLineOrderReviewMessage"), "manual approval reply sends a LINE review-link flex message");
 assert(pendingSaveRoute.includes("classifyLineSendError"), "manual approval reply classifies LINE send failures");
 assert(pendingSaveRoute.includes("error_reason: errorReason"), "manual approval reply returns a machine-readable error reason");
 assert(pendingSaveRoute.includes("error_status: sent.status"), "manual approval reply returns the LINE error status");
@@ -1589,6 +1589,9 @@ assert(
 assert(pendingSaveRoute.includes("maskLineTarget"), "manual approval reply masks LINE targets in logs");
 assert(linePushMessageSource.includes("replyLineTextMessage"), "LINE helper supports replyToken receipt replies");
 assert(linePushMessageSource.includes("https://api.line.me/v2/bot/message/reply"), "LINE reply helper uses the LINE reply API");
+assert(linePushMessageSource.includes('type: "flex"'), "LINE helper supports flex messages");
+assert(linePushMessageSource.includes('label: "ดูรายละเอียด"'), "LINE review acknowledgement uses a clickable detail button");
+assert(linePushMessageSource.includes('type: "uri"'), "LINE review acknowledgement button opens the review URL");
 assert(linePushMessageSource.includes("classifyLineSendError"), "LINE helper exposes send error classification");
 assert(lineWebhookRoute.includes("LINE_WEBHOOK_RECEIPT_REPLY_ENABLED"), "webhook receipt replies are gated by env");
 assert(lineWebhookRoute.includes("replyLineTextMessage"), "webhook receipt uses LINE replyToken API");
