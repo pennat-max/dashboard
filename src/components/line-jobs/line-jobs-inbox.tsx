@@ -233,6 +233,9 @@ export function LineJobsInbox() {
   const [query, setQuery] = useState("");
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [copied, setCopied] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const loadQueue = useCallback(async () => {
     setError(null);
@@ -296,6 +299,38 @@ export function LineJobsInbox() {
     await navigator.clipboard.writeText(acknowledgementText(group));
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1200);
+  }
+
+  async function closeSelectedGroup(group: QueueGroup) {
+    const inboxIds = Array.from(new Set((group.messages ?? []).map((message) => clean(message.inbox_id)).filter(Boolean)));
+    if (inboxIds.length === 0) {
+      setActionError("ปิดคิวไม่ได้ เพราะรายการนี้ไม่มี inbox id");
+      return;
+    }
+
+    setActionLoading(true);
+    setActionError(null);
+    setActionNotice(null);
+    try {
+      const res = await fetch("/api/line-inbox/pending-save", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          saves: inboxIds.slice(0, 50).map((inbox_message_id) => ({
+            inbox_message_id,
+            skip_all: true,
+          })),
+        }),
+      });
+      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok || body.error) throw new Error(body.error || `ปิดคิวไม่สำเร็จ (${res.status})`);
+      setActionNotice(`ปิดจากคิวแล้ว ${Math.min(inboxIds.length, 50)} ข้อความ`);
+      await loadQueue();
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setActionLoading(false);
+    }
   }
 
   return (
@@ -378,6 +413,12 @@ export function LineJobsInbox() {
       {error ? (
         <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-900">{error}</div>
       ) : null}
+      {actionNotice ? (
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-900">{actionNotice}</div>
+      ) : null}
+      {actionError ? (
+        <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-900">{actionError}</div>
+      ) : null}
 
       <div className="grid gap-4 lg:grid-cols-[420px_minmax(0,1fr)]">
         <section className="flex flex-col gap-2">
@@ -459,6 +500,16 @@ export function LineJobsInbox() {
                     ดู/แก้ไข
                     <ExternalLink className="ml-2 size-4" aria-hidden />
                   </Link>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => void closeSelectedGroup(selected)}
+                    disabled={actionLoading || (selected.messages?.length ?? 0) === 0}
+                  >
+                    <ClipboardCheck className="mr-2 size-4" aria-hidden />
+                    {actionLoading ? "กำลังปิดคิว..." : "ตรวจแล้ว / ปิดจากคิว"}
+                  </Button>
                 </div>
               </div>
 
