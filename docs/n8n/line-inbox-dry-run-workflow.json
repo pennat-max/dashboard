@@ -1,7 +1,7 @@
 {
   "id": "VIGO4ULineDry001",
   "name": "VIGO4U LINE Inbox Dry Run",
-  "active": false,
+  "active": true,
   "nodes": [
     {
       "parameters": {},
@@ -9,7 +9,10 @@
       "name": "Manual Dry Run",
       "type": "n8n-nodes-base.manualTrigger",
       "typeVersion": 1,
-      "position": [-700, -60]
+      "position": [
+        -700,
+        -60
+      ]
     },
     {
       "parameters": {
@@ -26,8 +29,10 @@
       "name": "Schedule Every 5 Minutes",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [-700, 160],
-      "disabled": true
+      "position": [
+        -700,
+        160
+      ]
     },
     {
       "parameters": {
@@ -43,7 +48,7 @@
               "id": "active",
               "name": "ACTIVE",
               "type": "boolean",
-              "value": false
+              "value": true
             },
             {
               "id": "dry-run",
@@ -89,7 +94,10 @@
       "name": "Runtime Guard",
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
-      "position": [-420, 40]
+      "position": [
+        -420,
+        40
+      ]
     },
     {
       "parameters": {
@@ -145,7 +153,10 @@
       "name": "Allow Dry Run Only",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [-160, 40]
+      "position": [
+        -160,
+        40
+      ]
     },
     {
       "parameters": {
@@ -160,7 +171,10 @@
       "name": "Health Check",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [120, -120],
+      "position": [
+        120,
+        -120
+      ],
       "credentials": {
         "httpHeaderAuth": {
           "id": "PLACEHOLDER",
@@ -185,7 +199,10 @@
       "name": "Analyze Pending",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [420, -120],
+      "position": [
+        420,
+        -120
+      ],
       "credentials": {
         "httpHeaderAuth": {
           "id": "PLACEHOLDER",
@@ -206,7 +223,10 @@
       "name": "Read Queue Summary",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [720, -120],
+      "position": [
+        720,
+        -120
+      ],
       "credentials": {
         "httpHeaderAuth": {
           "id": "PLACEHOLDER",
@@ -231,7 +251,10 @@
       "name": "Replay Errors Dry Run",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1020, -120],
+      "position": [
+        1020,
+        -120
+      ],
       "credentials": {
         "httpHeaderAuth": {
           "id": "PLACEHOLDER",
@@ -257,7 +280,10 @@
       "name": "Blocked Output",
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
-      "position": [120, 180]
+      "position": [
+        120,
+        180
+      ]
     }
   ],
   "connections": {
