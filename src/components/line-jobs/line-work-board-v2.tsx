@@ -967,7 +967,6 @@ function JobDetail({
               <div key={`${lineKey(line)}-${index}`} className="rounded-2xl bg-slate-50 p-3">
                 <div className="min-w-0">
                   <p className="font-black">{clean(line.suggested_item_name) || clean(line.raw_text) || `งาน ${index + 1}`}</p>
-                  {line.suggested_status ? <span className="mt-2 inline-flex rounded-full bg-white px-2 py-1 text-[11px] font-black text-slate-600">{line.suggested_status}</span> : null}
                   <LineStatusControls
                     group={group}
                     line={line}
