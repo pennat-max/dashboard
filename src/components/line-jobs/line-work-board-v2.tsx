@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -71,6 +71,8 @@ type QueueGroup = {
   messages?: QueueMessage[];
   reviewUrl?: string;
   review_url?: string;
+  booked_shipping?: string;
+  bookedShipping?: string;
 };
 
 type QueueResponse = {
@@ -136,6 +138,10 @@ function requesterFor(group: QueueGroup): string {
 
 function assigneeFor(group: QueueGroup): string {
   return clean(group.sale) || "ยังไม่ระบุ";
+}
+
+function bookedShippingFor(group: QueueGroup): string {
+  return clean(group.bookedShipping ?? group.booked_shipping);
 }
 
 function lineKey(line: QueueLine): string {
@@ -246,6 +252,7 @@ export function LineWorkBoardV2() {
   const [query, setQuery] = useState("");
   const [copied, setCopied] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const detailRef = useRef<HTMLElement | null>(null);
 
   const loadQueue = useCallback(async () => {
     setError(null);
@@ -307,6 +314,13 @@ export function LineWorkBoardV2() {
     await navigator.clipboard.writeText(`${ackText(group)}\n${reviewUrlFor(group)}`);
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1200);
+  }
+
+  function selectGroup(groupKey: string) {
+    setSelectedKey(groupKey);
+    window.setTimeout(() => {
+      detailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 40);
   }
 
   return (
@@ -373,13 +387,13 @@ export function LineWorkBoardV2() {
               <EmptyCard loading={loading} />
             ) : (
               visibleGroups.map((group) => (
-                <JobCard key={group.group_key} group={group} selected={selected?.group_key === group.group_key} onSelect={() => setSelectedKey(group.group_key)} />
+                <JobCard key={group.group_key} group={group} selected={selected?.group_key === group.group_key} onSelect={() => selectGroup(group.group_key)} />
               ))
             )}
           </div>
         </section>
 
-        <section className="min-h-[520px] rounded-2xl border border-slate-200 bg-white p-4 shadow-sm lg:p-5">
+        <section ref={detailRef} className="scroll-mt-3 min-h-[520px] rounded-2xl border border-slate-200 bg-white p-4 shadow-sm lg:p-5">
           {selected ? (
             <JobDetail group={selected} copied={copied} onCopy={() => void copyAck(selected)} lastUpdated={lastUpdated} />
           ) : (
@@ -458,6 +472,12 @@ function JobCard({ group, selected, onSelect }: { group: QueueGroup; selected: b
         <SmallInfo label="รับ" value={assigneeFor(group)} />
       </div>
 
+      {bookedShippingFor(group) ? (
+        <div className="mt-2 rounded-xl bg-sky-50 px-3 py-2 text-xs font-black text-sky-900">
+          รอบเรือ · {bookedShippingFor(group)}
+        </div>
+      ) : null}
+
       <div className="mt-3 flex flex-wrap gap-2 text-[11px] font-bold text-slate-500">
         <span className="inline-flex items-center gap-1">
           <ClipboardList className="size-3.5" aria-hidden />
@@ -531,6 +551,11 @@ function JobDetail({
           <InfoChip icon={<UserCheck className="size-4" aria-hidden />} label="ผู้รับผิดชอบ" value={assigneeFor(group)} />
           <InfoChip icon={<Car className="size-4" aria-hidden />} label="รถ" value={clean(group.car_row_id) ? "ผูกแล้ว" : "รอตรวจ"} />
         </div>
+        {bookedShippingFor(group) ? (
+          <div className="mt-2 rounded-2xl bg-sky-50 px-3 py-3 text-sm font-black text-sky-900">
+            รอบเรือ · {bookedShippingFor(group)}
+          </div>
+        ) : null}
       </div>
 
       <div className="grid grid-cols-2 gap-2">

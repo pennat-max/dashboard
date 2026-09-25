@@ -194,6 +194,8 @@ type PendingQueueMsg = {
   reviewUrl: string;
   review_url: string;
   car_row_id: string;
+  booked_shipping: string;
+  bookedShipping: string;
   sale: string;
   raw_text: string;
   raw_text_preview: string;
@@ -247,6 +249,8 @@ type PendingQueueGroup = {
   manualCarCandidates: ManualCarCandidate[];
   reviewUrl: string;
   review_url: string;
+  booked_shipping: string;
+  bookedShipping: string;
   sale: string;
   source_label: string;
   source_type: string;
@@ -273,6 +277,11 @@ type PendingQueueDbRow = {
   analyze_payload?: unknown;
   car_row_id?: unknown;
   needs_human_review?: unknown;
+};
+
+type QueueCarShippingRow = {
+  row_id?: unknown;
+  booked_shipping?: unknown;
 };
 
 type RelatedTextContext = {
@@ -881,6 +890,8 @@ function groupMessages(messages: PendingQueueMsg[]): PendingQueueGroup[] {
       if (existing.manualCarCandidates.length === 0) existing.manualCarCandidates = message.manualCarCandidates;
       if (!existing.reviewUrl) existing.reviewUrl = message.reviewUrl;
       if (!existing.review_url) existing.review_url = message.review_url;
+      if (!existing.booked_shipping) existing.booked_shipping = message.booked_shipping;
+      if (!existing.bookedShipping) existing.bookedShipping = message.bookedShipping;
       continue;
     }
 
@@ -922,6 +933,8 @@ function groupMessages(messages: PendingQueueMsg[]): PendingQueueGroup[] {
       manualCarCandidates: message.manualCarCandidates,
       reviewUrl: message.reviewUrl,
       review_url: message.review_url,
+      booked_shipping: message.booked_shipping,
+      bookedShipping: message.bookedShipping,
       sale: message.sale,
       source_label: message.source_label,
       source_type: message.source_type,
@@ -946,6 +959,49 @@ function groupMessages(messages: PendingQueueMsg[]): PendingQueueGroup[] {
       linePhotoCount: attachments.length,
       related_photo_ids: relatedPhotoIds,
       relatedPhotoIds,
+    };
+  });
+}
+
+async function fetchBookedShippingByCarRowId(
+  supabase: ReturnType<typeof createServiceRoleClient>,
+  groups: PendingQueueGroup[]
+): Promise<Map<string, string>> {
+  const rowIds = Array.from(new Set(groups.map((group) => cleanString(group.car_row_id)).filter(Boolean)));
+  if (rowIds.length === 0) return new Map();
+
+  const { data, error } = await supabase
+    .from(CARS_TABLE)
+    .select("row_id,booked_shipping")
+    .in("row_id", rowIds);
+
+  if (error) return new Map();
+
+  return new Map(
+    ((data ?? []) as QueueCarShippingRow[])
+      .map((row) => [cleanString(row.row_id), cleanString(row.booked_shipping)] as const)
+      .filter(([rowId]) => Boolean(rowId))
+  );
+}
+
+function attachBookedShippingToGroups(
+  groups: PendingQueueGroup[],
+  bookedShippingByCarRowId: Map<string, string>
+): PendingQueueGroup[] {
+  if (bookedShippingByCarRowId.size === 0) return groups;
+
+  return groups.map((group) => {
+    const bookedShipping = cleanString(group.booked_shipping) || bookedShippingByCarRowId.get(cleanString(group.car_row_id)) || "";
+    if (!bookedShipping) return group;
+    return {
+      ...group,
+      booked_shipping: bookedShipping,
+      bookedShipping,
+      messages: group.messages.map((message) => ({
+        ...message,
+        booked_shipping: cleanString(message.booked_shipping) || bookedShipping,
+        bookedShipping: cleanString(message.bookedShipping) || bookedShipping,
+      })),
     };
   });
 }
@@ -1353,6 +1409,8 @@ export async function GET(request: Request) {
         reviewUrl,
         review_url: reviewUrl,
         car_row_id: car_row_id || "",
+        booked_shipping: "",
+        bookedShipping: "",
         sale,
         raw_text: String(row.raw_text ?? "").trim(),
         raw_text_preview: fallbackDescription.slice(0, 120),
@@ -1373,7 +1431,11 @@ export async function GET(request: Request) {
       });
     }
 
-    const groups = groupMessages(messages);
+    const groupedMessages = groupMessages(messages);
+    const groups = attachBookedShippingToGroups(
+      groupedMessages,
+      await fetchBookedShippingByCarRowId(supabase, groupedMessages)
+    );
     const filterCounts = lineInboxQueueFilterCounts(groups, todayYmd);
     const filteredGroups = groups.filter((group) => lineInboxQueueGroupMatchesFilter(group, filter, todayYmd));
     const responseGroups = summaryMode ? filteredGroups.map(summarizeQueueGroup) : filteredGroups;
