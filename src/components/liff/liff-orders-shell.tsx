@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getLineLiffId } from "@/lib/line/liff-config";
 import { cn } from "@/lib/utils";
 
 type LineProfileLite = {
@@ -12,6 +11,10 @@ type LineProfileLite = {
 
 type Props = {
   children: React.ReactNode;
+};
+
+type LineLiffConfig = {
+  liffId?: string;
 };
 
 /**
@@ -25,19 +28,19 @@ export function LiffOrdersShell({ children }: Props) {
   const [profile, setProfile] = useState<LineProfileLite | null>(null);
 
   useEffect(() => {
-    const liffId = getLineLiffId();
-    if (!liffId) {
-      setPhase("skipped");
-      return;
-    }
-    const liffIdForInit: string = liffId;
-
     let cancelled = false;
 
     async function run() {
       try {
+        const configRes = await fetch("/api/line/liff-config", { cache: "no-store" });
+        const config = (await configRes.json()) as LineLiffConfig;
+        const liffId = String(config.liffId ?? "").trim();
+        if (!configRes.ok || !liffId) {
+          if (!cancelled) setPhase("skipped");
+          return;
+        }
         const { default: liff } = await import("@line/liff");
-        await liff.init({ liffId: liffIdForInit });
+        await liff.init({ liffId });
         if (cancelled) return;
         const inside = liff.isInClient();
         setInClient(inside);

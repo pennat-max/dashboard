@@ -98,6 +98,10 @@ type LineActor = {
   email?: string;
 };
 
+type LineLiffConfig = {
+  liffId?: string;
+};
+
 type JobStatusRow = {
   item_key: string;
   status: WorkStatus;
@@ -377,11 +381,13 @@ export function LineWorkBoardV2() {
   }, [loadQueue]);
 
   useEffect(() => {
-    const liffId = process.env.NEXT_PUBLIC_LINE_LIFF_ID;
-    if (!liffId) return;
     let cancelled = false;
     async function loadLineActor() {
       try {
+        const configRes = await fetch("/api/line/liff-config", { cache: "no-store" });
+        const config = (await configRes.json()) as LineLiffConfig;
+        const liffId = clean(config.liffId);
+        if (!configRes.ok || !liffId) return;
         const mod = await import("@line/liff");
         const liff = mod.default;
         await liff.init({ liffId });
