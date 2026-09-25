@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
@@ -195,7 +196,19 @@ function statusPill(status: BoardStatus): string {
   return "bg-emerald-100 text-emerald-900";
 }
 
+function groupKeyForJob(groups: QueueGroup[] | undefined, job: string): string {
+  const target = clean(job);
+  if (!target) return "";
+  const found = (groups ?? []).find((group) => {
+    if (group.group_key === target) return true;
+    return (group.messages ?? []).some((message) => clean(message.inbox_id) === target);
+  });
+  return found?.group_key ?? "";
+}
+
 export function LineWorkBoard() {
+  const searchParams = useSearchParams();
+  const targetJob = clean(searchParams?.get("job"));
   const [filter, setFilter] = useState<QueueFilter>("all");
   const [data, setData] = useState<QueueResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -213,13 +226,16 @@ export function LineWorkBoard() {
       if (!res.ok || body.error) throw new Error(body.error || `โหลดงานจาก LINE ไม่สำเร็จ (${res.status})`);
       setData(body);
       setLastUpdated(new Date());
-      setSelectedKey((current) => (current && body.groups?.some((group) => group.group_key === current) ? current : body.groups?.[0]?.group_key ?? ""));
+      const targetKey = groupKeyForJob(body.groups, targetJob);
+      setSelectedKey((current) =>
+        targetKey || (current && body.groups?.some((group) => group.group_key === current) ? current : body.groups?.[0]?.group_key ?? "")
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
-  }, [filter]);
+  }, [filter, targetJob]);
 
   useEffect(() => {
     setLoading(true);

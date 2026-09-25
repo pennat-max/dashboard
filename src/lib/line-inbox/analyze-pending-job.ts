@@ -18,6 +18,9 @@ import {
 import { runLineInboxAnalyzeCore } from "@/lib/line-inbox/run-analyze-core";
 import { createServiceRoleClient } from "@/lib/site/data";
 import type { LineInboxAnalyzeResponse } from "@/lib/line-inbox/types";
+import { pushLineJobReviewMessage } from "@/lib/line/push-message";
+import { buildLineCarDisplayLabel } from "@/lib/line-inbox/acknowledgement";
+import { buildLineJobReviewUrl } from "@/lib/line-inbox/review-link";
 
 export type AnalyzePendingOptions = {
   limit?: unknown;
@@ -91,6 +94,57 @@ function isAnalyzePayload(body: unknown): body is LineInboxAnalyzeResponse {
   if (!body || typeof body !== "object") return false;
   const o = body as Record<string, unknown>;
   return Boolean(o.detected_car && typeof o.detected_car === "object" && Array.isArray(o.items));
+}
+
+function lineSourceTarget(row: PendingInboxRow): string {
+  if (cleanLine(row.source_type) === "group") return cleanLine(row.group_id);
+  return "";
+}
+
+function analyzedCarTitle(payload: LineInboxAnalyzeResponse): string {
+  return buildLineCarDisplayLabel({
+    plate: payload.detected_car?.plate_text,
+    title: payload.detected_car?.spec_text,
+    fallback: payload.detected_car?.chassis,
+  });
+}
+
+async function maybeSendHumanReviewLineJobMessage({
+  row,
+  payload,
+  carRowId,
+  autoSave,
+}: {
+  row: PendingInboxRow;
+  payload: LineInboxAnalyzeResponse;
+  carRowId: string | null;
+  autoSave: AnalyzePendingItemResult["auto_save"];
+}): Promise<void> {
+  if (!isTruthyEnvFlag(process.env.LINE_AUTO_SAVE_REPLY_ENABLED)) return;
+  if (autoSave && "reply_sent" in autoSave && autoSave.reply_sent) return;
+  const token = cleanLine(process.env.LINE_CHANNEL_ACCESS_TOKEN);
+  const target = lineSourceTarget(row);
+  if (!token || !target) return;
+
+  const title = analyzedCarTitle(payload);
+  const reviewUrl = buildLineJobReviewUrl({
+    inboxId: row.id,
+    carRowId,
+    plate: payload.detected_car?.plate_text || title,
+  });
+  const sent = await pushLineJobReviewMessage({
+    accessToken: token,
+    to: target,
+    reviewUrl,
+    carTitle: title,
+    itemCount: payload.items.length,
+  });
+  if (!sent.ok) {
+    console.warn("[line-inbox] human review LINE job message failed", {
+      inbox_message_id: row.id,
+      error: sent.error,
+    });
+  }
 }
 
 async function resolveLineReplyContext(
@@ -278,6 +332,15 @@ export async function runAnalyzePendingJob(
           console.warn("[line-auto-save] skipped after analyze", {
             inbox_message_id: inboxId,
             error: autoSave.error,
+          });
+        }
+
+        if (payloadWithReplyContext.needs_human_review || !autoSave || !("saved" in autoSave) || !autoSave.saved) {
+          await maybeSendHumanReviewLineJobMessage({
+            row,
+            payload: payloadWithReplyContext,
+            carRowId,
+            autoSave,
           });
         }
 

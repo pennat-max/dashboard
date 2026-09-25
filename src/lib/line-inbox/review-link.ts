@@ -3,6 +3,7 @@ const APP_BASE_URL =
   "https://vigo4u-operations.pennat.chatgpt.site";
 
 export const LINE_ORDER_REVIEW_URL = `${APP_BASE_URL}/m/orders`;
+export const LINE_WORK_BOARD_URL = `${APP_BASE_URL}/line-jobs`;
 
 export type LineReviewCarLabelInput = {
   plate?: string | null;
@@ -13,6 +14,10 @@ export type LineReviewCarLabelInput = {
 export type LineReviewUrlInput = {
   carRowId?: string | null;
   plate?: string | null;
+};
+
+export type LineJobReviewUrlInput = LineReviewUrlInput & {
+  inboxId?: string | null;
 };
 
 function cleanLine(value: string | null | undefined): string {
@@ -104,6 +109,17 @@ export function buildLineOrderReviewUrl({ carRowId, plate }: LineReviewUrlInput)
   const safeCarRowId = String(carRowId ?? "").trim();
   if (safeCarRowId) url.searchParams.set("focusCarRowId", safeCarRowId);
   // Search stays as the stable fallback if card hydration cannot focus the row.
+  if (searchRef) url.searchParams.set("search", searchRef);
+  return url.toString();
+}
+
+export function buildLineJobReviewUrl({ inboxId, carRowId, plate }: LineJobReviewUrlInput): string {
+  const url = new URL(LINE_WORK_BOARD_URL);
+  const safeInboxId = cleanLine(inboxId);
+  const safeCarRowId = cleanLine(carRowId);
+  const searchRef = buildLineOrderSearchRef(plate);
+  if (safeInboxId) url.searchParams.set("job", safeInboxId);
+  if (safeCarRowId) url.searchParams.set("focusCarRowId", safeCarRowId);
   if (searchRef) url.searchParams.set("search", searchRef);
   return url.toString();
 }

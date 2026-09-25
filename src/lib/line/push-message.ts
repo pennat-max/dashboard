@@ -120,6 +120,73 @@ function lineOrderReviewFlexMessage(reviewUrl: string): LineFlexMessage {
   };
 }
 
+function lineJobReviewFlexMessage({
+  reviewUrl,
+  carTitle,
+  itemCount,
+}: {
+  reviewUrl: string;
+  carTitle: string;
+  itemCount: number;
+}): LineFlexMessage {
+  const title = carTitle.trim() || "งานจาก LINE";
+  const count = Math.max(0, Math.floor(itemCount || 0));
+  return {
+    type: "flex",
+    altText: `รับทราบ - ${title}`,
+    contents: {
+      type: "bubble",
+      size: "kilo",
+      body: {
+        type: "box",
+        layout: "vertical",
+        spacing: "sm",
+        contents: [
+          {
+            type: "text",
+            text: "รับทราบ",
+            weight: "bold",
+            size: "lg",
+            color: "#111827",
+          },
+          {
+            type: "text",
+            text: title.slice(0, 120),
+            size: "sm",
+            color: "#334155",
+            wrap: true,
+          },
+          {
+            type: "text",
+            text: count > 0 ? `ระบบจับงานได้ ${count} รายการ รอตรวจในเว็บ` : "ระบบจัดเข้าคิวงานแล้ว รอตรวจในเว็บ",
+            size: "xs",
+            color: "#64748b",
+            wrap: true,
+          },
+        ],
+      },
+      footer: {
+        type: "box",
+        layout: "vertical",
+        spacing: "sm",
+        contents: [
+          {
+            type: "button",
+            style: "primary",
+            height: "sm",
+            color: "#0f172a",
+            action: {
+              type: "uri",
+              label: "ดูรายละเอียดงาน",
+              uri: reviewUrl,
+            },
+          },
+        ],
+      },
+    },
+  };
+}
+
 export async function pushLineMessages({
   accessToken,
   to,
@@ -156,6 +223,28 @@ export async function pushLineOrderReviewMessage({
     accessToken,
     to,
     messages: [lineOrderReviewFlexMessage(safeUrl)],
+  });
+}
+
+export async function pushLineJobReviewMessage({
+  accessToken,
+  to,
+  reviewUrl,
+  carTitle,
+  itemCount,
+}: {
+  accessToken: string;
+  to: string;
+  reviewUrl: string;
+  carTitle: string;
+  itemCount: number;
+}): Promise<LinePushTextResult> {
+  const safeUrl = reviewUrl.trim();
+  if (!safeUrl) return { ok: false, error: "Missing LINE job review URL" };
+  return pushLineMessages({
+    accessToken,
+    to,
+    messages: [lineJobReviewFlexMessage({ reviewUrl: safeUrl, carTitle, itemCount })],
   });
 }
 
