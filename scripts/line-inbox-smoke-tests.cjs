@@ -312,6 +312,13 @@ const receiptReply = buildLineWebhookReceiptAcknowledgementText();
 assert.strictEqual(receiptReply, "รับทราบ", "webhook receipt acknowledgement stays short");
 assert(!receiptReply.includes("บันทึกงาน"), "webhook receipt acknowledgement must not claim work was saved");
 assert(isLineInboxSystemAcknowledgementText(receiptReply), "webhook receipt acknowledgement is ignored by the analyzer loop guard");
+const receiptReplyWithLink = buildLineWebhookReceiptAcknowledgementText("https://liff.line.me/2009973514-VUSvnNgg?search=2969");
+assert.strictEqual(
+  receiptReplyWithLink,
+  "รับทราบ\nhttps://liff.line.me/2009973514-VUSvnNgg?search=2969",
+  "webhook receipt can include a LINE-clickable review link"
+);
+assert(!receiptReplyWithLink.includes("บันทึกงาน"), "linked webhook receipt still must not claim work was saved");
 assert.strictEqual(classifyLineSendError(429, "You have reached your monthly limit."), "line_quota_limit", "LINE monthly quota errors are classified");
 assert.strictEqual(classifyLineSendError(400, "Bad request"), "line_error", "other LINE errors stay generic");
 

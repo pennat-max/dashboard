@@ -266,6 +266,7 @@ export function buildLineReviewLinkAcknowledgementText(carTitle?: string | null)
   ].join("\n");
 }
 
-export function buildLineWebhookReceiptAcknowledgementText(): string {
-  return "รับทราบ";
+export function buildLineWebhookReceiptAcknowledgementText(reviewUrl?: string | null): string {
+  const safeReviewUrl = cleanLine(reviewUrl ?? "");
+  return safeReviewUrl ? ["รับทราบ", safeReviewUrl].join("\n") : "รับทราบ";
 }

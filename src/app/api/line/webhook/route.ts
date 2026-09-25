@@ -6,6 +6,7 @@ import {
   updateLineInboxMessageAnalyze,
 } from "@/lib/line-inbox/line-inbox-messages";
 import {
+  buildLineOrderReviewUrl,
   buildLineWebhookReceiptAcknowledgementText,
   isLineInboxSystemAcknowledgementText,
 } from "@/lib/line-inbox/acknowledgement";
@@ -127,7 +128,9 @@ async function maybeSendWebhookReceiptReply(params: {
   const sent = await replyLineTextMessage({
     accessToken: token,
     replyToken: params.replyToken,
-    text: buildLineWebhookReceiptAcknowledgementText(),
+    text: buildLineWebhookReceiptAcknowledgementText(
+      params.messageType === "text" ? buildLineOrderReviewUrl({ plate: params.text }) : null
+    ),
   });
 
   if (!sent.ok) {
