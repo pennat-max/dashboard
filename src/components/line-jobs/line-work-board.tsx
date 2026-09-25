@@ -119,7 +119,24 @@ function assigneeFor(group: QueueGroup): string {
 }
 
 function linesFor(group: QueueGroup): QueueLine[] {
-  return (group.messages ?? []).flatMap((message) => [...(message.action_lines ?? []), ...(message.new_lines ?? [])]);
+  const seen = new Set<string>();
+  const out: QueueLine[] = [];
+  for (const message of group.messages ?? []) {
+    const source = message.action_lines?.length ? message.action_lines : message.new_lines ?? [];
+    for (const line of source) {
+      const key = [
+        clean(line.suggested_item_name),
+        clean(line.raw_text),
+        clean(line.suggested_status),
+      ]
+        .join("|")
+        .toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(line);
+    }
+  }
+  return out;
 }
 
 function messageText(message: QueueMessage): string {
