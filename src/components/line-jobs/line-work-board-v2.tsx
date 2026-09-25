@@ -1147,53 +1147,66 @@ function LineStatusControls({
   const currentStatus = status?.status ?? "pending";
   const updatedBy = clean(status?.updated_by_name) || clean(status?.updated_by_email);
   const currentTone = statusOptionFor(currentStatus).tone;
+  const [chooserOpen, setChooserOpen] = useState(false);
+
+  function chooseStatus(nextStatus: WorkStatus) {
+    setChooserOpen(false);
+    onStatusChange(group, line, index, nextStatus);
+  }
 
   return (
-    <div className="mt-3 rounded-2xl border border-slate-200 bg-white p-2">
-      <div className="flex items-center justify-between gap-2">
-        <span className={cn("rounded-full border px-2 py-1 text-[11px] font-black", currentTone)}>
-          {saving ? "กำลังบันทึก" : statusLabel(currentStatus)}
-        </span>
-        <span className="truncate text-[11px] font-bold text-slate-400">
-          {updatedBy ? `แก้ล่าสุดโดย ${updatedBy}` : "ยังไม่มีคนเปลี่ยนสถานะ"}
-        </span>
+    <>
+      <div className="mt-3 rounded-2xl border border-slate-200 bg-white p-2">
+        <button
+          type="button"
+          disabled={saving}
+          onClick={() => setChooserOpen(true)}
+          className="flex min-h-11 w-full items-center justify-between gap-2 rounded-xl bg-slate-50 px-3 text-left"
+        >
+          <span className={cn("rounded-full border px-2 py-1 text-[11px] font-black", currentTone)}>
+            {saving ? "กำลังบันทึก" : statusLabel(currentStatus)}
+          </span>
+          <span className="min-w-0 flex-1 truncate text-right text-[11px] font-bold text-slate-400">
+            {updatedBy ? `แก้ล่าสุดโดย ${updatedBy}` : "แตะเพื่อเปลี่ยน"}
+          </span>
+          <ChevronRight className="size-4 shrink-0 text-slate-400" aria-hidden />
+        </button>
+        {status?.updated_at ? <p className="mt-2 px-1 text-[11px] font-bold text-slate-400">{formatTime(status.updated_at)}</p> : null}
       </div>
-      <div className="mt-2 grid grid-cols-3 gap-1.5">
-        {WORK_STATUS_OPTIONS.slice(1, 7).map((option) => (
-          <button
-            key={option.value}
-            type="button"
-            disabled={saving}
-            onClick={() => onStatusChange(group, line, index, option.value)}
-            className={cn(
-              "min-h-9 rounded-xl border px-2 text-[11px] font-black transition",
-              currentStatus === option.value ? option.tone : "border-slate-200 bg-slate-50 text-slate-600",
-              saving && "opacity-60"
-            )}
-          >
-            {option.label}
-          </button>
-        ))}
-      </div>
-      <div className="mt-1.5 grid grid-cols-2 gap-1.5">
-        {WORK_STATUS_OPTIONS.slice(7).map((option) => (
-          <button
-            key={option.value}
-            type="button"
-            disabled={saving}
-            onClick={() => onStatusChange(group, line, index, option.value)}
-            className={cn(
-              "min-h-9 rounded-xl border px-2 text-[11px] font-black transition",
-              currentStatus === option.value ? option.tone : "border-slate-200 bg-slate-50 text-slate-600",
-              saving && "opacity-60"
-            )}
-          >
-            {option.label}
-          </button>
-        ))}
-      </div>
-      {status?.updated_at ? <p className="mt-2 text-[11px] font-bold text-slate-400">{formatTime(status.updated_at)}</p> : null}
-    </div>
+
+      {chooserOpen ? (
+        <div className="fixed inset-0 z-50 flex items-end bg-black/45 p-3 sm:items-center sm:justify-center">
+          <div className="w-full rounded-3xl bg-white p-4 shadow-2xl sm:max-w-sm">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-black text-slate-400">เลือกสถานะ</p>
+                <p className="line-clamp-1 text-base font-black">{itemLabel(line, index)}</p>
+              </div>
+              <button type="button" className="grid size-10 place-items-center rounded-full bg-slate-100" onClick={() => setChooserOpen(false)} aria-label="Close status chooser">
+                <X className="size-5" aria-hidden />
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {WORK_STATUS_OPTIONS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  disabled={saving}
+                  onClick={() => chooseStatus(option.value)}
+                  className={cn(
+                    "min-h-12 rounded-2xl border px-3 text-sm font-black transition",
+                    currentStatus === option.value ? option.tone : "border-slate-200 bg-slate-50 text-slate-700",
+                    saving && "opacity-60"
+                  )}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </>
   );
 }
 
