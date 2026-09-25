@@ -8,6 +8,13 @@
       "when": 1790070556725,
       "tag": "0000_amazing_ozymandias",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1790332205974,
+      "tag": "0001_plain_loki",
+      "breakpoints": true
     }
   ]
 }

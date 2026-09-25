@@ -83,6 +83,48 @@ export const lineInboxMessages = sqliteTable("line_inbox_messages", {
   created_at: text("created_at").notNull().default(now), updated_at: text("updated_at").notNull().default(now), image_storage_path: text("image_storage_path"), image_mime_type: text("image_mime_type"),
 }, (t) => [uniqueIndex("line_message_id_uq").on(t.line_message_id), index("line_workflow_idx").on(t.workflow_status, t.received_at), index("line_source_idx").on(t.source_type, t.group_id, t.user_id)]);
 
+export const lineJobItemStatuses = sqliteTable("line_job_item_statuses", {
+  item_key: text("item_key").primaryKey(),
+  group_key: text("group_key").notNull(),
+  inbox_id: text("inbox_id"),
+  car_row_id: text("car_row_id"),
+  item_index: integer("item_index"),
+  item_label: text("item_label"),
+  status: text("status").notNull().default("pending"),
+  note: text("note"),
+  updated_at: text("updated_at").notNull().default(now),
+  updated_by_source: text("updated_by_source").notNull().default("chatgpt_site"),
+  updated_by_id: text("updated_by_id"),
+  updated_by_name: text("updated_by_name"),
+  updated_by_email: text("updated_by_email"),
+}, (t) => [
+  index("line_job_status_group_idx").on(t.group_key),
+  index("line_job_status_car_idx").on(t.car_row_id),
+  index("line_job_status_updated_idx").on(t.updated_at),
+]);
+
+export const lineJobItemStatusEvents = sqliteTable("line_job_item_status_events", {
+  id: text("id").primaryKey(),
+  item_key: text("item_key").notNull(),
+  group_key: text("group_key").notNull(),
+  inbox_id: text("inbox_id"),
+  car_row_id: text("car_row_id"),
+  item_index: integer("item_index"),
+  item_label: text("item_label"),
+  old_status: text("old_status"),
+  new_status: text("new_status").notNull(),
+  changed_at: text("changed_at").notNull().default(now),
+  changed_by_source: text("changed_by_source").notNull().default("chatgpt_site"),
+  changed_by_id: text("changed_by_id"),
+  changed_by_name: text("changed_by_name"),
+  changed_by_email: text("changed_by_email"),
+  client_context: text("client_context", { mode: "json" }),
+}, (t) => [
+  index("line_job_event_item_idx").on(t.item_key),
+  index("line_job_event_group_idx").on(t.group_key),
+  index("line_job_event_changed_idx").on(t.changed_at),
+]);
+
 export const chatHistory = sqliteTable("chat_history", {
   id: integer("id").primaryKey(), user_id: text("user_id").notNull(), role: text("role").notNull(), content: text("content").notNull(), created_at: text("created_at").default(now),
 });

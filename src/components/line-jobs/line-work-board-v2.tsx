@@ -85,6 +85,36 @@ type QueueResponse = {
 };
 
 type JobState = "ready" | "review" | "waiting_car" | "working";
+type WorkStatus = "pending" | "checking" | "ordered" | "outside" | "to_send" | "working" | "done" | "blocked" | "cancelled";
+
+type LineActor = {
+  source: "line_liff" | "chatgpt_site";
+  id: string;
+  name: string;
+  email?: string;
+};
+
+type JobStatusRow = {
+  item_key: string;
+  status: WorkStatus;
+  note?: string | null;
+  updated_at: string;
+  updated_by_name?: string | null;
+  updated_by_email?: string | null;
+  updated_by_source?: string | null;
+};
+
+const WORK_STATUS_OPTIONS: { value: WorkStatus; label: string; tone: string }[] = [
+  { value: "pending", label: "รอทำ", tone: "bg-slate-100 text-slate-700 border-slate-200" },
+  { value: "checking", label: "เช็ค", tone: "bg-sky-50 text-sky-800 border-sky-200" },
+  { value: "ordered", label: "สั่ง", tone: "bg-violet-50 text-violet-800 border-violet-200" },
+  { value: "outside", label: "ช่างนอก", tone: "bg-amber-50 text-amber-900 border-amber-200" },
+  { value: "to_send", label: "ต้องส่ง", tone: "bg-orange-50 text-orange-900 border-orange-200" },
+  { value: "working", label: "กำลังทำ", tone: "bg-teal-50 text-teal-900 border-teal-200" },
+  { value: "done", label: "เสร็จ", tone: "bg-emerald-50 text-emerald-900 border-emerald-200" },
+  { value: "blocked", label: "ติดปัญหา", tone: "bg-rose-50 text-rose-900 border-rose-200" },
+  { value: "cancelled", label: "ยกเลิก", tone: "bg-zinc-100 text-zinc-700 border-zinc-200" },
+];
 
 const REFRESH_MS = 20_000;
 
@@ -148,6 +178,28 @@ function lineKey(line: QueueLine): string {
   return [clean(line.suggested_item_name), clean(line.raw_text), clean(line.suggested_status)]
     .join("|")
     .toLowerCase();
+}
+
+function compactKeyPart(value: unknown): string {
+  const text = clean(value).toLowerCase();
+  if (!text) return "empty";
+  return text.replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "").slice(0, 120) || "item";
+}
+
+function lineStatusKey(group: QueueGroup, line: QueueLine, index: number): string {
+  return ["line-job", compactKeyPart(group.group_key), String(index), compactKeyPart(line.suggested_item_name || line.raw_text)].join(":");
+}
+
+function statusOptionFor(value: string | undefined): (typeof WORK_STATUS_OPTIONS)[number] {
+  return WORK_STATUS_OPTIONS.find((option) => option.value === value) ?? WORK_STATUS_OPTIONS[0];
+}
+
+function statusLabel(value: string | undefined): string {
+  return statusOptionFor(value).label;
+}
+
+function itemLabel(line: QueueLine, index: number): string {
+  return clean(line.suggested_item_name) || clean(line.raw_text) || `งาน ${index + 1}`;
 }
 
 function linesFor(group: QueueGroup): QueueLine[] {
@@ -254,6 +306,9 @@ export function LineWorkBoardV2() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [shipFilter, setShipFilter] = useState("all");
   const [assigneeFilter, setAssigneeFilter] = useState("all");
+  const [jobStatuses, setJobStatuses] = useState<Record<string, JobStatusRow>>({});
+  const [savingStatusKey, setSavingStatusKey] = useState("");
+  const [actor, setActor] = useState<LineActor | null>(null);
   const detailRef = useRef<HTMLElement | null>(null);
 
   const loadQueue = useCallback(async () => {
@@ -286,7 +341,68 @@ export function LineWorkBoardV2() {
     return () => window.clearInterval(timer);
   }, [loadQueue]);
 
+  useEffect(() => {
+    const liffId = process.env.NEXT_PUBLIC_LINE_LIFF_ID;
+    if (!liffId) return;
+    let cancelled = false;
+    async function loadLineActor() {
+      try {
+        const mod = await import("@line/liff");
+        const liff = mod.default;
+        await liff.init({ liffId });
+        if (!liff.isInClient() && !liff.isLoggedIn()) return;
+        if (!liff.isLoggedIn()) return;
+        const profile = await liff.getProfile();
+        if (!cancelled) {
+          setActor({
+            source: "line_liff",
+            id: profile.userId,
+            name: profile.displayName || "LINE user",
+          });
+        }
+      } catch {
+        if (!cancelled) setActor(null);
+      }
+    }
+    void loadLineActor();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const groups = useMemo(() => data?.groups ?? [], [data?.groups]);
+  const statusItemKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const group of groups) {
+      linesFor(group).forEach((line, index) => keys.add(lineStatusKey(group, line, index)));
+    }
+    return Array.from(keys);
+  }, [groups]);
+
+  useEffect(() => {
+    if (!statusItemKeys.length) {
+      setJobStatuses({});
+      return;
+    }
+    let cancelled = false;
+    async function loadStatuses() {
+      try {
+        const res = await fetch("/api/line-jobs/statuses", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ item_keys: statusItemKeys }),
+        });
+        const body = (await res.json()) as { statuses?: Record<string, JobStatusRow> };
+        if (!cancelled && res.ok) setJobStatuses(body.statuses ?? {});
+      } catch {
+        if (!cancelled) setJobStatuses({});
+      }
+    }
+    void loadStatuses();
+    return () => {
+      cancelled = true;
+    };
+  }, [statusItemKeys]);
   const searchedGroups = useMemo(() => {
     const q = query.toLowerCase().trim();
     if (!q) return groups;
@@ -334,6 +450,50 @@ export function LineWorkBoardV2() {
     window.setTimeout(() => {
       detailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 40);
+  }
+
+  async function updateLineStatus(group: QueueGroup, line: QueueLine, index: number, status: WorkStatus) {
+    const itemKey = lineStatusKey(group, line, index);
+    const current = jobStatuses[itemKey];
+    if (current?.status === status) return;
+    setSavingStatusKey(itemKey);
+    const optimistic: JobStatusRow = {
+      item_key: itemKey,
+      status,
+      updated_at: new Date().toISOString(),
+      updated_by_name: actor?.name ?? current?.updated_by_name ?? null,
+      updated_by_email: actor?.email ?? current?.updated_by_email ?? null,
+      updated_by_source: actor?.source ?? "chatgpt_site",
+    };
+    setJobStatuses((prev) => ({ ...prev, [itemKey]: optimistic }));
+    try {
+      const res = await fetch("/api/line-jobs/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          item_key: itemKey,
+          group_key: group.group_key,
+          car_row_id: clean(group.car_row_id),
+          item_index: index,
+          item_label: itemLabel(line, index),
+          status,
+          actor,
+        }),
+      });
+      const body = (await res.json()) as { status?: JobStatusRow; error?: string };
+      if (!res.ok || body.error || !body.status) throw new Error(body.error || "Cannot update status");
+      setJobStatuses((prev) => ({ ...prev, [itemKey]: body.status as JobStatusRow }));
+    } catch (e) {
+      setJobStatuses((prev) => {
+        const next = { ...prev };
+        if (current) next[itemKey] = current;
+        else delete next[itemKey];
+        return next;
+      });
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSavingStatusKey("");
+    }
   }
 
   return (
@@ -426,7 +586,15 @@ export function LineWorkBoardV2() {
 
         <section ref={detailRef} className="scroll-mt-3 min-h-[520px] rounded-2xl border border-slate-200 bg-white p-4 shadow-sm lg:p-5">
           {selected ? (
-            <JobDetail group={selected} copied={copied} onCopy={() => void copyAck(selected)} lastUpdated={lastUpdated} />
+            <JobDetail
+              group={selected}
+              copied={copied}
+              onCopy={() => void copyAck(selected)}
+              lastUpdated={lastUpdated}
+              statuses={jobStatuses}
+              savingStatusKey={savingStatusKey}
+              onStatusChange={updateLineStatus}
+            />
           ) : (
             <EmptyCard loading={loading} />
           )}
@@ -621,11 +789,17 @@ function JobDetail({
   copied,
   onCopy,
   lastUpdated,
+  statuses,
+  savingStatusKey,
+  onStatusChange,
 }: {
   group: QueueGroup;
   copied: boolean;
   onCopy: () => void;
   lastUpdated: Date | null;
+  statuses: Record<string, JobStatusRow>;
+  savingStatusKey: string;
+  onStatusChange: (group: QueueGroup, line: QueueLine, index: number, status: WorkStatus) => void;
 }) {
   const state = jobStateFor(group);
   const lines = linesFor(group);
@@ -698,6 +872,14 @@ function JobDetail({
                   <p className="font-black">{clean(line.suggested_item_name) || clean(line.raw_text) || `งาน ${index + 1}`}</p>
                   <p className="mt-1 text-sm leading-6 text-slate-600">{clean(line.suggested_note) || clean(line.reason) || clean(line.raw_text) || "รอตรวจรายละเอียด"}</p>
                   {line.suggested_status ? <span className="mt-2 inline-flex rounded-full bg-white px-2 py-1 text-[11px] font-black text-slate-600">{line.suggested_status}</span> : null}
+                  <LineStatusControls
+                    group={group}
+                    line={line}
+                    index={index}
+                    status={statuses[lineStatusKey(group, line, index)]}
+                    saving={savingStatusKey === lineStatusKey(group, line, index)}
+                    onStatusChange={onStatusChange}
+                  />
                 </div>
               </div>
             ))
@@ -753,6 +935,74 @@ function JobDetail({
           )}
         </div>
       </section>
+    </div>
+  );
+}
+
+function LineStatusControls({
+  group,
+  line,
+  index,
+  status,
+  saving,
+  onStatusChange,
+}: {
+  group: QueueGroup;
+  line: QueueLine;
+  index: number;
+  status?: JobStatusRow;
+  saving: boolean;
+  onStatusChange: (group: QueueGroup, line: QueueLine, index: number, status: WorkStatus) => void;
+}) {
+  const currentStatus = status?.status ?? "pending";
+  const updatedBy = clean(status?.updated_by_name) || clean(status?.updated_by_email);
+  const currentTone = statusOptionFor(currentStatus).tone;
+
+  return (
+    <div className="mt-3 rounded-2xl border border-slate-200 bg-white p-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className={cn("rounded-full border px-2 py-1 text-[11px] font-black", currentTone)}>
+          {saving ? "กำลังบันทึก" : statusLabel(currentStatus)}
+        </span>
+        <span className="truncate text-[11px] font-bold text-slate-400">
+          {updatedBy ? `แก้ล่าสุดโดย ${updatedBy}` : "ยังไม่มีคนเปลี่ยนสถานะ"}
+        </span>
+      </div>
+      <div className="mt-2 grid grid-cols-3 gap-1.5">
+        {WORK_STATUS_OPTIONS.slice(1, 7).map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            disabled={saving}
+            onClick={() => onStatusChange(group, line, index, option.value)}
+            className={cn(
+              "min-h-9 rounded-xl border px-2 text-[11px] font-black transition",
+              currentStatus === option.value ? option.tone : "border-slate-200 bg-slate-50 text-slate-600",
+              saving && "opacity-60"
+            )}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+      <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+        {WORK_STATUS_OPTIONS.slice(7).map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            disabled={saving}
+            onClick={() => onStatusChange(group, line, index, option.value)}
+            className={cn(
+              "min-h-9 rounded-xl border px-2 text-[11px] font-black transition",
+              currentStatus === option.value ? option.tone : "border-slate-200 bg-slate-50 text-slate-600",
+              saving && "opacity-60"
+            )}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+      {status?.updated_at ? <p className="mt-2 text-[11px] font-bold text-slate-400">{formatTime(status.updated_at)}</p> : null}
     </div>
   );
 }
