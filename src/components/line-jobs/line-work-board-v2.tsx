@@ -227,18 +227,17 @@ function itemLabel(line: QueueLine, index: number): string {
 }
 
 function galleryImagesFromAttachments(attachments: QueueAttachment[]): GalleryImage[] {
-  return attachments
-    .map((attachment, index) => {
+  return attachments.flatMap((attachment, index) => {
       const url = clean(attachment.url);
-      if (!url) return null;
-      return {
+      if (!url) return [];
+      const image: GalleryImage = {
         id: clean(attachment.inbox_id) || `${url}:${index}`,
         url,
         name: clean(attachment.file_name) || `LINE photo ${index + 1}`,
         local: false,
-      } satisfies GalleryImage;
-    })
-    .filter((item): item is GalleryImage => Boolean(item));
+      };
+      return [image];
+    });
 }
 
 function linesFor(group: QueueGroup): QueueLine[] {

@@ -872,16 +872,16 @@ const sampleThaiPlateReviewUrl = buildLineOrderReviewUrl({
 });
 assert.strictEqual(
   sampleThaiPlateReviewUrl,
-  "https://vigo4u-operations.pennat.chatgpt.site/m/orders?focusCarRowId=ignored-row-id&search=6286",
-  "review URL encodes focused car row id and Thai plate search fallback"
+  "https://vigo4u-operations.pennat.chatgpt.site/line-jobs-v2?focusCarRowId=ignored-row-id&search=6286",
+  "review URL opens the LINE jobs board with focused car row id and Thai plate search fallback"
 );
 const searchOnlyReviewUrl = buildLineOrderReviewUrl({
   plate: "51072",
 });
 assert.strictEqual(
   searchOnlyReviewUrl,
-  "https://vigo4u-operations.pennat.chatgpt.site/m/orders?search=51072",
-  "review URL falls back to search when focused car row id is missing"
+  "https://vigo4u-operations.pennat.chatgpt.site/line-jobs-v2?search=51072",
+  "review URL opens the LINE jobs board with search when focused car row id is missing"
 );
 
 const approvalReply = buildLineApprovalAcknowledgementText({
@@ -903,8 +903,8 @@ const travo95295ReviewUrl = buildLineOrderReviewUrl({
 });
 assert.strictEqual(
   travo95295ReviewUrl,
-  "https://vigo4u-operations.pennat.chatgpt.site/m/orders?focusCarRowId=a18c7942-10fc-4d32-8059-5b97f86ec9e8&search=95295",
-  "review URL focuses 95295 by car_row_id with short search fallback"
+  "https://vigo4u-operations.pennat.chatgpt.site/line-jobs-v2?focusCarRowId=a18c7942-10fc-4d32-8059-5b97f86ec9e8&search=95295",
+  "review URL opens the LINE jobs board and focuses 95295 by car_row_id with short search fallback"
 );
 
 function autoSavePayload(overrides = {}) {
@@ -1573,7 +1573,7 @@ assert(pendingSaveRoute.includes("fetchExistingApprovalItemsForReply"), "pending
 assert(pendingSaveRoute.includes("existingApprovalItemsFromPayloadForReply"), "pending-save has a safe existing-work fallback");
 assert(pendingSaveRoute.includes("assignee_staff: item.assignee_staff"), "pending-save response includes persisted assignee");
 assert(pendingSaveRoute.includes("status: item.status"), "pending-save response includes persisted status");
-assert(pendingSaveRoute.includes("buildLineOrderReviewUrl"), "pending-save reply uses search review link");
+assert(pendingSaveRoute.includes("buildLineJobReviewUrl"), "pending-save reply uses LINE job deep link");
 assert(pendingSaveRoute.includes("LINE_AUTO_REPLY_AFTER_APPROVE_ENABLED"), "manual approval reply is gated by its own env flag");
 assert(pendingSaveRoute.includes("pushLineOrderReviewMessage"), "manual approval reply sends a LINE review-link flex message");
 assert(pendingSaveRoute.includes("classifyLineSendError"), "manual approval reply classifies LINE send failures");

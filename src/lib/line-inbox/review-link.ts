@@ -2,8 +2,14 @@ const APP_BASE_URL =
   process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, "") ||
   "https://vigo4u-operations.pennat.chatgpt.site";
 
+const LINE_JOBS_PATH = "/line-jobs-v2";
+const LINE_LIFF_ID = process.env.NEXT_PUBLIC_LINE_LIFF_ID?.trim() ?? "";
+
 export const LINE_ORDER_REVIEW_URL = `${APP_BASE_URL}/m/orders`;
-export const LINE_WORK_BOARD_URL = `${APP_BASE_URL}/line-jobs`;
+export const LINE_WORK_BOARD_URL = `${APP_BASE_URL}${LINE_JOBS_PATH}`;
+export const LINE_WORK_BOARD_LIFF_URL = LINE_LIFF_ID
+  ? `https://liff.line.me/${encodeURIComponent(LINE_LIFF_ID)}`
+  : LINE_WORK_BOARD_URL;
 
 export type LineReviewCarLabelInput = {
   plate?: string | null;
@@ -104,7 +110,7 @@ export function buildLineOrderSearchRef(value?: string | null): string {
 }
 
 export function buildLineOrderReviewUrl({ carRowId, plate }: LineReviewUrlInput): string {
-  const url = new URL(LINE_ORDER_REVIEW_URL);
+  const url = new URL(LINE_WORK_BOARD_LIFF_URL);
   const searchRef = buildLineOrderSearchRef(plate);
   const safeCarRowId = String(carRowId ?? "").trim();
   if (safeCarRowId) url.searchParams.set("focusCarRowId", safeCarRowId);
@@ -114,7 +120,7 @@ export function buildLineOrderReviewUrl({ carRowId, plate }: LineReviewUrlInput)
 }
 
 export function buildLineJobReviewUrl({ inboxId, carRowId, plate }: LineJobReviewUrlInput): string {
-  const url = new URL(LINE_WORK_BOARD_URL);
+  const url = new URL(LINE_WORK_BOARD_LIFF_URL);
   const safeInboxId = cleanLine(inboxId);
   const safeCarRowId = cleanLine(carRowId);
   const searchRef = buildLineOrderSearchRef(plate);

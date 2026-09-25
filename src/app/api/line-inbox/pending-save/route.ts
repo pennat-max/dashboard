@@ -11,10 +11,10 @@ import { classifyLineSendError, pushLineOrderReviewMessage, type LineSendErrorRe
 import {
   buildLineApprovalAcknowledgementText,
   buildLineCarDisplayLabel,
-  buildLineOrderReviewUrl,
   type LineApprovalAcknowledgementItem,
   type LineApprovalUpdatedAcknowledgementItem,
 } from "@/lib/line-inbox/acknowledgement";
+import { buildLineJobReviewUrl } from "@/lib/line-inbox/review-link";
 import type { DuplicateStatus, ExistingOrderItemRow, LineInboxAnalyzeItem, LineInboxAnalyzeResponse } from "@/lib/line-inbox/types";
 import { formatZodIssues, lineInboxPendingSaveBodySchema } from "@/lib/line-inbox/api-schemas";
 import {
@@ -130,8 +130,9 @@ function detectedCarTitle(payload: LineInboxAnalyzeResponse): string {
   return buildLineCarDisplayLabel({ plate, title: spec, fallback: chassis });
 }
 
-function reviewUrlForLineInbox(payload: LineInboxAnalyzeResponse, carRowId: string): string {
-  return buildLineOrderReviewUrl({
+function reviewUrlForLineInbox(payload: LineInboxAnalyzeResponse, carRowId: string, inboxId: string): string {
+  return buildLineJobReviewUrl({
+    inboxId,
     carRowId,
     plate: cleanLine(payload.detected_car?.plate_text) || detectedCarTitle(payload),
   });
@@ -542,7 +543,7 @@ export async function POST(request: Request) {
         ...createdItems,
         ...saved.filter((item) => item.action === "merge").map(approvalItemFromSaved),
       ];
-      const reviewUrl = reviewUrlForLineInbox(payload, car_row_id);
+      const reviewUrl = reviewUrlForLineInbox(payload, car_row_id, inboxId);
       const autoReplyEnabled = isAutoReplyAfterApproveEnabled();
       let acknowledged: Awaited<ReturnType<typeof maybeSendApprovalAcknowledgement>> = {
         replyText: buildLineApprovalAcknowledgementText({
