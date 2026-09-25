@@ -120,6 +120,94 @@ function lineOrderReviewFlexMessage(reviewUrl: string): LineFlexMessage {
   };
 }
 
+function lineReceiptReviewFlexMessage({
+  reviewUrl,
+  plate,
+  mileage,
+  chassis,
+}: {
+  reviewUrl: string;
+  plate?: string;
+  mileage?: string;
+  chassis?: string;
+}): LineFlexMessage {
+  const safePlate = plate?.trim() || "งานจาก LINE";
+  const detailLines = [
+    mileage?.trim() ? `${mileage.trim()} km.` : "",
+    chassis?.trim() ?? "",
+  ].filter(Boolean);
+
+  return {
+    type: "flex",
+    altText: `รับทราบงานแล้ว - ${safePlate}`,
+    contents: {
+      type: "bubble",
+      size: "kilo",
+      body: {
+        type: "box",
+        layout: "vertical",
+        spacing: "md",
+        contents: [
+          {
+            type: "text",
+            text: "ORDER TRACKING AI",
+            size: "xs",
+            weight: "bold",
+            color: "#0f766e",
+          },
+          {
+            type: "text",
+            text: "รับทราบงานแล้ว",
+            size: "lg",
+            weight: "bold",
+            color: "#111827",
+          },
+          {
+            type: "text",
+            text: safePlate,
+            size: "xl",
+            weight: "bold",
+            color: "#020617",
+            wrap: true,
+          },
+          ...detailLines.map((text) => ({
+            type: "text",
+            text,
+            size: "sm",
+            color: "#334155",
+            wrap: true,
+          })),
+          {
+            type: "text",
+            text: "รอตรวจงานจากกลุ่ม LINE",
+            size: "xs",
+            color: "#64748b",
+            wrap: true,
+          },
+        ],
+      },
+      footer: {
+        type: "box",
+        layout: "vertical",
+        spacing: "sm",
+        contents: [
+          {
+            type: "button",
+            style: "primary",
+            height: "sm",
+            color: "#0f172a",
+            action: {
+              type: "uri",
+              label: "ดูรายละเอียดงาน",
+              uri: reviewUrl,
+            },
+          },
+        ],
+      },
+    },
+  };
+}
+
 function lineJobReviewFlexMessage({
   reviewUrl,
   carTitle,
@@ -285,6 +373,38 @@ export async function replyLineTextMessage({
     accessToken: token,
     url: LINE_REPLY_MESSAGE_URL,
     body: { replyToken: lineReplyToken, messages: [{ type: "text", text: bodyText }] },
+    missingTargetError: "Missing LINE reply token",
+  });
+}
+
+export async function replyLineJobReceiptMessage({
+  accessToken,
+  replyToken,
+  reviewUrl,
+  plate,
+  mileage,
+  chassis,
+}: {
+  accessToken: string;
+  replyToken: string;
+  reviewUrl: string;
+  plate?: string;
+  mileage?: string;
+  chassis?: string;
+}): Promise<LinePushTextResult> {
+  const token = accessToken.trim();
+  const lineReplyToken = replyToken.trim();
+  const safeUrl = reviewUrl.trim();
+  if (!token) return { ok: false, error: "Missing LINE_CHANNEL_ACCESS_TOKEN" };
+  if (!lineReplyToken) return { ok: false, error: "Missing LINE reply token" };
+  if (!safeUrl) return { ok: false, error: "Missing LINE review URL" };
+  return sendLineMessages({
+    accessToken: token,
+    url: LINE_REPLY_MESSAGE_URL,
+    body: {
+      replyToken: lineReplyToken,
+      messages: [lineReceiptReviewFlexMessage({ reviewUrl: safeUrl, plate, mileage, chassis })],
+    },
     missingTargetError: "Missing LINE reply token",
   });
 }

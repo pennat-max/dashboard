@@ -1595,14 +1595,18 @@ assert(
 );
 assert(pendingSaveRoute.includes("maskLineTarget"), "manual approval reply masks LINE targets in logs");
 assert(linePushMessageSource.includes("replyLineTextMessage"), "LINE helper supports replyToken receipt replies");
+assert(linePushMessageSource.includes("replyLineJobReceiptMessage"), "LINE helper supports replyToken flex receipt cards");
 assert(linePushMessageSource.includes("https://api.line.me/v2/bot/message/reply"), "LINE reply helper uses the LINE reply API");
 assert(linePushMessageSource.includes('type: "flex"'), "LINE helper supports flex messages");
 assert(linePushMessageSource.includes('label: "ดูรายละเอียด"'), "LINE review acknowledgement uses a clickable detail button");
+assert(linePushMessageSource.includes('label: "ดูรายละเอียดงาน"'), "LINE receipt card uses a clickable job detail button");
 assert(linePushMessageSource.includes('type: "uri"'), "LINE review acknowledgement button opens the review URL");
 assert(linePushMessageSource.includes("classifyLineSendError"), "LINE helper exposes send error classification");
 assert(lineWebhookRoute.includes("LINE_WEBHOOK_RECEIPT_REPLY_ENABLED"), "webhook receipt replies are gated by env");
-assert(lineWebhookRoute.includes("replyLineTextMessage"), "webhook receipt uses LINE replyToken API");
-assert(lineWebhookRoute.includes("buildLineWebhookReceiptAcknowledgementText"), "webhook receipt uses safe receipt-only text");
+assert(lineWebhookRoute.includes("replyLineJobReceiptMessage"), "webhook receipt uses LINE flex card reply");
+assert(lineWebhookRoute.includes("replyLineTextMessage"), "webhook receipt keeps a LINE text fallback");
+assert(lineWebhookRoute.includes("buildLineWebhookReceiptAcknowledgementText"), "webhook receipt fallback uses safe receipt-only text");
+assert(lineWebhookRoute.includes("extractReceiptCardDetails"), "webhook receipt extracts plate, mileage, and chassis for the card");
 assert(lineWebhookRoute.includes("isLineInboxSystemAcknowledgementText(text)"), "webhook ignores bot/system acknowledgement text");
 assert(
   lineWebhookRoute.includes("isLineInboxNoiseOrSeparatorOnlyText(params.text)"),

@@ -16,7 +16,7 @@ import {
   makeLineReplyCaptureAnalyzePayload,
 } from "@/lib/line-inbox/reply-context";
 import { isLineInboxNoiseOrSeparatorOnlyText } from "@/lib/line-inbox/split-line-text";
-import { replyLineTextMessage } from "@/lib/line/push-message";
+import { replyLineJobReceiptMessage, replyLineTextMessage } from "@/lib/line/push-message";
 import {
   fetchLineMessageContent,
   makeLineAttachmentAnalyzePayload,
@@ -59,6 +59,19 @@ function maskLineTarget(value: unknown): string {
   if (!raw) return "";
   if (raw.length <= 8) return `${raw.slice(0, 1)}...${raw.slice(-1)}`;
   return `${raw.slice(0, 4)}...${raw.slice(-4)}`;
+}
+
+function extractReceiptCardDetails(text: string): {
+  plate?: string;
+  mileage?: string;
+  chassis?: string;
+} {
+  const raw = cleanLine(text);
+  const plate = raw.match(/[0-9]?[ก-ฮ]{1,3}[-\u2013\u2014]\d{2,5}[A-Z]?/u)?.[0]?.replace(/[\u2013\u2014]/g, "-");
+  const mileage = raw.match(/(\d{1,3}(?:,\d{3})+|\d{4,6})\s*(?:km|กม\.?|กิโล)/i)?.[1]?.replace(/,/g, "");
+  const chassisCandidates = raw.match(/\b[A-HJ-NPR-Z0-9]{12,20}\b/gi) ?? [];
+  const chassis = chassisCandidates.find((candidate) => /[A-Z]/i.test(candidate) && /\d/.test(candidate));
+  return { plate, mileage, chassis };
 }
 
 function receivedAtFromLineTimestamp(timestamp: number | undefined): string | undefined {
@@ -125,13 +138,24 @@ async function maybeSendWebhookReceiptReply(params: {
     return;
   }
 
-  const sent = await replyLineTextMessage({
-    accessToken: token,
-    replyToken: params.replyToken,
-    text: buildLineWebhookReceiptAcknowledgementText(
-      params.messageType === "text" ? buildLineOrderReviewUrl({ plate: params.text }) : null
-    ),
-  });
+  const reviewUrl = params.messageType === "text" ? buildLineOrderReviewUrl({ plate: params.text }) : "";
+  const cardDetails = params.messageType === "text" ? extractReceiptCardDetails(params.text) : {};
+  let sent = reviewUrl
+    ? await replyLineJobReceiptMessage({
+        accessToken: token,
+        replyToken: params.replyToken,
+        reviewUrl,
+        ...cardDetails,
+      })
+    : { ok: false as const, error: "Missing LINE review URL" };
+
+  if (!sent.ok && reviewUrl) {
+    sent = await replyLineTextMessage({
+      accessToken: token,
+      replyToken: params.replyToken,
+      text: buildLineWebhookReceiptAcknowledgementText(reviewUrl),
+    });
+  }
 
   if (!sent.ok) {
     console.warn("[line-webhook] receipt reply not sent", {
