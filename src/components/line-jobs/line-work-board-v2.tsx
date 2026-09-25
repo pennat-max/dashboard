@@ -9,13 +9,17 @@ import {
   Camera,
   Car,
   CheckCircle2,
+  ChevronLeft,
   ChevronRight,
   ClipboardList,
   ExternalLink,
   MessageCircle,
+  Plus,
   RefreshCcw,
   Search,
+  Trash2,
   UserCheck,
+  X,
 } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -102,6 +106,13 @@ type JobStatusRow = {
   updated_by_name?: string | null;
   updated_by_email?: string | null;
   updated_by_source?: string | null;
+};
+
+type GalleryImage = {
+  id: string;
+  url: string;
+  name: string;
+  local: boolean;
 };
 
 const WORK_STATUS_OPTIONS: { value: WorkStatus; label: string; tone: string }[] = [
@@ -200,6 +211,21 @@ function statusLabel(value: string | undefined): string {
 
 function itemLabel(line: QueueLine, index: number): string {
   return clean(line.suggested_item_name) || clean(line.raw_text) || `งาน ${index + 1}`;
+}
+
+function galleryImagesFromAttachments(attachments: QueueAttachment[]): GalleryImage[] {
+  return attachments
+    .map((attachment, index) => {
+      const url = clean(attachment.url);
+      if (!url) return null;
+      return {
+        id: clean(attachment.inbox_id) || `${url}:${index}`,
+        url,
+        name: clean(attachment.file_name) || `LINE photo ${index + 1}`,
+        local: false,
+      } satisfies GalleryImage;
+    })
+    .filter((item): item is GalleryImage => Boolean(item));
 }
 
 function linesFor(group: QueueGroup): QueueLine[] {
@@ -804,7 +830,65 @@ function JobDetail({
   const state = jobStateFor(group);
   const lines = linesFor(group);
   const messages = group.messages ?? [];
-  const attachments = group.attachments ?? [];
+  const attachments = useMemo(() => group.attachments ?? [], [group.attachments]);
+  const attachmentImages = useMemo(() => galleryImagesFromAttachments(attachments), [attachments]);
+  const [hiddenImageIds, setHiddenImageIds] = useState<Set<string>>(() => new Set());
+  const [addedImages, setAddedImages] = useState<GalleryImage[]>([]);
+  const [activeImageIndex, setActiveImageIndex] = useState<number | null>(null);
+  const visibleImages = useMemo(
+    () => [...attachmentImages.filter((image) => !hiddenImageIds.has(image.id)), ...addedImages],
+    [addedImages, attachmentImages, hiddenImageIds]
+  );
+
+  useEffect(() => {
+    setHiddenImageIds(new Set());
+    setActiveImageIndex(null);
+  }, [group.group_key]);
+
+  useEffect(() => {
+    return () => {
+      for (const image of addedImages) {
+        if (image.local) URL.revokeObjectURL(image.url);
+      }
+    };
+  }, [addedImages]);
+
+  function addGalleryFiles(files: FileList | null) {
+    const nextFiles = Array.from(files ?? []).filter((file) => file.type.startsWith("image/"));
+    if (!nextFiles.length) return;
+    setAddedImages((current) => [
+      ...current,
+      ...nextFiles.map((file) => ({
+        id: `local:${crypto.randomUUID()}`,
+        url: URL.createObjectURL(file),
+        name: file.name,
+        local: true,
+      })),
+    ]);
+  }
+
+  function removeGalleryImage(index: number) {
+    const image = visibleImages[index];
+    if (!image) return;
+    if (image.local) {
+      URL.revokeObjectURL(image.url);
+      setAddedImages((current) => current.filter((item) => item.id !== image.id));
+    } else {
+      setHiddenImageIds((current) => new Set([...current, image.id]));
+    }
+    setActiveImageIndex((current) => {
+      const nextLength = Math.max(0, visibleImages.length - 1);
+      if (!nextLength || current == null) return null;
+      return Math.min(current, nextLength - 1);
+    });
+  }
+
+  function moveActiveImage(delta: number) {
+    setActiveImageIndex((current) => {
+      if (current == null || visibleImages.length === 0) return null;
+      return (current + delta + visibleImages.length) % visibleImages.length;
+    });
+  }
 
   return (
     <div className="flex flex-col gap-4">
@@ -887,7 +971,17 @@ function JobDetail({
         </div>
       </section>
 
-      {attachments.length ? (
+      <LineImageGallery
+        images={visibleImages}
+        activeImageIndex={activeImageIndex}
+        onAddFiles={addGalleryFiles}
+        onOpenImage={setActiveImageIndex}
+        onCloseImage={() => setActiveImageIndex(null)}
+        onMoveImage={moveActiveImage}
+        onRemoveImage={removeGalleryImage}
+      />
+
+      {false && attachments.length ? (
         <section className="rounded-2xl border border-slate-200 bg-white p-3">
           <h3 className="flex items-center gap-2 text-base font-black">
             <Camera className="size-5 text-teal-700" aria-hidden />
@@ -936,6 +1030,102 @@ function JobDetail({
         </div>
       </section>
     </div>
+  );
+}
+
+function LineImageGallery({
+  images,
+  activeImageIndex,
+  onAddFiles,
+  onOpenImage,
+  onCloseImage,
+  onMoveImage,
+  onRemoveImage,
+}: {
+  images: GalleryImage[];
+  activeImageIndex: number | null;
+  onAddFiles: (files: FileList | null) => void;
+  onOpenImage: (index: number) => void;
+  onCloseImage: () => void;
+  onMoveImage: (delta: number) => void;
+  onRemoveImage: (index: number) => void;
+}) {
+  if (!images.length) return null;
+  const activeImage = activeImageIndex == null ? null : images[activeImageIndex] ?? null;
+
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-3">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="flex items-center gap-2 text-base font-black">
+          <Camera className="size-5 text-teal-700" aria-hidden />
+          รูปจาก LINE
+        </h3>
+        <label className="inline-flex min-h-10 cursor-pointer items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-black text-slate-700">
+          <Plus className="size-4" aria-hidden />
+          เพิ่ม
+          <input type="file" accept="image/*" multiple className="sr-only" onChange={(event) => onAddFiles(event.target.files)} />
+        </label>
+      </div>
+
+      <div className="mt-3 grid grid-cols-3 gap-2">
+        {images.map((image, index) => (
+          <div key={image.id} className="relative overflow-hidden rounded-2xl border border-slate-200 bg-slate-100">
+            <button type="button" className="block w-full" onClick={() => onOpenImage(index)}>
+              {/* eslint-disable-next-line @next/next/no-img-element -- LINE/R2 images are dynamic user assets already served by the app. */}
+              <img src={image.url} alt={image.name} className="aspect-square w-full object-cover" />
+            </button>
+            <button
+              type="button"
+              onClick={() => onRemoveImage(index)}
+              className="absolute right-1.5 top-1.5 grid size-7 place-items-center rounded-full bg-black/65 text-white shadow-sm"
+              aria-label="Remove image"
+            >
+              <Trash2 className="size-3.5" aria-hidden />
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {activeImage ? (
+        <div className="fixed inset-0 z-50 flex flex-col bg-black text-white">
+          <div className="flex min-h-14 items-center justify-between gap-2 px-3">
+            <button type="button" className="grid size-10 place-items-center rounded-full bg-white/10" onClick={onCloseImage} aria-label="Close image">
+              <X className="size-5" aria-hidden />
+            </button>
+            <div className="min-w-0 text-center">
+              <p className="truncate text-sm font-black">{activeImage.name}</p>
+              <p className="text-xs text-white/60">{(activeImageIndex ?? 0) + 1} / {images.length}</p>
+            </div>
+            <button type="button" className="grid size-10 place-items-center rounded-full bg-white/10" onClick={() => onRemoveImage(activeImageIndex ?? 0)} aria-label="Remove image">
+              <Trash2 className="size-5" aria-hidden />
+            </button>
+          </div>
+          <div className="relative grid min-h-0 flex-1 place-items-center overflow-hidden">
+            <button type="button" className="absolute left-2 z-10 grid size-11 place-items-center rounded-full bg-black/45" onClick={() => onMoveImage(-1)} aria-label="Previous image">
+              <ChevronLeft className="size-6" aria-hidden />
+            </button>
+            {/* eslint-disable-next-line @next/next/no-img-element -- Full-screen preview of selected LINE/R2 image. */}
+            <img src={activeImage.url} alt={activeImage.name} className="max-h-full max-w-full object-contain" />
+            <button type="button" className="absolute right-2 z-10 grid size-11 place-items-center rounded-full bg-black/45" onClick={() => onMoveImage(1)} aria-label="Next image">
+              <ChevronRight className="size-6" aria-hidden />
+            </button>
+          </div>
+          <div className="flex gap-2 overflow-x-auto px-3 py-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {images.map((image, index) => (
+              <button
+                key={image.id}
+                type="button"
+                onClick={() => onOpenImage(index)}
+                className={cn("shrink-0 overflow-hidden rounded-xl border", index === activeImageIndex ? "border-white" : "border-white/20")}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element -- Full-screen thumbnail strip. */}
+                <img src={image.url} alt={image.name} className="size-16 object-cover" />
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </section>
   );
 }
 
