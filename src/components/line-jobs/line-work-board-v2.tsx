@@ -964,11 +964,9 @@ function JobDetail({
             </div>
           ) : (
             lines.map((line, index) => (
-              <div key={`${lineKey(line)}-${index}`} className="grid grid-cols-[28px_1fr] gap-3 rounded-2xl bg-slate-50 p-3">
-                <div className="mt-0.5 grid size-6 place-items-center rounded-lg border-2 border-slate-300 text-xs font-black text-slate-400">{index + 1}</div>
+              <div key={`${lineKey(line)}-${index}`} className="rounded-2xl bg-slate-50 p-3">
                 <div className="min-w-0">
                   <p className="font-black">{clean(line.suggested_item_name) || clean(line.raw_text) || `งาน ${index + 1}`}</p>
-                  <p className="mt-1 text-sm leading-6 text-slate-600">{clean(line.suggested_note) || clean(line.reason) || clean(line.raw_text) || "รอตรวจรายละเอียด"}</p>
                   {line.suggested_status ? <span className="mt-2 inline-flex rounded-full bg-white px-2 py-1 text-[11px] font-black text-slate-600">{line.suggested_status}</span> : null}
                   <LineStatusControls
                     group={group}
