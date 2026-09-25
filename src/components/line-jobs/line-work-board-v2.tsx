@@ -9,6 +9,7 @@ import {
   Camera,
   Car,
   CheckCircle2,
+  ChevronRight,
   ClipboardList,
   ExternalLink,
   MessageCircle,
@@ -92,14 +93,41 @@ function clean(value: unknown): string {
 function titleFor(group: QueueGroup): string {
   return (
     clean(group.plate_display) ||
-    clean(group.car_title) ||
+    firstCarTitlePart(group) ||
     clean(group.fallbackTitle ?? group.fallback_title) ||
     "ยังไม่รู้รถ"
   );
 }
 
+function stripRepeatedPrefix(text: string, prefix: string): string {
+  let safeText = clean(text);
+  const safePrefix = clean(prefix);
+  if (!safeText || !safePrefix) return safeText;
+  const compactPrefix = safePrefix.replace(/\s+/g, "").toLowerCase();
+  for (let i = 0; i < 3; i += 1) {
+    const compactText = safeText.replace(/\s+/g, "").toLowerCase();
+    if (!compactText.startsWith(compactPrefix)) break;
+    const next = safeText.slice(safePrefix.length).replace(/^[\s:|/-]+/, "").trim();
+    if (!next || next === safeText) break;
+    safeText = next;
+  }
+  return safeText;
+}
+
+function firstCarTitlePart(group: QueueGroup): string {
+  const carTitle = clean(group.car_title);
+  const plate = clean(group.plate_display);
+  if (!carTitle) return "";
+  if (!plate) return carTitle;
+  return stripRepeatedPrefix(carTitle, plate) || carTitle;
+}
+
 function descriptionFor(group: QueueGroup): string {
-  return clean(group.car_title) || clean(group.fallbackDescription ?? group.fallback_description) || "ข้อความจาก LINE";
+  const title = titleFor(group);
+  const carTitle = firstCarTitlePart(group);
+  const fallback = clean(group.fallbackDescription ?? group.fallback_description);
+  const description = carTitle || fallback || "ข้อความจาก LINE";
+  return stripRepeatedPrefix(description, title) || description;
 }
 
 function requesterFor(group: QueueGroup): string {
@@ -163,10 +191,10 @@ function stateLabel(state: JobState): string {
 }
 
 function stateTone(state: JobState): string {
-  if (state === "ready") return "bg-orange-100 text-orange-900 border-orange-200";
+  if (state === "ready") return "bg-orange-50 text-orange-900 border-orange-200";
   if (state === "review") return "bg-rose-100 text-rose-900 border-rose-200";
   if (state === "waiting_car") return "bg-amber-100 text-amber-900 border-amber-200";
-  return "bg-emerald-100 text-emerald-900 border-emerald-200";
+  return "bg-emerald-50 text-emerald-900 border-emerald-200";
 }
 
 function formatTime(value?: string): string {
@@ -317,7 +345,7 @@ export function LineWorkBoardV2() {
             <Metric label="ของฉัน" value={mineCount} className="border-cyan-200 bg-cyan-50 text-cyan-900" />
             <Metric label="ใหม่" value={newCount} className="border-orange-200 bg-orange-50 text-orange-900" />
             <Metric label="รอตรวจ" value={reviewCount} className="border-rose-200 bg-rose-50 text-rose-900" />
-            <Metric label="รายการ" value={allLines} className="border-slate-200 bg-white text-slate-800" />
+            <Metric label="งานย่อย" value={allLines} className="border-slate-200 bg-white text-slate-800" />
           </div>
 
           <div className="grid grid-cols-3 gap-1 rounded-2xl bg-slate-200/70 p-1">
@@ -326,13 +354,13 @@ export function LineWorkBoardV2() {
             <TabButton active={tab === "review"} label="รอตรวจ" count={reviewCount} onClick={() => setTab("review")} />
           </div>
 
-          <div className="flex gap-2 overflow-x-auto pb-1">
+          <div className="-mx-3 flex gap-2 overflow-x-auto px-3 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             <FilterButton active={filter === "all"} label="ทั้งหมด" count={data?.filter_counts?.all} onClick={() => setFilter("all")} />
             <FilterButton active={filter === "today"} label="วันนี้" count={data?.filter_counts?.today} onClick={() => setFilter("today")} />
             <FilterButton active={filter === "manual"} label="AI ไม่มั่นใจ" count={data?.filter_counts?.manual} onClick={() => setFilter("manual")} />
             <FilterButton
               active={filter === "waiting_for_car"}
-              label="รอข้อมูลรถ"
+              label="รอรถ"
               count={data?.filter_counts?.waiting_for_car}
               onClick={() => setFilter("waiting_for_car")}
             />
@@ -411,10 +439,10 @@ function JobCard({ group, selected, onSelect }: { group: QueueGroup; selected: b
       onClick={onSelect}
       className={cn(
         "rounded-2xl border bg-white p-3 text-left shadow-sm transition",
-        selected ? "border-teal-500 ring-2 ring-teal-100" : "border-slate-200 hover:border-teal-300",
-        state === "ready" && "border-l-4 border-l-orange-400",
-        state === "working" && "border-l-4 border-l-teal-600",
-        (state === "review" || state === "waiting_car") && "border-l-4 border-l-rose-400"
+        selected ? "border-slate-950 ring-2 ring-slate-100" : "border-slate-200 hover:border-slate-300",
+        state === "ready" && "shadow-orange-100/70",
+        state === "working" && "shadow-teal-100/70",
+        (state === "review" || state === "waiting_car") && "shadow-rose-100/70"
       )}
     >
       <div className="flex items-start justify-between gap-3">
@@ -433,7 +461,7 @@ function JobCard({ group, selected, onSelect }: { group: QueueGroup; selected: b
       <div className="mt-3 flex flex-wrap gap-2 text-[11px] font-bold text-slate-500">
         <span className="inline-flex items-center gap-1">
           <ClipboardList className="size-3.5" aria-hidden />
-          {lineCount} งาน
+          {lineCount} งานย่อย
         </span>
         <span className="inline-flex items-center gap-1">
           <MessageCircle className="size-3.5" aria-hidden />
@@ -444,6 +472,10 @@ function JobCard({ group, selected, onSelect }: { group: QueueGroup; selected: b
           {group.attachments?.length ?? 0} รูป
         </span>
         <span>{formatTime(latest)}</span>
+      </div>
+      <div className="mt-3 flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2 text-xs font-black text-slate-900">
+        <span>เปิดงาน</span>
+        <ChevronRight className="size-4" aria-hidden />
       </div>
     </button>
   );
