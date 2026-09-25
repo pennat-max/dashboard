@@ -252,6 +252,8 @@ export function LineWorkBoardV2() {
   const [query, setQuery] = useState("");
   const [copied, setCopied] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [shipFilter, setShipFilter] = useState("all");
+  const [assigneeFilter, setAssigneeFilter] = useState("all");
   const detailRef = useRef<HTMLElement | null>(null);
 
   const loadQueue = useCallback(async () => {
@@ -303,7 +305,18 @@ export function LineWorkBoardV2() {
     );
   }, [groups, query]);
 
-  const visibleGroups = useMemo(() => searchedGroups.filter((group) => groupMatchesTab(group, tab)), [searchedGroups, tab]);
+  const shipOptions = useMemo(() => buildOptionCounts(searchedGroups.map(bookedShippingFor)), [searchedGroups]);
+  const assigneeOptions = useMemo(() => buildOptionCounts(searchedGroups.map(assigneeFor)), [searchedGroups]);
+  const visibleGroups = useMemo(
+    () =>
+      searchedGroups.filter((group) => {
+        if (!groupMatchesTab(group, tab)) return false;
+        if (shipFilter !== "all" && optionKey(bookedShippingFor(group)) !== shipFilter) return false;
+        if (assigneeFilter !== "all" && optionKey(assigneeFor(group)) !== assigneeFilter) return false;
+        return true;
+      }),
+    [assigneeFilter, searchedGroups, shipFilter, tab]
+  );
   const selected = searchedGroups.find((group) => group.group_key === selectedKey) ?? visibleGroups[0] ?? searchedGroups[0] ?? null;
   const allLines = (data?.total_action_lines ?? 0) + (data?.total_new_lines ?? 0);
   const reviewCount = searchedGroups.filter((group) => groupMatchesTab(group, "review")).length;
@@ -380,6 +393,24 @@ export function LineWorkBoardV2() {
             />
           </div>
 
+          <OptionFilterRow
+            title="รอบเรือ"
+            allLabel="ทุกรอบ"
+            value={shipFilter}
+            onChange={setShipFilter}
+            options={shipOptions}
+            emptyLabel="ยังไม่ระบุรอบ"
+          />
+
+          <OptionFilterRow
+            title="ผู้รับผิดชอบ"
+            allLabel="ทุกคน"
+            value={assigneeFilter}
+            onChange={setAssigneeFilter}
+            options={assigneeOptions}
+            emptyLabel="ยังไม่ระบุ"
+          />
+
           {error ? <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3 text-sm font-bold text-rose-900">{error}</div> : null}
 
           <div className="flex flex-col gap-2">
@@ -442,6 +473,82 @@ function FilterButton({ active, label, count, onClick }: { active: boolean; labe
   );
 }
 
+type OptionCount = {
+  key: string;
+  label: string;
+  count: number;
+};
+
+function optionKey(value: string): string {
+  const cleanValue = clean(value);
+  return cleanValue ? cleanValue.toLowerCase() : "__empty__";
+}
+
+function buildOptionCounts(values: string[]): OptionCount[] {
+  const map = new Map<string, OptionCount>();
+  for (const value of values) {
+    const label = clean(value);
+    const key = optionKey(label);
+    const current = map.get(key);
+    if (current) current.count += 1;
+    else map.set(key, { key, label, count: 1 });
+  }
+  return Array.from(map.values()).sort((a, b) => {
+    if (a.key === "__empty__") return 1;
+    if (b.key === "__empty__") return -1;
+    return b.count - a.count || a.label.localeCompare(b.label, "th", { numeric: true, sensitivity: "base" });
+  });
+}
+
+function OptionFilterRow({
+  title,
+  allLabel,
+  value,
+  onChange,
+  options,
+  emptyLabel,
+}: {
+  title: string;
+  allLabel: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: OptionCount[];
+  emptyLabel: string;
+}) {
+  if (options.length === 0) return null;
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+      <p className="mb-2 text-xs font-black text-slate-500">{title}</p>
+      <div className="-mx-1 flex gap-2 overflow-x-auto px-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <button
+          type="button"
+          onClick={() => onChange("all")}
+          className={cn(
+            "shrink-0 rounded-full border px-3 py-2 text-xs font-black",
+            value === "all" ? "border-slate-950 bg-slate-950 text-white" : "border-slate-200 bg-slate-50 text-slate-700"
+          )}
+        >
+          {allLabel}
+        </button>
+        {options.map((option) => (
+          <button
+            key={option.key}
+            type="button"
+            onClick={() => onChange(option.key)}
+            className={cn(
+              "shrink-0 rounded-full border px-3 py-2 text-xs font-black",
+              value === option.key ? "border-teal-700 bg-teal-700 text-white" : "border-slate-200 bg-slate-50 text-slate-700"
+            )}
+          >
+            {option.label || emptyLabel} {option.count}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function JobCard({ group, selected, onSelect }: { group: QueueGroup; selected: boolean; onSelect: () => void }) {
   const state = jobStateFor(group);
   const lineCount = linesFor(group).length;
@@ -467,9 +574,8 @@ function JobCard({ group, selected, onSelect }: { group: QueueGroup; selected: b
         <span className={cn("shrink-0 rounded-full border px-2 py-1 text-[11px] font-black", stateTone(state))}>{stateLabel(state)}</span>
       </div>
 
-      <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-        <SmallInfo label="สั่ง" value={requesterFor(group)} />
-        <SmallInfo label="รับ" value={assigneeFor(group)} />
+      <div className="mt-3 grid grid-cols-1 gap-2 text-xs">
+        <SmallInfo label="รับผิดชอบ" value={assigneeFor(group)} />
       </div>
 
       {bookedShippingFor(group) ? (
@@ -546,8 +652,7 @@ function JobDetail({
           <span className={cn("shrink-0 rounded-full border px-2 py-1 text-[11px] font-black", stateTone(state))}>{stateLabel(state)}</span>
         </div>
 
-        <div className="mt-4 grid grid-cols-3 gap-2">
-          <InfoChip icon={<MessageCircle className="size-4" aria-hidden />} label="ผู้สั่ง" value={requesterFor(group)} />
+        <div className="mt-4 grid grid-cols-2 gap-2">
           <InfoChip icon={<UserCheck className="size-4" aria-hidden />} label="ผู้รับผิดชอบ" value={assigneeFor(group)} />
           <InfoChip icon={<Car className="size-4" aria-hidden />} label="รถ" value={clean(group.car_row_id) ? "ผูกแล้ว" : "รอตรวจ"} />
         </div>
