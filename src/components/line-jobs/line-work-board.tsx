@@ -179,7 +179,7 @@ function statusPill(status: BoardStatus): string {
 }
 
 export function LineWorkBoard() {
-  const [filter, setFilter] = useState<QueueFilter>("today");
+  const [filter, setFilter] = useState<QueueFilter>("all");
   const [data, setData] = useState<QueueResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
