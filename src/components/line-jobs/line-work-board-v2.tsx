@@ -108,6 +108,15 @@ type JobStatusRow = {
   updated_by_source?: string | null;
 };
 
+type JobStatusEvent = {
+  id: string;
+  old_status?: string | null;
+  new_status: WorkStatus;
+  changed_at: string;
+  changed_by_name?: string | null;
+  changed_by_email?: string | null;
+};
+
 type GalleryImage = {
   id: string;
   url: string;
@@ -1050,8 +1059,23 @@ function LineImageGallery({
   onMoveImage: (delta: number) => void;
   onRemoveImage: (index: number) => void;
 }) {
+  const touchStartX = useRef<number | null>(null);
   if (!images.length) return null;
   const activeImage = activeImageIndex == null ? null : images[activeImageIndex] ?? null;
+
+  function handleTouchStart(event: React.TouchEvent) {
+    touchStartX.current = event.touches[0]?.clientX ?? null;
+  }
+
+  function handleTouchEnd(event: React.TouchEvent) {
+    const startX = touchStartX.current;
+    touchStartX.current = null;
+    if (startX == null) return;
+    const endX = event.changedTouches[0]?.clientX ?? startX;
+    const delta = endX - startX;
+    if (Math.abs(delta) < 45) return;
+    onMoveImage(delta > 0 ? -1 : 1);
+  }
 
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-3">
@@ -1100,7 +1124,7 @@ function LineImageGallery({
               <Trash2 className="size-5" aria-hidden />
             </button>
           </div>
-          <div className="relative grid min-h-0 flex-1 place-items-center overflow-hidden">
+          <div className="relative grid min-h-0 flex-1 touch-pan-y place-items-center overflow-hidden" onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
             <button type="button" className="absolute left-2 z-10 grid size-11 place-items-center rounded-full bg-black/45" onClick={() => onMoveImage(-1)} aria-label="Previous image">
               <ChevronLeft className="size-6" aria-hidden />
             </button>
@@ -1148,10 +1172,37 @@ function LineStatusControls({
   const updatedBy = clean(status?.updated_by_name) || clean(status?.updated_by_email);
   const currentTone = statusOptionFor(currentStatus).tone;
   const [chooserOpen, setChooserOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState("");
+  const [historyEvents, setHistoryEvents] = useState<JobStatusEvent[]>([]);
+  const itemKey = lineStatusKey(group, line, index);
+  const updatedLine = status?.updated_at && updatedBy ? `${updatedBy} · ${formatTime(status.updated_at)}` : "";
 
   function chooseStatus(nextStatus: WorkStatus) {
     setChooserOpen(false);
     onStatusChange(group, line, index, nextStatus);
+  }
+
+  async function openHistory() {
+    setHistoryOpen(true);
+    setHistoryLoading(true);
+    setHistoryError("");
+    try {
+      const res = await fetch("/api/line-jobs/status-history", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ item_key: itemKey }),
+      });
+      const body = (await res.json()) as { events?: JobStatusEvent[]; error?: string };
+      if (!res.ok || body.error) throw new Error(body.error || "Cannot load history");
+      setHistoryEvents(body.events ?? []);
+    } catch (e) {
+      setHistoryError(e instanceof Error ? e.message : String(e));
+      setHistoryEvents([]);
+    } finally {
+      setHistoryLoading(false);
+    }
   }
 
   return (
@@ -1167,11 +1218,15 @@ function LineStatusControls({
             {saving ? "กำลังบันทึก" : statusLabel(currentStatus)}
           </span>
           <span className="min-w-0 flex-1 truncate text-right text-[11px] font-bold text-slate-400">
-            {updatedBy ? `แก้ล่าสุดโดย ${updatedBy}` : "แตะเพื่อเปลี่ยน"}
+            {updatedLine || "แตะเพื่อเปลี่ยน"}
           </span>
           <ChevronRight className="size-4 shrink-0 text-slate-400" aria-hidden />
         </button>
-        {status?.updated_at ? <p className="mt-2 px-1 text-[11px] font-bold text-slate-400">{formatTime(status.updated_at)}</p> : null}
+        {status?.updated_at ? (
+          <button type="button" className="mt-2 px-1 text-[11px] font-black text-teal-700 underline underline-offset-2" onClick={() => void openHistory()}>
+            ดูประวัติ
+          </button>
+        ) : null}
       </div>
 
       {chooserOpen ? (
@@ -1202,6 +1257,46 @@ function LineStatusControls({
                   {option.label}
                 </button>
               ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {historyOpen ? (
+        <div className="fixed inset-0 z-50 flex items-end bg-black/45 p-3 sm:items-center sm:justify-center">
+          <div className="max-h-[82dvh] w-full overflow-hidden rounded-3xl bg-white shadow-2xl sm:max-w-md">
+            <div className="flex items-center justify-between gap-3 border-b border-slate-100 p-4">
+              <div>
+                <p className="text-xs font-black text-slate-400">ประวัติสถานะ</p>
+                <p className="line-clamp-1 text-base font-black">{itemLabel(line, index)}</p>
+              </div>
+              <button type="button" className="grid size-10 place-items-center rounded-full bg-slate-100" onClick={() => setHistoryOpen(false)} aria-label="Close status history">
+                <X className="size-5" aria-hidden />
+              </button>
+            </div>
+            <div className="max-h-[62dvh] overflow-y-auto p-4">
+              {historyLoading ? <p className="text-sm font-bold text-slate-500">กำลังโหลดประวัติ...</p> : null}
+              {historyError ? <p className="rounded-2xl bg-rose-50 p-3 text-sm font-bold text-rose-900">{historyError}</p> : null}
+              {!historyLoading && !historyError && historyEvents.length === 0 ? (
+                <p className="rounded-2xl bg-slate-50 p-3 text-sm font-bold text-slate-500">ยังไม่มีประวัติ</p>
+              ) : null}
+              <div className="flex flex-col gap-2">
+                {historyEvents.map((event) => {
+                  const by = clean(event.changed_by_name) || clean(event.changed_by_email) || "-";
+                  return (
+                    <div key={event.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className={cn("rounded-full border px-2 py-1 text-[11px] font-black", statusOptionFor(event.new_status).tone)}>
+                          {statusLabel(event.new_status)}
+                        </span>
+                        <span className="text-[11px] font-bold text-slate-400">{formatTime(event.changed_at)}</span>
+                      </div>
+                      <p className="mt-2 text-sm font-black text-slate-800">{by}</p>
+                      {event.old_status ? <p className="mt-1 text-xs font-bold text-slate-500">จาก {statusLabel(event.old_status)} เป็น {statusLabel(event.new_status)}</p> : null}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </div>
         </div>
