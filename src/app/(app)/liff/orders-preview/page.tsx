@@ -12,6 +12,7 @@ type PageProps = {
     order?: string | string[];
     scope?: string | string[];
     demo?: string | string[];
+    load?: string | string[];
   };
 };
 
@@ -25,13 +26,15 @@ export default async function LiffOrdersPreviewPage({ searchParams }: PageProps)
   const scope = parseScope(searchParams?.scope);
   const demoRaw = Array.isArray(searchParams?.demo) ? searchParams.demo[0] : searchParams?.demo;
   const demo = demoRaw === "1";
+  const loadRaw = Array.isArray(searchParams?.load) ? searchParams.load[0] : searchParams?.load;
+  const isFullLoad = String(loadRaw ?? "").trim().toLowerCase() === "full";
   const initialSaleStatusFilters: Array<"จอง" | "รอส่ง" | "ส่งแล้ว" | "ว่าง"> =
     scope === "shipped" ? ["ส่งแล้ว"] : scope === "active" ? ["จอง", "รอส่ง", "ว่าง"] : [];
   const props = await loadOrderTrackingPageData(searchParams ?? {}, {
-    summaryOnly: false,
+    summaryOnly: !isFullLoad,
     includeShipped: scope !== "active",
     shippedOnly: scope === "shipped",
-    chipCacheExperiment: true,
+    chipCacheExperiment: isFullLoad,
     initialDetailLimit: 6,
     leanInitialDetails: true,
     skipGlobalSummary: true,
@@ -52,6 +55,7 @@ export default async function LiffOrdersPreviewPage({ searchParams }: PageProps)
         saleStatusSummaryAllCars={props.saleStatusSummaryAllCars}
         summarySnapshotAllCars={props.summarySnapshotAllCars}
         disableDemoFallback={!demo}
+        deferCarsHydration={!isFullLoad}
         dataWarnings={demo ? [] : props.dataWarnings}
         initialFocusedOrderId={props.initialFocusedOrderId}
         shareBaseUrl={props.shareBaseUrl}
