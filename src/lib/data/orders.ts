@@ -363,11 +363,12 @@ async function fetchMatchingOrderTasks(
     return null;
   };
 
-  const rowErr = await runBatches("car_row_id", rowChunks);
+  const [rowErr, carErr] = await Promise.all([
+    runBatches("car_row_id", rowChunks),
+    runBatches("car_id", carChunks),
+  ]);
   if (rowErr === false) return { tasks: [], error: null, tableReady: false };
   if (typeof rowErr === "string") return { tasks: [], error: rowErr, tableReady: true };
-
-  const carErr = await runBatches("car_id", carChunks);
   if (carErr === false) return { tasks: [], error: null, tableReady: false };
   if (typeof carErr === "string") return { tasks: [], error: carErr, tableReady: true };
 

@@ -4928,7 +4928,7 @@ export function MobileOrderTrackingHome({
   }, [searchParams]);
 
   useEffect(() => {
-    if (orderChipCacheExperimentEnabled && !taskFirstLiff) return;
+    if (orderChipCacheExperimentEnabled) return;
     if (!deferCarsHydration) return;
     if (hydratedOnceRef.current) return;
     const mode = String(searchParams?.get("load") ?? "").trim().toLowerCase();
@@ -4949,7 +4949,7 @@ export function MobileOrderTrackingHome({
     return () => {
       window.clearTimeout(fallbackTimer);
     };
-  }, [deferCarsHydration, orderChipCacheExperimentEnabled, pathname, router, searchParams, taskFirstLiff]);
+  }, [deferCarsHydration, orderChipCacheExperimentEnabled, pathname, router, searchParams]);
 
   useEffect(() => {
     if (!orderChipCacheExperimentEnabled) return;
