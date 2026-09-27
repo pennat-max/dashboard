@@ -68,11 +68,11 @@ function itemIsDone(item: OrderItem): boolean {
 
 function orderEditorHref(order: Order): string {
   const params = new URLSearchParams();
-  params.set("order", order.id);
-  if (order.carRowId) params.set("focusCarRowId", order.carRowId);
-  else if (order.carId != null) params.set("focusCar", String(order.carId));
-  if (order.fullPlate && order.fullPlate !== "-") params.set("search", order.fullPlate);
-  return `/m/orders?${params.toString()}`;
+  params.set("load", "full");
+  params.set("scope", order.shipped ? "shipped" : "active");
+  const search = order.fullPlate && order.fullPlate !== "-" ? order.fullPlate : order.chassis;
+  if (search) params.set("search", search);
+  return `/liff/orders?${params.toString()}`;
 }
 
 function formatThaiDate(value: string | undefined): string {
