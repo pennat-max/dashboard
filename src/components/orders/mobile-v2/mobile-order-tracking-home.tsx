@@ -6077,6 +6077,10 @@ export function MobileOrderTrackingHome({
       })),
     [saleStatusCounts, saleStatusFilters]
   );
+  const visibleSaleStatusChipModels =
+    String(searchParams?.get("scope") ?? "").trim().toLowerCase() === "active"
+      ? saleStatusChipModels.filter(({ saleStatus }) => saleStatus !== "ส่งแล้ว")
+      : saleStatusChipModels;
   const visible = useMemo(
     () =>
       mappedOrders
@@ -6991,7 +6995,7 @@ export function MobileOrderTrackingHome({
       (taskFirstScope === "shipped" && saleStatusFilters.size === 1 && saleStatusFilters.has("ส่งแล้ว"));
     const liffActiveFilterCount =
       saleFilters.size + (hasDefaultScopeStatuses ? 0 : saleStatusFilters.size) + staffFilters.size + itemStatusFilters.size;
-    const saleStatusOptions = saleStatusChipModels.map(({ saleStatus, count, active }) => ({
+    const saleStatusOptions = visibleSaleStatusChipModels.map(({ saleStatus, count, active }) => ({
       label: saleStatus,
       count,
       active,
@@ -7353,7 +7357,7 @@ export function MobileOrderTrackingHome({
                     <span className="text-xs font-semibold tracking-wide text-slate-600">{uiLang === "en" ? "Sale Status" : "สถานะขาย"}</span>
                   </div>
                   <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(72px, 1fr))" }}>
-                    {saleStatusChipModels.map(({ saleStatus: s, active, count }) => {
+                    {visibleSaleStatusChipModels.map(({ saleStatus: s, active, count }) => {
                       const showShipExpand = s === "รอส่ง" && bookedShippingRounds.length > 0;
                       const showBuyerExpand = s === "จอง" && bookedBuyerRounds.length > 0;
                       const showShippedSoldExpand = s === "ส่งแล้ว" && shippedSoldToolbarStats.soldCount > 0;
