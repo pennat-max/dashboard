@@ -27,7 +27,7 @@ export default async function LiffOrdersPreviewPage({ searchParams }: PageProps)
   const demoRaw = Array.isArray(searchParams?.demo) ? searchParams.demo[0] : searchParams?.demo;
   const demo = demoRaw === "1";
   const limitRaw = Array.isArray(searchParams?.limit) ? searchParams.limit[0] : searchParams?.limit;
-  const queueLimit = Math.max(6, Math.min(60, Math.floor(Number(limitRaw) || 6)));
+  const queueLimit = Math.max(6, Math.min(150, Math.floor(Number(limitRaw) || 6)));
   const initialSaleStatusFilters: Array<"จอง" | "รอส่ง" | "ส่งแล้ว" | "ว่าง"> =
     scope === "shipped" ? ["ส่งแล้ว"] : scope === "active" ? ["จอง", "รอส่ง", "ว่าง"] : [];
   const props = await loadOrderTrackingPageData(searchParams ?? {}, {

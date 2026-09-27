@@ -89,7 +89,7 @@ export async function loadOrderTrackingPageData(
 ) {
   const summaryOnly = options?.summaryOnly === true;
   const chipCacheExperiment = options?.chipCacheExperiment === true;
-  const initialDetailLimit = Math.max(1, Math.min(50, Math.floor(Number(options?.initialDetailLimit ?? 50))));
+  const initialDetailLimit = Math.max(1, Math.min(150, Math.floor(Number(options?.initialDetailLimit ?? 50))));
   const skipGlobalSummary = options?.skipGlobalSummary === true;
   const summaryPromise = skipGlobalSummary
     ? { snapshot: null, error: null }

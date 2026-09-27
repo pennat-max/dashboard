@@ -4913,7 +4913,7 @@ export function MobileOrderTrackingHome({
   );
   const normalizedTaskFirstInitialCount = Math.max(
     ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT,
-    Math.min(60, Math.floor(Number(taskFirstInitialCount) || ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT))
+    Math.min(150, Math.floor(Number(taskFirstInitialCount) || ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT))
   );
   const [experimentRequestedCount, setExperimentRequestedCount] = useState(normalizedTaskFirstInitialCount);
   const [experimentLoadingDetails, setExperimentLoadingDetails] = useState(false);
@@ -7011,7 +7011,7 @@ export function MobileOrderTrackingHome({
       active: sale === "ALL" ? saleFilters.size === 0 : saleFilters.has(sale),
     }));
     const loadMoreParams = new URLSearchParams(searchParams?.toString() ?? "");
-    loadMoreParams.set("limit", String(Math.min(60, experimentRequestedCount + ORDER_TRACKING_EXPERIMENT_INCREMENT)));
+    loadMoreParams.set("limit", String(Math.min(150, experimentRequestedCount + ORDER_TRACKING_EXPERIMENT_INCREMENT)));
     const loadMoreHref = `${pathname}?${loadMoreParams.toString()}`;
 
     return (
