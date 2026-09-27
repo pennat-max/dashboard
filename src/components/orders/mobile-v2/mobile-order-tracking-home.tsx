@@ -106,9 +106,9 @@ const ITEM_STATUS_LABELS_STORAGE_KEY = "vigo4u.orderTracking.itemStatusLabels";
 const ITEM_STATUS_POLICIES_STORAGE_KEY = "vigo4u.orderTracking.itemStatusPolicies.v1";
 const STAFF_ROSTER_API_PATH = "/api/m/order-tracking/staff-roster";
 const ORDER_TRACKING_CARD_DETAILS_API_PATH = "/api/m/order-tracking/card-details";
-const ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT = 20;
-const ORDER_TRACKING_EXPERIMENT_INCREMENT = 10;
-const ORDER_TRACKING_EXPERIMENT_AHEAD_BUFFER = 20;
+const ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT = 6;
+const ORDER_TRACKING_EXPERIMENT_INCREMENT = 6;
+const ORDER_TRACKING_EXPERIMENT_AHEAD_BUFFER = 6;
 /** ชิปกรองรายการที่ยังไม่มีชื่อพนักงาน — ค่าภายใน ไม่ชนกับชื่อจริง */
 const STAFF_FILTER_UNASSIGNED = "__UNASSIGNED__";
 const STAFF_FILTER_UNASSIGNED_LABEL = "ไม่ระบุชื่อ";
@@ -580,6 +580,8 @@ type LineThreadSummary = {
   latest_at: string;
   messages: LineThreadMessage[];
 };
+
+const EMPTY_LINE_THREADS_BY_CAR: Record<string, LineThreadSummary> = {};
 
 export type Order = {
   id: string;
@@ -4863,7 +4865,7 @@ export function MobileOrderTrackingHome({
   carsData = [],
   orderItemsByCar = {},
   orderUpdatesByCar = {},
-  lineThreadsByCar = {},
+  lineThreadsByCar = EMPTY_LINE_THREADS_BY_CAR,
   orderItemFilterIndexByCar = {},
   orderChipCacheExperimentEnabled = false,
   orderChipCacheBadgeLabel = null,
@@ -6455,7 +6457,7 @@ export function MobileOrderTrackingHome({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           cache: "no-store",
-          body: JSON.stringify({ cars: batch.map(orderCarRequest) }),
+          body: JSON.stringify({ cars: batch.map(orderCarRequest), lean: taskFirstLiff }),
         });
         const payload = (await res.json()) as {
           orderItemsByCar?: NonNullable<MobileOrderTrackingHomeProps["orderItemsByCar"]>;
@@ -6486,7 +6488,7 @@ export function MobileOrderTrackingHome({
         setExperimentLoadingDetails(false);
       }
     },
-    [experimentHydratedCarKeys, orderChipCacheExperimentEnabled]
+    [experimentHydratedCarKeys, orderChipCacheExperimentEnabled, taskFirstLiff]
   );
 
   useEffect(() => {
@@ -7011,6 +7013,7 @@ export function MobileOrderTrackingHome({
     return (
       <LiffTaskQueueView
         orders={visiblePagedForRender}
+        totalOrders={visible.length}
         scope={taskFirstScope}
         onScopeChange={(nextScope) => {
           const p = new URLSearchParams(searchParams?.toString() ?? "");

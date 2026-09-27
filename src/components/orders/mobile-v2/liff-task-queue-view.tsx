@@ -28,6 +28,7 @@ type FilterOption = {
 
 type Props = {
   orders: Order[];
+  totalOrders: number;
   scope: LiffQueueScope;
   onScopeChange: (scope: LiffQueueScope) => void;
   searchValue: string;
@@ -187,6 +188,7 @@ function FilterChips({ options, onToggle }: { options: FilterOption[]; onToggle:
 
 export function LiffTaskQueueView({
   orders,
+  totalOrders,
   scope,
   onScopeChange,
   searchValue,
@@ -275,9 +277,9 @@ export function LiffTaskQueueView({
               style={{ display: "grid", gap: "0.5rem" }}
               aria-label="สรุปคิวงาน"
             >
-              <MetricButton label="งานใหม่" value={metrics.newWork} tone="green" onClick={onMetricNew} />
-              <MetricButton label="งานค้าง" value={metrics.openWork} tone="amber" onClick={onMetricOpen} />
-              <MetricButton label="วันนี้" value={metrics.today} tone="red" onClick={onMetricToday} />
+              <MetricButton label="รายการใหม่" value={metrics.newWork} tone="green" onClick={onMetricNew} />
+              <MetricButton label="รายการค้าง" value={metrics.openWork} tone="amber" onClick={onMetricOpen} />
+              <MetricButton label="รายการวันนี้" value={metrics.today} tone="red" onClick={onMetricToday} />
             </section>
             <div className="sticky top-[72px] z-20 border-y border-slate-100 bg-white/95 px-4 py-3 backdrop-blur-md">
               <div className="flex items-center gap-2">
@@ -289,7 +291,9 @@ export function LiffTaskQueueView({
                   {activeFilterCount > 0 ? <span className="absolute -right-1 -top-1 min-w-5 rounded-full bg-[#00b884] px-1 text-center text-[10px] font-bold leading-5 text-white">{activeFilterCount}</span> : null}
                 </button>
               </div>
-              <p className="mt-2 text-[11px] font-medium text-slate-500">แสดงเฉพาะงานที่ยังไม่ส่ง</p>
+              <p className="mt-2 text-[11px] font-medium text-slate-500">
+                แสดง {rangeFilteredOrders.length} จาก {totalOrders} คันที่ยังไม่ส่ง · ตัวเลขด้านบนคือจำนวนรายการงาน
+              </p>
             </div>
           </>
         )}

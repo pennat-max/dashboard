@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type { Car } from "@/types/car";
-import { fetchOrderItemsAndUpdatesByCars } from "@/lib/data/orders";
+import { fetchOrderItemsAndUpdatesByCars, fetchOrderItemsByCars } from "@/lib/data/orders";
 import { createServiceRoleClient } from "@/lib/site/data";
 import { LINE_INBOX_MESSAGES_TABLE } from "@/lib/line-inbox/line-inbox-messages";
 
@@ -14,6 +14,7 @@ type CardDetailRequestCar = {
 
 type CardDetailRequestBody = {
   cars?: CardDetailRequestCar[];
+  lean?: boolean;
 };
 
 type LineThreadMessage = {
@@ -231,6 +232,20 @@ export async function POST(req: Request) {
       hydratedCarKeys: [],
       itemsError: null,
       updatesError: null,
+    });
+  }
+
+  if (body.lean === true) {
+    const pack = await fetchOrderItemsByCars(cars);
+    return NextResponse.json({
+      enabled: true,
+      orderItemsByCar: pack.byCarKey,
+      orderUpdatesByCar: {},
+      lineThreadsByCar: {},
+      hydratedCarKeys: Array.from(new Set(inputCars.slice(0, MAX_CARD_DETAILS_PER_REQUEST).flatMap(carKeys))),
+      itemsError: pack.error,
+      updatesError: null,
+      lineThreadsError: null,
     });
   }
 

@@ -32,7 +32,8 @@ export default async function LiffOrdersPreviewPage({ searchParams }: PageProps)
     includeShipped: scope !== "active",
     shippedOnly: scope === "shipped",
     chipCacheExperiment: true,
-    initialDetailLimit: 20,
+    initialDetailLimit: 6,
+    leanInitialDetails: true,
     initialSaleStatusFilters,
     maxCars: scope === "all" ? 250 : 150,
   });

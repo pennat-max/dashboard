@@ -5,7 +5,7 @@ import {
   fetchOrderTrackingSummarySnapshot,
   type OrderTrackingSaleStatusSummary,
 } from "@/lib/data/cars";
-import { fetchOrderItemFilterIndexByCars, fetchOrderItemsAndUpdatesByCars } from "@/lib/data/orders";
+import { fetchOrderItemFilterIndexByCars, fetchOrderItemsAndUpdatesByCars, fetchOrderItemsByCars } from "@/lib/data/orders";
 import type { Car } from "@/types/car";
 import { headers } from "next/headers";
 
@@ -54,6 +54,7 @@ type LoadOrderTrackingPageOptions = {
   maxCars?: number;
   search?: string;
   skipGlobalSummary?: boolean;
+  leanInitialDetails?: boolean;
 };
 
 function carSaleStatus(car: Car): string {
@@ -90,15 +91,9 @@ export async function loadOrderTrackingPageData(
   const chipCacheExperiment = options?.chipCacheExperiment === true;
   const initialDetailLimit = Math.max(1, Math.min(50, Math.floor(Number(options?.initialDetailLimit ?? 50))));
   const skipGlobalSummary = options?.skipGlobalSummary === true;
-  const summaryPack = skipGlobalSummary
+  const summaryPromise = skipGlobalSummary
     ? { snapshot: null, error: null }
-    : await fetchOrderTrackingSummarySnapshot();
-  const { snapshot: summarySnapshotAllCars, error: summarySnapshotError } = summaryPack;
-  const fallbackSaleSummary = skipGlobalSummary || summarySnapshotAllCars ? null : await fetchOrderTrackingSaleStatusSummary();
-  const saleStatusSummaryAllCars: OrderTrackingSaleStatusSummary | null = skipGlobalSummary
-    ? null
-    : summarySnapshotAllCars?.saleStatusCounts ?? fallbackSaleSummary?.summary ?? ({} as OrderTrackingSaleStatusSummary);
-  const saleSummaryError = fallbackSaleSummary?.error ?? null;
+    : fetchOrderTrackingSummarySnapshot();
 
   let cars: Awaited<ReturnType<typeof fetchCarsForOrderTracking>>["cars"] = [];
   let carsError: string | null = null;
@@ -133,16 +128,27 @@ export async function loadOrderTrackingPageData(
     if (chipCacheExperiment) {
       const initialCars = pickInitialDetailCars(cars, options?.initialSaleStatusFilters, initialDetailLimit);
       experimentInitialHydratedCarKeys = Array.from(new Set(initialCars.flatMap(carKeys)));
-      const [itemsPack, itemIndexPack] = await Promise.all([
-        fetchOrderItemsAndUpdatesByCars(initialCars),
-        fetchOrderItemFilterIndexByCars(cars),
-      ]);
-      orderItemsByCar = itemsPack.orderItemsByCar;
-      orderUpdatesByCar = itemsPack.orderUpdatesByCar;
-      orderItemFilterIndexByCar = itemIndexPack.byCarKey;
-      itemsError = itemsPack.itemsError;
-      updatesError = itemsPack.updatesError;
-      itemIndexError = itemIndexPack.error;
+      if (options?.leanInitialDetails === true) {
+        const [itemsPack, itemIndexPack] = await Promise.all([
+          fetchOrderItemsByCars(initialCars),
+          fetchOrderItemFilterIndexByCars(cars),
+        ]);
+        orderItemsByCar = itemsPack.byCarKey;
+        orderItemFilterIndexByCar = itemIndexPack.byCarKey;
+        itemsError = itemsPack.error;
+        itemIndexError = itemIndexPack.error;
+      } else {
+        const [itemsPack, itemIndexPack] = await Promise.all([
+          fetchOrderItemsAndUpdatesByCars(initialCars),
+          fetchOrderItemFilterIndexByCars(cars),
+        ]);
+        orderItemsByCar = itemsPack.orderItemsByCar;
+        orderUpdatesByCar = itemsPack.orderUpdatesByCar;
+        orderItemFilterIndexByCar = itemIndexPack.byCarKey;
+        itemsError = itemsPack.itemsError;
+        updatesError = itemsPack.updatesError;
+        itemIndexError = itemIndexPack.error;
+      }
     } else {
       const itemsPack = await fetchOrderItemsAndUpdatesByCars(cars);
       orderItemsByCar = itemsPack.orderItemsByCar;
@@ -151,6 +157,14 @@ export async function loadOrderTrackingPageData(
       updatesError = itemsPack.updatesError;
     }
   }
+
+  const summaryPack = await summaryPromise;
+  const { snapshot: summarySnapshotAllCars, error: summarySnapshotError } = summaryPack;
+  const fallbackSaleSummary = skipGlobalSummary || summarySnapshotAllCars ? null : await fetchOrderTrackingSaleStatusSummary();
+  const saleStatusSummaryAllCars: OrderTrackingSaleStatusSummary | null = skipGlobalSummary
+    ? null
+    : summarySnapshotAllCars?.saleStatusCounts ?? fallbackSaleSummary?.summary ?? ({} as OrderTrackingSaleStatusSummary);
+  const saleSummaryError = fallbackSaleSummary?.error ?? null;
 
   const dataWarnings = [
     summaryOnly ? "Summary-only mode: ยังไม่โหลดรายการรถ (เน้นเปิดหน้าเร็วสุด)" : null,
