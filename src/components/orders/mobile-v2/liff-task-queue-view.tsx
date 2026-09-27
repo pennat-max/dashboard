@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import Link from "next/link";
 import {
   AlertCircle,
   ArrowLeft,
@@ -101,9 +100,15 @@ function TaskCard({ order }: { order: Order }) {
   const nextItem = items.find((item) => !itemIsDone(item)) ?? items[0] ?? null;
   const status = nextItem?.status ?? (totalCount > 0 ? "จบ" : "ยังไม่มีงาน");
   const heading = order.fullPlate !== "-" ? order.fullPlate : order.car;
+  const href = orderEditorHref(order);
 
   return (
-    <article className="rounded-[18px] border border-slate-200 bg-white p-4 shadow-[0_8px_22px_rgba(15,23,42,0.05)]">
+    <a
+      href={href}
+      aria-label={`เปิดรายละเอียด ${heading}`}
+      className="block rounded-[18px] border border-slate-200 bg-white shadow-[0_8px_22px_rgba(15,23,42,0.05)] transition active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0b3b72]"
+    >
+      <article className="p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h2 className="text-[18px] font-bold leading-6 text-[#071a3a]">{heading}</h2>
@@ -121,20 +126,24 @@ function TaskCard({ order }: { order: Order }) {
         </div>
         <span className="shrink-0 text-xs font-bold tabular-nums text-[#071a3a]">{doneCount}/{totalCount}</span>
       </div>
-      <Link href={orderEditorHref(order)} className="mt-4 flex min-h-12 items-center gap-3 border-t border-slate-100 pt-3 text-left">
+      <div className="mt-4 flex min-h-12 items-center gap-3 border-t border-slate-100 pt-3 text-left">
         <span className="min-w-0 flex-1">
           <span className="block text-[11px] font-medium text-slate-500">งานถัดไป</span>
           <span className="block truncate text-[15px] font-semibold text-slate-900">{nextItem?.name || "เพิ่มรายการงาน"}</span>
         </span>
-        <ChevronRight className="size-5 shrink-0 text-slate-400" aria-hidden />
-      </Link>
-    </article>
+        <span className="flex shrink-0 items-center gap-1 text-xs font-bold text-[#0b3b72]">
+          เปิดรายละเอียด
+          <ChevronRight className="size-5" aria-hidden />
+        </span>
+      </div>
+      </article>
+    </a>
   );
 }
 
 function ShippedRow({ order }: { order: Order }) {
   return (
-    <Link href={orderEditorHref(order)} className="block rounded-[18px] border border-slate-200 bg-white p-4 shadow-[0_8px_22px_rgba(15,23,42,0.04)]">
+    <a href={orderEditorHref(order)} className="block rounded-[18px] border border-slate-200 bg-white p-4 shadow-[0_8px_22px_rgba(15,23,42,0.04)] transition active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0b3b72]">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h2 className="text-[18px] font-bold text-[#071a3a]">{order.fullPlate !== "-" ? order.fullPlate : order.car}</h2>
@@ -150,7 +159,7 @@ function ShippedRow({ order }: { order: Order }) {
         <CalendarDays className="size-4 text-[#0b3b72]" aria-hidden />
         {order.shipped || `อัปเดต ${formatThaiDate(order.updatedAt)}`}
       </p>
-    </Link>
+    </a>
   );
 }
 
