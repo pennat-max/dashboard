@@ -42,6 +42,7 @@ type Props = {
   onToggleSale: (label: string) => void;
   onClearFilters: () => void;
   hasMore: boolean;
+  loadMoreHref: string;
   onLoadMore: () => void;
   isLoading: boolean;
   warning: string | null;
@@ -187,6 +188,7 @@ export function LiffTaskQueueView({
   onToggleSale,
   onClearFilters,
   hasMore,
+  loadMoreHref,
   onLoadMore,
   isLoading,
   warning,
@@ -281,7 +283,18 @@ export function LiffTaskQueueView({
               <p className="mt-1 text-sm text-slate-500">ลองเปลี่ยนช่วงเวลาหรือล้างตัวกรอง</p>
             </div>
           ) : null}
-          {hasMore ? <button type="button" onClick={onLoadMore} className="min-h-12 w-full rounded-2xl bg-white text-sm font-semibold text-[#0b3b72] ring-1 ring-slate-200">โหลดเพิ่ม</button> : null}
+          {hasMore ? (
+            <a
+              href={loadMoreHref}
+              onClick={(event) => {
+                event.preventDefault();
+                onLoadMore();
+              }}
+              className="flex min-h-12 w-full items-center justify-center rounded-2xl bg-white text-sm font-semibold text-[#0b3b72] ring-1 ring-slate-200"
+            >
+              โหลดเพิ่ม
+            </a>
+          ) : null}
         </main>
       </div>
 

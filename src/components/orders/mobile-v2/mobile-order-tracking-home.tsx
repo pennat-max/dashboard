@@ -700,6 +700,8 @@ type MobileOrderTrackingHomeProps = {
   taskFirstLiff?: boolean;
   /** ขอบเขตข้อมูลของหน้า LIFF ทดลอง: งานปัจจุบัน / ส่งแล้ว / ทั้งหมด */
   taskFirstScope?: LiffTaskFirstScope;
+  /** จำนวนการ์ดที่หน้า LIFF คิวโหลดไว้จากเซิร์ฟเวอร์ (รองรับลิงก์โหลดเพิ่มแม้ JS ยังไม่พร้อม) */
+  taskFirstInitialCount?: number;
 };
 
 const ORDERS: Order[] = [
@@ -4881,6 +4883,7 @@ export function MobileOrderTrackingHome({
   initialUiLang = "th",
   taskFirstLiff = false,
   taskFirstScope = "active",
+  taskFirstInitialCount = ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT,
 }: MobileOrderTrackingHomeProps) {
   const router = useRouter();
   const pathname = usePathname() || "/m/orders";
@@ -4908,7 +4911,11 @@ export function MobileOrderTrackingHome({
   const [experimentHydratedCarKeys, setExperimentHydratedCarKeys] = useState<Set<string>>(
     () => new Set(experimentInitialHydratedCarKeys)
   );
-  const [experimentRequestedCount, setExperimentRequestedCount] = useState(ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT);
+  const normalizedTaskFirstInitialCount = Math.max(
+    ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT,
+    Math.min(60, Math.floor(Number(taskFirstInitialCount) || ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT))
+  );
+  const [experimentRequestedCount, setExperimentRequestedCount] = useState(normalizedTaskFirstInitialCount);
   const [experimentLoadingDetails, setExperimentLoadingDetails] = useState(false);
   const [experimentDetailError, setExperimentDetailError] = useState<string | null>(null);
   const [lineInboxFocusOrderId, setLineInboxFocusOrderId] = useState<string | null>(null);
@@ -4958,9 +4965,9 @@ export function MobileOrderTrackingHome({
     setExperimentLineThreadsByCar(lineThreadsByCar);
     setExperimentHydratedCarKeys(new Set(experimentInitialHydratedCarKeys));
     experimentInflightKeysRef.current.clear();
-    setExperimentRequestedCount(ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT);
+    setExperimentRequestedCount(normalizedTaskFirstInitialCount);
     setExperimentDetailError(null);
-  }, [orderChipCacheExperimentEnabled, orderItemsByCar, orderUpdatesByCar, lineThreadsByCar, experimentInitialHydratedCarKeys]);
+  }, [orderChipCacheExperimentEnabled, orderItemsByCar, orderUpdatesByCar, lineThreadsByCar, experimentInitialHydratedCarKeys, normalizedTaskFirstInitialCount]);
   const suppressDataWarningsDuringDeferredHydration =
     deferCarsHydration && String(searchParams?.get("load") ?? "").trim().toLowerCase() !== "full";
   const isDeferredHydrationLoading =
@@ -7003,6 +7010,9 @@ export function MobileOrderTrackingHome({
       count: saleCounts[sale] ?? 0,
       active: sale === "ALL" ? saleFilters.size === 0 : saleFilters.has(sale),
     }));
+    const loadMoreParams = new URLSearchParams(searchParams?.toString() ?? "");
+    loadMoreParams.set("limit", String(Math.min(60, experimentRequestedCount + ORDER_TRACKING_EXPERIMENT_INCREMENT)));
+    const loadMoreHref = `${pathname}?${loadMoreParams.toString()}`;
 
     return (
       <LiffTaskQueueView
@@ -7033,6 +7043,7 @@ export function MobileOrderTrackingHome({
         onToggleSale={toggleSaleChipStable}
         onClearFilters={clearFiltersStable}
         hasMore={hasMoreVisible}
+        loadMoreHref={loadMoreHref}
         onLoadMore={() => {
           if (orderChipCacheExperimentEnabled) {
             setExperimentRequestedCount((current) => current + ORDER_TRACKING_EXPERIMENT_INCREMENT);

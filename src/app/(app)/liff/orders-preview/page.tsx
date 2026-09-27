@@ -12,6 +12,7 @@ type PageProps = {
     order?: string | string[];
     scope?: string | string[];
     demo?: string | string[];
+    limit?: string | string[];
   };
 };
 
@@ -25,6 +26,8 @@ export default async function LiffOrdersPreviewPage({ searchParams }: PageProps)
   const scope = parseScope(searchParams?.scope);
   const demoRaw = Array.isArray(searchParams?.demo) ? searchParams.demo[0] : searchParams?.demo;
   const demo = demoRaw === "1";
+  const limitRaw = Array.isArray(searchParams?.limit) ? searchParams.limit[0] : searchParams?.limit;
+  const queueLimit = Math.max(6, Math.min(60, Math.floor(Number(limitRaw) || 6)));
   const initialSaleStatusFilters: Array<"จอง" | "รอส่ง" | "ส่งแล้ว" | "ว่าง"> =
     scope === "shipped" ? ["ส่งแล้ว"] : scope === "active" ? ["จอง", "รอส่ง", "ว่าง"] : [];
   const props = await loadOrderTrackingPageData(searchParams ?? {}, {
@@ -32,7 +35,7 @@ export default async function LiffOrdersPreviewPage({ searchParams }: PageProps)
     includeShipped: scope !== "active",
     shippedOnly: scope === "shipped",
     chipCacheExperiment: true,
-    initialDetailLimit: 6,
+    initialDetailLimit: queueLimit,
     leanInitialDetails: true,
     skipGlobalSummary: true,
     initialSaleStatusFilters,
@@ -59,6 +62,7 @@ export default async function LiffOrdersPreviewPage({ searchParams }: PageProps)
         initialUiLang="th"
         taskFirstLiff
         taskFirstScope={scope}
+        taskFirstInitialCount={queueLimit}
       />
     </LiffOrdersShell>
   );
