@@ -1,16 +1,13 @@
 import "./globals.css";
 import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
-import { Inter } from "next/font/google";
 import { CRITICAL_APP_CSS } from "@/lib/critical-app-fallback-css";
 import { getLocale } from "@/lib/locale";
 import { cn } from "@/lib/utils";
 
-const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
-
 const geistSans = localFont({
   src: "./fonts/GeistVF.woff",
-  variable: "--font-geist-sans",
+  variable: "--font-sans",
   weight: "100 900",
 });
 const geistMono = localFont({
@@ -58,7 +55,7 @@ export default async function RootLayout({
 }>) {
   const locale = await getLocale();
   return (
-    <html lang={locale} className={cn("font-sans", inter.variable)}>
+    <html lang={locale} className="font-sans">
       <body
         data-app-root
         data-ui-lang={locale}
