@@ -328,6 +328,9 @@ export async function fetchCarsForOrderTracking(
       if (error) return { cars: [], error: error.message };
       return { cars: rowsAsCars(data), error: null };
     }
+    if (maxCars > 0) {
+      return fetchCarsOrderTrackingCapped(supabase, maxCars, includeShipped, shippedOnly);
+    }
     let countQuery = supabase
       .from(TABLE)
       .select("*", { count: "planned", head: true });
@@ -349,9 +352,6 @@ export async function fetchCarsForOrderTracking(
     }
 
     const total = count ?? 0;
-    if (maxCars > 0 && total > maxCars) {
-      return fetchCarsOrderTrackingCapped(supabase, maxCars, includeShipped, shippedOnly);
-    }
     return fetchAllRowsInParallel(total, async (from, to) => {
       let query = supabase
         .from(TABLE)

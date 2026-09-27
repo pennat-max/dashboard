@@ -129,14 +129,9 @@ export async function loadOrderTrackingPageData(
       const initialCars = pickInitialDetailCars(cars, options?.initialSaleStatusFilters, initialDetailLimit);
       experimentInitialHydratedCarKeys = Array.from(new Set(initialCars.flatMap(carKeys)));
       if (options?.leanInitialDetails === true) {
-        const [itemsPack, itemIndexPack] = await Promise.all([
-          fetchOrderItemsByCars(initialCars),
-          fetchOrderItemFilterIndexByCars(cars),
-        ]);
+        const itemsPack = await fetchOrderItemsByCars(initialCars);
         orderItemsByCar = itemsPack.byCarKey;
-        orderItemFilterIndexByCar = itemIndexPack.byCarKey;
         itemsError = itemsPack.error;
-        itemIndexError = itemIndexPack.error;
       } else {
         const [itemsPack, itemIndexPack] = await Promise.all([
           fetchOrderItemsAndUpdatesByCars(initialCars),

@@ -28,7 +28,6 @@ type FilterOption = {
 
 type Props = {
   orders: Order[];
-  totalOrders: number;
   scope: LiffQueueScope;
   onScopeChange: (scope: LiffQueueScope) => void;
   searchValue: string;
@@ -36,10 +35,6 @@ type Props = {
   onClearSearch: () => void;
   activeTab: LiffQueueTab;
   onTabChange: (tab: LiffQueueTab) => void;
-  metrics: { newWork: number; openWork: number; today: number };
-  onMetricNew: () => void;
-  onMetricOpen: () => void;
-  onMetricToday: () => void;
   activeFilterCount: number;
   saleStatusOptions: FilterOption[];
   onToggleSaleStatus: (label: string) => void;
@@ -164,16 +159,6 @@ function ShippedRow({ order }: { order: Order }) {
   );
 }
 
-function MetricButton({ label, value, tone, onClick }: { label: string; value: number; tone: "green" | "amber" | "red"; onClick: () => void }) {
-  const toneClass = tone === "green" ? "text-emerald-700" : tone === "amber" ? "text-amber-600" : "text-rose-600";
-  return (
-    <button type="button" onClick={onClick} className="min-h-[76px] flex-1 rounded-2xl border border-slate-200 bg-white px-2 text-center shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0b3b72]">
-      <span className="block text-xs font-semibold text-slate-600">{label}</span>
-      <span className={cn("mt-1 block text-[28px] font-bold leading-none tabular-nums", toneClass)}>{value}</span>
-    </button>
-  );
-}
-
 function FilterChips({ options, onToggle }: { options: FilterOption[]; onToggle: (label: string) => void }) {
   return (
     <div className="flex flex-wrap gap-2">
@@ -188,7 +173,6 @@ function FilterChips({ options, onToggle }: { options: FilterOption[]; onToggle:
 
 export function LiffTaskQueueView({
   orders,
-  totalOrders,
   scope,
   onScopeChange,
   searchValue,
@@ -196,10 +180,6 @@ export function LiffTaskQueueView({
   onClearSearch,
   activeTab,
   onTabChange,
-  metrics,
-  onMetricNew,
-  onMetricOpen,
-  onMetricToday,
   activeFilterCount,
   saleStatusOptions,
   onToggleSaleStatus,
@@ -272,15 +252,6 @@ export function LiffTaskQueueView({
           </section>
         ) : (
           <>
-            <section
-              className="grid grid-cols-3 gap-2 bg-white px-4 pb-4"
-              style={{ display: "grid", gap: "0.5rem" }}
-              aria-label="สรุปคิวงาน"
-            >
-              <MetricButton label="รายการใหม่" value={metrics.newWork} tone="green" onClick={onMetricNew} />
-              <MetricButton label="รายการค้าง" value={metrics.openWork} tone="amber" onClick={onMetricOpen} />
-              <MetricButton label="รายการวันนี้" value={metrics.today} tone="red" onClick={onMetricToday} />
-            </section>
             <div className="sticky top-[72px] z-20 border-y border-slate-100 bg-white/95 px-4 py-3 backdrop-blur-md">
               <div className="flex items-center gap-2">
                 <div className="grid min-w-0 flex-1 grid-cols-4 rounded-2xl bg-slate-100 p-1">
@@ -292,7 +263,7 @@ export function LiffTaskQueueView({
                 </button>
               </div>
               <p className="mt-2 text-[11px] font-medium text-slate-500">
-                แสดง {rangeFilteredOrders.length} จาก {totalOrders} คันที่ยังไม่ส่ง · ตัวเลขด้านบนคือจำนวนรายการงาน
+                แสดง {rangeFilteredOrders.length} คันแรก · กดโหลดเพิ่มเพื่อดูรายการถัดไป
               </p>
             </div>
           </>

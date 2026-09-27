@@ -34,6 +34,7 @@ export default async function LiffOrdersPreviewPage({ searchParams }: PageProps)
     chipCacheExperiment: true,
     initialDetailLimit: 6,
     leanInitialDetails: true,
+    skipGlobalSummary: true,
     initialSaleStatusFilters,
     maxCars: scope === "all" ? 250 : 150,
   });

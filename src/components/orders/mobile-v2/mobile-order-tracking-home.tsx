@@ -6102,6 +6102,9 @@ export function MobileOrderTrackingHome({
           );
         })
         .sort((a, b) => {
+          if (taskFirstLiff) {
+            return mappedOrders.findIndex((order) => order.id === a.id) - mappedOrders.findIndex((order) => order.id === b.id);
+          }
           const workRank = orderCardWorkPresenceRank(a) - orderCardWorkPresenceRank(b);
           if (workRank !== 0) return workRank;
           const onlyEmptySelected =
@@ -6127,6 +6130,7 @@ export function MobileOrderTrackingHome({
       itemStatusPoliciesNormalized,
       orderChipCacheExperimentEnabled,
       filterItemsForOrder,
+      taskFirstLiff,
     ]
   );
   /** AI · LINE car picker uses full loaded orders, not toolbar-filtered `visible`. */
@@ -6851,16 +6855,6 @@ export function MobileOrderTrackingHome({
       setVisibleLimit(ORDERS_INITIAL_PAGE_SIZE);
       setExperimentRequestedCount(ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT);
     });
-  const showNewWorkStable = () =>
-    runWithStableScroll(() => {
-      setSaleFilters(new Set());
-      setSaleStatusFilters(new Set());
-      setVehicleSearch("");
-      setStaffFilters(new Set());
-      setItemStatusFilters(new Set(["เช็ค"]));
-      setVisibleLimit(ORDERS_INITIAL_PAGE_SIZE);
-      setExperimentRequestedCount(ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT);
-    });
   const showWorkingWorkStable = () =>
     runWithStableScroll(() => {
       setSaleFilters(new Set());
@@ -7013,7 +7007,6 @@ export function MobileOrderTrackingHome({
     return (
       <LiffTaskQueueView
         orders={visiblePagedForRender}
-        totalOrders={visible.length}
         scope={taskFirstScope}
         onScopeChange={(nextScope) => {
           const p = new URLSearchParams(searchParams?.toString() ?? "");
@@ -7033,14 +7026,6 @@ export function MobileOrderTrackingHome({
           else if (tab === "working") showWorkingWorkStable();
           else showDoneWorkStable();
         }}
-        metrics={{
-          newWork: itemStatusCounts.get("เช็ค") ?? 0,
-          openWork: openWorkItemCount,
-          today: dueTodayItemCount,
-        }}
-        onMetricNew={showNewWorkStable}
-        onMetricOpen={showOpenWorkStable}
-        onMetricToday={showDueTodayWorkStable}
         activeFilterCount={liffActiveFilterCount}
         saleStatusOptions={saleStatusOptions}
         onToggleSaleStatus={(label) => toggleSaleStatusChipStable(label as SaleStatusFilterValue)}
