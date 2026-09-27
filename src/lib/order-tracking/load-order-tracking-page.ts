@@ -52,6 +52,8 @@ type LoadOrderTrackingPageOptions = {
   initialDetailLimit?: number;
   initialSaleStatusFilters?: string[];
   maxCars?: number;
+  search?: string;
+  skipGlobalSummary?: boolean;
 };
 
 function carSaleStatus(car: Car): string {
@@ -87,10 +89,15 @@ export async function loadOrderTrackingPageData(
   const summaryOnly = options?.summaryOnly === true;
   const chipCacheExperiment = options?.chipCacheExperiment === true;
   const initialDetailLimit = Math.max(1, Math.min(50, Math.floor(Number(options?.initialDetailLimit ?? 50))));
-  const { snapshot: summarySnapshotAllCars, error: summarySnapshotError } = await fetchOrderTrackingSummarySnapshot();
-  const fallbackSaleSummary = summarySnapshotAllCars ? null : await fetchOrderTrackingSaleStatusSummary();
-  const saleStatusSummaryAllCars: OrderTrackingSaleStatusSummary =
-    summarySnapshotAllCars?.saleStatusCounts ?? fallbackSaleSummary?.summary ?? ({} as OrderTrackingSaleStatusSummary);
+  const skipGlobalSummary = options?.skipGlobalSummary === true;
+  const summaryPack = skipGlobalSummary
+    ? { snapshot: null, error: null }
+    : await fetchOrderTrackingSummarySnapshot();
+  const { snapshot: summarySnapshotAllCars, error: summarySnapshotError } = summaryPack;
+  const fallbackSaleSummary = skipGlobalSummary || summarySnapshotAllCars ? null : await fetchOrderTrackingSaleStatusSummary();
+  const saleStatusSummaryAllCars: OrderTrackingSaleStatusSummary | null = skipGlobalSummary
+    ? null
+    : summarySnapshotAllCars?.saleStatusCounts ?? fallbackSaleSummary?.summary ?? ({} as OrderTrackingSaleStatusSummary);
   const saleSummaryError = fallbackSaleSummary?.error ?? null;
 
   let cars: Awaited<ReturnType<typeof fetchCarsForOrderTracking>>["cars"] = [];
@@ -118,6 +125,7 @@ export async function loadOrderTrackingPageData(
         includeShipped: options?.includeShipped !== false,
         shippedOnly: options?.shippedOnly === true,
         maxCars: options?.maxCars,
+        search: options?.search,
       });
       cars = carsPack.cars;
       carsError = carsPack.error;

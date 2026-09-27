@@ -19,11 +19,16 @@ export default async function LiffOrdersPage({ searchParams }: PageProps) {
   const isFullLoad = loadMode.trim().toLowerCase() === "full";
   const scopeRaw = searchParams?.scope;
   const scope = (typeof scopeRaw === "string" ? scopeRaw : Array.isArray(scopeRaw) ? String(scopeRaw[0] ?? "") : "").trim().toLowerCase();
+  const searchRaw = searchParams?.search;
+  const search = (typeof searchRaw === "string" ? searchRaw : Array.isArray(searchRaw) ? String(searchRaw[0] ?? "") : "").trim();
+  const focusedActiveCar = scope === "active" && search.length > 0;
   const props = await loadOrderTrackingPageData(searchParams ?? {}, {
     summaryOnly: !isFullLoad,
     includeShipped: scope !== "active",
     shippedOnly: scope === "shipped",
-    maxCars: scope === "active" || scope === "shipped" ? 150 : undefined,
+    maxCars: focusedActiveCar ? 20 : scope === "active" || scope === "shipped" ? 150 : undefined,
+    search: focusedActiveCar ? search : undefined,
+    skipGlobalSummary: focusedActiveCar,
   });
   return (
     <LiffOrdersShell>

@@ -6077,9 +6077,11 @@ export function MobileOrderTrackingHome({
       })),
     [saleStatusCounts, saleStatusFilters]
   );
-  const visibleSaleStatusChipModels =
-    String(searchParams?.get("scope") ?? "").trim().toLowerCase() === "active"
-      ? saleStatusChipModels.filter(({ saleStatus }) => saleStatus !== "ส่งแล้ว")
+  const isActiveLiffScope =
+    String(searchParams?.get("scope") ?? "").trim().toLowerCase() === "active" ||
+    (taskFirstLiff && taskFirstScope === "active");
+  const visibleSaleStatusChipModels = isActiveLiffScope
+      ? saleStatusChipModels.filter(({ saleStatus }) => saleStatus !== "ทั้งหมด" && saleStatus !== "ส่งแล้ว")
       : saleStatusChipModels;
   const visible = useMemo(
     () =>

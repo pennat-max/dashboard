@@ -297,6 +297,8 @@ type FetchCarsForOrderTrackingOptions = {
   /** โหลดเฉพาะรถที่ cars.shipped มีค่า ใช้สำหรับประวัติรถส่งแล้ว */
   shippedOnly?: boolean;
   maxCars?: number;
+  /** ค้นเฉพาะทะเบียนหรือเลขตัวถังสำหรับหน้ารายละเอียด เพื่อลด payload บนมือถือ */
+  search?: string;
 };
 
 export async function fetchCarsForOrderTracking(
@@ -304,6 +306,7 @@ export async function fetchCarsForOrderTracking(
 ): Promise<CarsQueryResult> {
   const shippedOnly = options.shippedOnly === true;
   const includeShipped = shippedOnly || options.includeShipped !== false;
+  const search = String(options.search ?? "").trim();
   const maxCars =
     typeof options.maxCars === "number"
       ? options.maxCars > 0
@@ -312,6 +315,19 @@ export async function fetchCarsForOrderTracking(
       : parseOrderTrackingMaxCars();
   try {
     const supabase = createAnonClient();
+    if (search) {
+      const pattern = `%${search}%`;
+      let query = supabase
+        .from(TABLE)
+        .select(CARS_SELECT_ORDER_TRACKING)
+        .or(`plate_number.ilike.${pattern},chassis_number.ilike.${pattern}`)
+        .order("updated_at", { ascending: false });
+      if (shippedOnly) query = query.neq("shipped", null).neq("shipped", "");
+      else if (!includeShipped) query = query.or("shipped.is.null,shipped.eq.");
+      const { data, error } = await query.limit(Math.min(maxCars || 20, 50));
+      if (error) return { cars: [], error: error.message };
+      return { cars: rowsAsCars(data), error: null };
+    }
     let countQuery = supabase
       .from(TABLE)
       .select("*", { count: "planned", head: true });
