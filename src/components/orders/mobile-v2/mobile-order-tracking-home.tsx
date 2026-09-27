@@ -54,6 +54,13 @@ import {
   type ItemStatusPoliciesNormalized,
   type ResolvedItemRowStatusPolicy,
 } from "@/lib/orders/item-status-policies";
+import {
+  LiffTaskQueueView,
+  type LiffQueueScope,
+  type LiffQueueTab,
+} from "@/components/orders/mobile-v2/liff-task-queue-view";
+
+export type LiffTaskFirstScope = LiffQueueScope;
 
 /** alias — ฟังก์ชันใน lib เดียวกับเดิมที่เคยฮาร์ดโค้ดไว้ข้างล่าง */
 const calendarDaysUntilDueBangkok = arrivalDueCalendarDaysUntilBangkok;
@@ -528,7 +535,7 @@ function normalizeItemStatusLabels(input: unknown): ItemStatusLabelMap {
 const WAITING_SET = new Set<ItemStatusValue>(WAITING);
 const DONE_SET = new Set<ItemStatusValue>(DONE);
 
-type OrderItem = {
+export type OrderItem = {
   id?: string | null;
   orderTaskId?: string | null;
   name: string;
@@ -574,13 +581,14 @@ type LineThreadSummary = {
   messages: LineThreadMessage[];
 };
 
-type Order = {
+export type Order = {
   id: string;
   carRowId: string | null;
   carId: number | null;
   sale: string;
   modelYear: string;
   saleStatus: SaleStatusValue;
+  updatedAt?: string;
   /** ข้อความ shipped จาก cars.shipped — สถานะส่งแล้วใช้กรอง/แสดงแยกตามนี้ (ไม่ใช่ booked_shipping) */
   shipped: string;
   ship: string;
@@ -686,6 +694,10 @@ type MobileOrderTrackingHomeProps = {
   deferCarsHydration?: boolean;
   /** สถานะขายที่เลือกไว้ตั้งแต่เปิดหน้า */
   initialSaleStatusFilters?: SaleStatusFilterValue[];
+  /** หน้า LIFF แบบคิวงานที่ลดความหนาแน่นและส่งต่อไป editor เดิมเมื่ออัปเดต */
+  taskFirstLiff?: boolean;
+  /** ขอบเขตข้อมูลของหน้า LIFF ทดลอง: งานปัจจุบัน / ส่งแล้ว / ทั้งหมด */
+  taskFirstScope?: LiffTaskFirstScope;
 };
 
 const ORDERS: Order[] = [
@@ -1748,6 +1760,7 @@ function toOrderFromCar(
     sale: sale as SaleValue,
     modelYear,
     saleStatus,
+    updatedAt: String(car.updated_at ?? car.created_at ?? "").trim(),
     shipped: shipped || "",
     ship: bookedShipping || "ว่าง",
     link: "#",
@@ -4864,6 +4877,8 @@ export function MobileOrderTrackingHome({
   shareBaseUrl = null,
   initialSaleStatusFilters = [],
   initialUiLang = "th",
+  taskFirstLiff = false,
+  taskFirstScope = "active",
 }: MobileOrderTrackingHomeProps) {
   const router = useRouter();
   const pathname = usePathname() || "/m/orders";
@@ -6715,7 +6730,7 @@ export function MobileOrderTrackingHome({
   const loadAllSaleStatusScope = (saleStatus?: SaleStatusValue) => {
     const p = new URLSearchParams(searchParams?.toString() ?? "");
     p.set("load", "full");
-    p.set("scope", "all");
+    p.set("scope", saleStatus === "ส่งแล้ว" ? "shipped" : "all");
     if (saleStatus) p.set("saleStatus", saleStatus);
     else p.delete("saleStatus");
     const nextUrl = `${pathname}?${p.toString()}`;
@@ -6828,6 +6843,34 @@ export function MobileOrderTrackingHome({
       setVisibleLimit(ORDERS_INITIAL_PAGE_SIZE);
       setExperimentRequestedCount(ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT);
     });
+  const showNewWorkStable = () =>
+    runWithStableScroll(() => {
+      setSaleFilters(new Set());
+      setSaleStatusFilters(new Set());
+      setVehicleSearch("");
+      setStaffFilters(new Set());
+      setItemStatusFilters(new Set(["เช็ค"]));
+      setVisibleLimit(ORDERS_INITIAL_PAGE_SIZE);
+      setExperimentRequestedCount(ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT);
+    });
+  const showWorkingWorkStable = () =>
+    runWithStableScroll(() => {
+      setSaleFilters(new Set());
+      setSaleStatusFilters(new Set());
+      setStaffFilters(new Set());
+      setItemStatusFilters(new Set<ItemStatusFilterValue>(["มี", "มา", "รถนอก", "ช่างนอก"]));
+      setVisibleLimit(ORDERS_INITIAL_PAGE_SIZE);
+      setExperimentRequestedCount(ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT);
+    });
+  const showDoneWorkStable = () =>
+    runWithStableScroll(() => {
+      setSaleFilters(new Set());
+      setSaleStatusFilters(new Set());
+      setStaffFilters(new Set());
+      setItemStatusFilters(new Set<ItemStatusFilterValue>(["จบ"]));
+      setVisibleLimit(ORDERS_INITIAL_PAGE_SIZE);
+      setExperimentRequestedCount(ORDER_TRACKING_EXPERIMENT_INITIAL_COUNT);
+    });
   const showUnassignedWorkStable = () =>
     runWithStableScroll(() => {
       setSaleFilters(new Set());
@@ -6933,6 +6976,83 @@ export function MobileOrderTrackingHome({
       el.removeEventListener("touchcancel", clearPullVisual);
     };
   }, [router]);
+
+  if (taskFirstLiff) {
+    const activeQueueTab: LiffQueueTab =
+      itemStatusFilters.size === 0
+        ? "all"
+        : itemStatusFilters.has("จบ")
+          ? "done"
+          : itemStatusFilters.has("เช็ค") || WAITING.some((status) => itemStatusFilters.has(status))
+            ? "check"
+            : "working";
+    const hasDefaultScopeStatuses =
+      (taskFirstScope === "active" && saleStatusFilters.size === 3 && ["จอง", "รอส่ง", "ว่าง"].every((status) => saleStatusFilters.has(status as SaleStatusFilterValue))) ||
+      (taskFirstScope === "shipped" && saleStatusFilters.size === 1 && saleStatusFilters.has("ส่งแล้ว"));
+    const liffActiveFilterCount =
+      saleFilters.size + (hasDefaultScopeStatuses ? 0 : saleStatusFilters.size) + staffFilters.size + itemStatusFilters.size;
+    const saleStatusOptions = saleStatusChipModels.map(({ saleStatus, count, active }) => ({
+      label: saleStatus,
+      count,
+      active,
+    }));
+    const saleOptions = salesChipsOrdered.slice(0, 16).map((sale) => ({
+      label: sale,
+      count: saleCounts[sale] ?? 0,
+      active: sale === "ALL" ? saleFilters.size === 0 : saleFilters.has(sale),
+    }));
+
+    return (
+      <LiffTaskQueueView
+        orders={visiblePagedForRender}
+        scope={taskFirstScope}
+        onScopeChange={(nextScope) => {
+          const p = new URLSearchParams(searchParams?.toString() ?? "");
+          if (nextScope === "active") p.delete("scope");
+          else p.set("scope", nextScope);
+          p.delete("saleStatus");
+          p.delete("load");
+          router.replace(`${pathname}${p.size > 0 ? `?${p.toString()}` : ""}`, { scroll: false });
+        }}
+        searchValue={vehicleSearch}
+        onSearchChange={(value) => setVehicleSearch(sanitizeVehicleSearchInput(value))}
+        onClearSearch={clearVehicleStable}
+        activeTab={activeQueueTab}
+        onTabChange={(tab) => {
+          if (tab === "all") clearFiltersStable();
+          else if (tab === "check") showOpenWorkStable();
+          else if (tab === "working") showWorkingWorkStable();
+          else showDoneWorkStable();
+        }}
+        metrics={{
+          newWork: itemStatusCounts.get("เช็ค") ?? 0,
+          openWork: openWorkItemCount,
+          today: dueTodayItemCount,
+        }}
+        onMetricNew={showNewWorkStable}
+        onMetricOpen={showOpenWorkStable}
+        onMetricToday={showDueTodayWorkStable}
+        activeFilterCount={liffActiveFilterCount}
+        saleStatusOptions={saleStatusOptions}
+        onToggleSaleStatus={(label) => toggleSaleStatusChipStable(label as SaleStatusFilterValue)}
+        saleOptions={saleOptions}
+        onToggleSale={toggleSaleChipStable}
+        onClearFilters={clearFiltersStable}
+        hasMore={hasMoreVisible}
+        onLoadMore={() => {
+          if (orderChipCacheExperimentEnabled) {
+            setExperimentRequestedCount((current) => current + ORDER_TRACKING_EXPERIMENT_INCREMENT);
+          } else {
+            setVisibleLimit((current) => current + ORDERS_PAGE_INCREMENT);
+          }
+        }}
+        isLoading={isDeferredHydrationLoading || experimentLoadingDetails}
+        warning={dataWarnings.length > 0 && !suppressDataWarningsDuringDeferredHydration ? dataWarnings[0] : null}
+        uiLang={uiLang}
+        onToggleLanguage={() => setUiLang((current) => (current === "th" ? "en" : "th"))}
+      />
+    );
+  }
 
   return (
     <>

@@ -173,6 +173,7 @@ export const CARS_SELECT_ORDER_TRACKING = [
   "document_status",
   "initial_document",
   "doc_fee",
+  "updated_at",
 ].join(",");
 
 /** เลือกเฉพาะคอลัมน์ที่ใช้คำนวณชิปสถานะขาย (ครบทุกคัน แต่ payload เล็กมาก) */
@@ -270,7 +271,8 @@ function parseOrderTrackingMaxCars(): number {
 async function fetchCarsOrderTrackingCapped(
   supabase: ReturnType<typeof createAnonClient>,
   maxRows: number,
-  includeShipped: boolean
+  includeShipped: boolean,
+  shippedOnly: boolean
 ): Promise<CarsQueryResult> {
   const all: Car[] = [];
   for (let from = 0; from < maxRows; from += PAGE_SIZE) {
@@ -279,7 +281,8 @@ async function fetchCarsOrderTrackingCapped(
       .from(TABLE)
       .select(CARS_SELECT_ORDER_TRACKING)
       .order("updated_at", { ascending: false });
-    if (!includeShipped) query = query.or("shipped.is.null,shipped.eq.");
+    if (shippedOnly) query = query.neq("shipped", null).neq("shipped", "");
+    else if (!includeShipped) query = query.or("shipped.is.null,shipped.eq.");
     const { data, error } = await query.range(from, to);
     if (error) return { cars: [], error: error.message };
     const batch = rowsAsCars(data);
@@ -291,13 +294,16 @@ async function fetchCarsOrderTrackingCapped(
 
 type FetchCarsForOrderTrackingOptions = {
   includeShipped?: boolean;
+  /** โหลดเฉพาะรถที่ cars.shipped มีค่า ใช้สำหรับประวัติรถส่งแล้ว */
+  shippedOnly?: boolean;
   maxCars?: number;
 };
 
 export async function fetchCarsForOrderTracking(
   options: FetchCarsForOrderTrackingOptions = {}
 ): Promise<CarsQueryResult> {
-  const includeShipped = options.includeShipped !== false;
+  const shippedOnly = options.shippedOnly === true;
+  const includeShipped = shippedOnly || options.includeShipped !== false;
   const maxCars =
     typeof options.maxCars === "number"
       ? options.maxCars > 0
@@ -309,31 +315,34 @@ export async function fetchCarsForOrderTracking(
     let countQuery = supabase
       .from(TABLE)
       .select("*", { count: "planned", head: true });
-    if (!includeShipped) countQuery = countQuery.or("shipped.is.null,shipped.eq.");
+    if (shippedOnly) countQuery = countQuery.neq("shipped", null).neq("shipped", "");
+    else if (!includeShipped) countQuery = countQuery.or("shipped.is.null,shipped.eq.");
     const { count, error: countError } = await countQuery;
 
     if (countError) {
-      if (maxCars > 0) return fetchCarsOrderTrackingCapped(supabase, maxCars, includeShipped);
+      if (maxCars > 0) return fetchCarsOrderTrackingCapped(supabase, maxCars, includeShipped, shippedOnly);
       return fetchAllRowsSequential(async (from, to) => {
         let query = supabase
           .from(TABLE)
           .select(CARS_SELECT_ORDER_TRACKING)
           .order("updated_at", { ascending: false });
-        if (!includeShipped) query = query.or("shipped.is.null,shipped.eq.");
+        if (shippedOnly) query = query.neq("shipped", null).neq("shipped", "");
+        else if (!includeShipped) query = query.or("shipped.is.null,shipped.eq.");
         return query.range(from, to);
       });
     }
 
     const total = count ?? 0;
     if (maxCars > 0 && total > maxCars) {
-      return fetchCarsOrderTrackingCapped(supabase, maxCars, includeShipped);
+      return fetchCarsOrderTrackingCapped(supabase, maxCars, includeShipped, shippedOnly);
     }
     return fetchAllRowsInParallel(total, async (from, to) => {
       let query = supabase
         .from(TABLE)
         .select(CARS_SELECT_ORDER_TRACKING)
         .order("updated_at", { ascending: false });
-      if (!includeShipped) query = query.or("shipped.is.null,shipped.eq.");
+      if (shippedOnly) query = query.neq("shipped", null).neq("shipped", "");
+      else if (!includeShipped) query = query.or("shipped.is.null,shipped.eq.");
       return query.range(from, to);
     });
   } catch (e) {

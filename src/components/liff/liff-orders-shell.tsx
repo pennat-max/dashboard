@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { UserRound } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type LineProfileLite = {
@@ -11,6 +12,7 @@ type LineProfileLite = {
 
 type Props = {
   children: React.ReactNode;
+  taskFirst?: boolean;
 };
 
 type LineLiffConfig = {
@@ -21,7 +23,7 @@ type LineLiffConfig = {
  * LIFF Phase 1 wrapper: init SDK when LIFF ID is set; show a small context strip.
  * Does not replace Supabase auth — intake/API behavior unchanged.
  */
-export function LiffOrdersShell({ children }: Props) {
+export function LiffOrdersShell({ children, taskFirst = false }: Props) {
   const [phase, setPhase] = useState<"idle" | "ready" | "skipped">("idle");
   const [initError, setInitError] = useState<string | null>(null);
   const [inClient, setInClient] = useState<boolean | null>(null);
@@ -90,6 +92,44 @@ export function LiffOrdersShell({ children }: Props) {
     }
   } else {
     indicatorParts.push("Browser preview");
+  }
+
+  if (taskFirst) {
+    return (
+      <div className="min-h-screen min-w-0 bg-white">
+        <header className="sticky top-0 z-40 border-b border-slate-100 bg-white/95 px-4 pb-3 pt-[max(env(safe-area-inset-top,0px),0.75rem)] backdrop-blur-md">
+          <div className="mx-auto flex max-w-lg items-center justify-between gap-4">
+            <div className="min-w-0">
+              <h1 className="text-[26px] font-bold tracking-[-0.025em] text-[#092a55]">Order Tracking</h1>
+              {inClient === true && profile?.displayName ? (
+                <p className="mt-0.5 truncate text-xs font-medium text-slate-500">{profile.displayName}</p>
+              ) : null}
+            </div>
+            <div className="flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-full bg-[#eef5fb] text-[#0b3b72] ring-1 ring-slate-200">
+              {profile?.pictureUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={profile.pictureUrl} alt={profile.displayName || "LINE profile"} className="size-full object-cover" />
+              ) : (
+                <UserRound className="size-5" strokeWidth={1.9} aria-hidden />
+              )}
+            </div>
+          </div>
+        </header>
+        {initError ? (
+          <div
+            className={cn(
+              "mx-auto max-w-lg px-4 py-2 text-xs font-medium",
+              configMissing ? "bg-amber-50 text-amber-900" : "bg-rose-50 text-rose-900"
+            )}
+            role="status"
+            aria-live="polite"
+          >
+            {indicatorParts.join(" · ")}
+          </div>
+        ) : null}
+        {children}
+      </div>
+    );
   }
 
   return (

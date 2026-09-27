@@ -47,6 +47,7 @@ function parseFirstSearchParam(value: string | string[] | undefined): string | n
 type LoadOrderTrackingPageOptions = {
   summaryOnly?: boolean;
   includeShipped?: boolean;
+  shippedOnly?: boolean;
   chipCacheExperiment?: boolean;
   initialDetailLimit?: number;
   initialSaleStatusFilters?: string[];
@@ -115,6 +116,7 @@ export async function loadOrderTrackingPageData(
     } else {
       const carsPack = await fetchCarsForOrderTracking({
         includeShipped: options?.includeShipped !== false,
+        shippedOnly: options?.shippedOnly === true,
         maxCars: options?.maxCars,
       });
       cars = carsPack.cars;
