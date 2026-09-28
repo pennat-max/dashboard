@@ -25,7 +25,7 @@ export default async function LiffOrdersPage({ searchParams }: PageProps) {
   const focusedSearch = search.length > 0;
   const taskFirstMode = !isFullLoad;
   const initialSaleStatusFilters =
-    scope === "active" ? (["จอง", "รอส่ง", "ว่าง"] as const) : scope === "shipped" ? (["ส่งแล้ว"] as const) : ([] as const);
+    scope === "active" ? (["จอง", "รอส่ง", "ว่าง"] as const) : ([] as const);
   const props = await loadOrderTrackingPageData(searchParams ?? {}, {
     summaryOnly: !isFullLoad,
     includeShipped: scope !== "active",

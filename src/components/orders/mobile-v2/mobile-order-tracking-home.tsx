@@ -7011,7 +7011,7 @@ export function MobileOrderTrackingHome({
             : "working";
     const hasDefaultScopeStatuses =
       (taskFirstScope === "active" && saleStatusFilters.size === 3 && ["จอง", "รอส่ง", "ว่าง"].every((status) => saleStatusFilters.has(status as SaleStatusFilterValue))) ||
-      (taskFirstScope === "shipped" && saleStatusFilters.size === 1 && saleStatusFilters.has("ส่งแล้ว"));
+      (taskFirstScope === "shipped" && saleStatusFilters.size === 0);
     const liffActiveFilterCount =
       saleFilters.size + (hasDefaultScopeStatuses ? 0 : saleStatusFilters.size) + staffFilters.size + itemStatusFilters.size;
     const saleStatusOptions = visibleSaleStatusChipModels.map(({ saleStatus, count, active }) => ({
