@@ -131,15 +131,18 @@ export function lineAutoSaveCarMatchProblem(params: {
   payload: LineInboxAnalyzeResponse;
 }): string | null {
   const { row, payload } = params;
+  // Once the analysis has resolved an actual car row, persist immediately.
+  // Context source, candidate count, item confidence, and human-review hints
+  // are not blockers; the operator only needs to see messages with no car.
+  const carRowId = cleanLine(payload.detected_car?.car_row_id) || cleanLine(row.car_row_id);
+  if (carRowId) return null;
+
   if (payload.context_source === "fallback_previous_message" || payload.reply_context?.context_source === "fallback_previous_message") {
     return "fallback_previous_message_context";
   }
   if (payload.unmatchedReason === "pending_car_record" || payload.matchStatus === "waiting_for_car_record") {
     return "pending_car_record";
   }
-
-  const carRowId = cleanLine(payload.detected_car?.car_row_id) || cleanLine(row.car_row_id);
-  if (!carRowId) return "missing_car";
 
   const matchStatus = cleanLine(payload.matchStatus);
   if (["ambiguous_vehicle", "no_vehicle_context", "unresolved"].includes(matchStatus)) {
@@ -150,7 +153,7 @@ export function lineAutoSaveCarMatchProblem(params: {
   if (candidateCount > 1 && !isHighTargetConfidence(payload.aiTargetCarConfidence)) {
     return "multiple_car_candidates";
   }
-  return null;
+  return "missing_car";
 }
 
 function itemDisplayName(item: LineInboxAnalyzeItem): string {

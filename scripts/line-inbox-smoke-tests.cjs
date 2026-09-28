@@ -1216,9 +1216,9 @@ assert.strictEqual(
     }),
     enabled: true,
     allowedGroupIds: "*",
-  }).blocked_reason,
-  "fallback_previous_message_context",
-  "inferred previous-message context is blocked from auto-save even when a car is suggested"
+  }).eligible,
+  true,
+  "inferred previous-message context auto-saves once a real car_row_id is resolved"
 );
 assert.strictEqual(
   evaluateLineAutoSaveEligibility({
@@ -1247,9 +1247,23 @@ assert.strictEqual(
     }),
     enabled: true,
     allowedGroupIds: "*",
+  }).eligible,
+  true,
+  "multiple candidate hints do not block auto-save once a real car_row_id is resolved"
+);
+assert.strictEqual(
+  evaluateLineAutoSaveEligibility({
+    row: { ...autoSaveRow, car_row_id: null },
+    payload: autoSavePayload({
+      detected_car: { ...autoSavePayload().detected_car, car_row_id: "", confidence: 0 },
+      extractedCarCandidates: [{ text: "51072" }, { text: "31440" }],
+      aiTargetCarConfidence: "medium",
+    }),
+    enabled: true,
+    allowedGroupIds: "*",
   }).blocked_reason,
   "multiple_car_candidates",
-  "multiple car candidates block auto-save"
+  "multiple car candidates still block auto-save when no car_row_id is resolved"
 );
 const duplicateAutoSaveDecision = evaluateLineAutoSaveEligibility({
   row: autoSaveRow,
