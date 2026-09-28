@@ -14,7 +14,6 @@ import {
   buildLineOrderReviewUrl,
   type LineApprovalAcknowledgementItem,
 } from "@/lib/line-inbox/acknowledgement";
-import { hasTooManyLineAutoSaveItems } from "@/lib/line-inbox/auto-save-safety";
 import { isLineInboxNoiseOrSeparatorOnlyText } from "@/lib/line-inbox/split-line-text";
 import type {
   DuplicateStatus,
@@ -28,8 +27,6 @@ const ORDER_TRACKING_PHOTOS_TABLE = "order_tracking_photos";
 const STAFF_ROSTER_TABLE = "order_tracking_staff_roster";
 const STAFF_ROSTER_ROW_ID = "default";
 const LINE_IMAGE_AFTER_TEXT_WINDOW_MS = 5 * 60 * 1000;
-const AUTO_SAVE_MIN_CAR_CONFIDENCE = 0.75;
-const AUTO_SAVE_MIN_ITEM_CONFIDENCE = 0.6;
 
 type AutoSaveInboxRow = {
   id: string;
@@ -80,6 +77,7 @@ export type LineAutoSaveRunResult = {
   reply_sent: boolean;
   reply_error?: string;
   review_url?: string;
+  finalized_without_work?: boolean;
 };
 
 type SavedReplyItem = {
@@ -111,18 +109,6 @@ function hasPhotoReference(value: unknown): boolean {
   return /ตาม\s*(?:รูป|ภาพ)|เหมือน\s*รูป|รูปทุกอย่าง|\b(?:photo|image|pic|picture)\b/i.test(cleanLine(value));
 }
 
-function isVagueAutoSaveItem(value: unknown): boolean {
-  const text = cleanLine(value)
-    .replace(/[!?.…。、，,;:|/\\()[\]{}"'`~*_+=<>-]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
-  if (!text) return true;
-  return /^(ตามรูป|ตามภาพ|เหมือนรูป|รูปทุกอย่าง|เอาอันนี้ด้วย|เช็คให้หน่อย|จัดการด้วย|ช่วยเช็ค|ดูให้หน่อย|เพิ่ม|ทำให้หน่อย)$/i.test(
-    text
-  );
-}
-
 function uniqueTextCount(values: Array<string | undefined | null>): number {
   const set = new Set(values.map((value) => cleanLine(value).toLowerCase()).filter(Boolean));
   return set.size;
@@ -130,13 +116,41 @@ function uniqueTextCount(values: Array<string | undefined | null>): number {
 
 function isHighTargetConfidence(value: unknown): boolean {
   if (typeof value === "number" && Number.isFinite(value)) {
-    return value >= AUTO_SAVE_MIN_CAR_CONFIDENCE || value >= AUTO_SAVE_MIN_CAR_CONFIDENCE * 100;
+    return value >= 0.75 || value >= 75;
   }
   const text = cleanLine(value).toLowerCase();
   if (text === "high" || text === "matched" || text === "exact" || text === "sure") return true;
   const numeric = Number(text.replace("%", ""));
   if (!Number.isFinite(numeric)) return false;
-  return text.includes("%") ? numeric >= AUTO_SAVE_MIN_CAR_CONFIDENCE * 100 : numeric >= AUTO_SAVE_MIN_CAR_CONFIDENCE;
+  return text.includes("%") ? numeric >= 75 : numeric >= 0.75;
+}
+
+/** Only car-matching uncertainty is allowed to stop automatic persistence. */
+export function lineAutoSaveCarMatchProblem(params: {
+  row: AutoSaveInboxRow;
+  payload: LineInboxAnalyzeResponse;
+}): string | null {
+  const { row, payload } = params;
+  if (payload.context_source === "fallback_previous_message" || payload.reply_context?.context_source === "fallback_previous_message") {
+    return "fallback_previous_message_context";
+  }
+  if (payload.unmatchedReason === "pending_car_record" || payload.matchStatus === "waiting_for_car_record") {
+    return "pending_car_record";
+  }
+
+  const carRowId = cleanLine(payload.detected_car?.car_row_id) || cleanLine(row.car_row_id);
+  if (!carRowId) return "missing_car";
+
+  const matchStatus = cleanLine(payload.matchStatus);
+  if (["ambiguous_vehicle", "no_vehicle_context", "unresolved"].includes(matchStatus)) {
+    return matchStatus;
+  }
+
+  const candidateCount = uniqueTextCount((payload.extractedCarCandidates ?? []).map((candidate) => candidate.text));
+  if (candidateCount > 1 && !isHighTargetConfidence(payload.aiTargetCarConfidence)) {
+    return "multiple_car_candidates";
+  }
+  return null;
 }
 
 function itemDisplayName(item: LineInboxAnalyzeItem): string {
@@ -172,26 +186,6 @@ function lineApprovalItem(item: SavedReplyItem): LineApprovalAcknowledgementItem
   };
 }
 
-function compactItemLine(index: number, item: LineApprovalAcknowledgementItem): string {
-  const obj = typeof item === "string" ? { name: item, assignee: "", status: "" } : item;
-  const name = cleanLine(obj.name);
-  const assignee = cleanLine(obj.assignee ?? obj.assignee_staff) || "ยังไม่ระบุ";
-  const status = cleanLine(obj.status ?? obj.item_status) || "เช็ค";
-  return `${index + 1}. ${name} : ${assignee}/${status}`;
-}
-
-function updatedItemLine(
-  index: number,
-  item: SavedReplyItem,
-  previous: ExistingOrderItemRow | undefined
-): string {
-  const beforeAssignee = cleanLine(previous?.assignee_staff) || "ยังไม่ระบุ";
-  const beforeStatus = cleanLine(previous?.status) || "เช็ค";
-  const afterAssignee = cleanLine(item.assignee_staff) || "ยังไม่ระบุ";
-  const afterStatus = cleanLine(item.status) || "เช็ค";
-  return `${index + 1}. ${item.label} : ${beforeAssignee}/${beforeStatus} → ${afterAssignee}/${afterStatus}`;
-}
-
 export function buildLineAutoSaveAcknowledgementText(params: {
   carTitle?: string | null;
   createdItems?: LineApprovalAcknowledgementItem[];
@@ -219,39 +213,16 @@ export function evaluateLineAutoSaveEligibility(params: {
   if (!isLineGroupAllowed(row.group_id, policy)) return { eligible: false, blocked_reason: "group_not_allowed" };
   if (isLineImageOnlyText(row.raw_text)) return { eligible: false, blocked_reason: "image_only" };
   if (isLineInboxNoiseOrSeparatorOnlyText(row.raw_text)) return { eligible: false, blocked_reason: "noise_or_separator" };
-  if (payload.context_source === "fallback_previous_message" || payload.reply_context?.context_source === "fallback_previous_message") {
-    return { eligible: false, blocked_reason: "fallback_previous_message_context" };
-  }
-  if (payload.unmatchedReason === "pending_car_record" || payload.matchStatus === "waiting_for_car_record") {
-    return { eligible: false, blocked_reason: "pending_car_record" };
-  }
-  if (payload.needs_human_review) return { eligible: false, blocked_reason: "needs_human_review" };
-
-  const carRowId = cleanLine(payload.detected_car?.car_row_id) || cleanLine(row.car_row_id);
-  if (!carRowId) return { eligible: false, blocked_reason: "missing_car" };
-
-  const carConfidence = Number(payload.detected_car?.confidence ?? 0);
-  if (carConfidence < AUTO_SAVE_MIN_CAR_CONFIDENCE && !isHighTargetConfidence(payload.aiTargetCarConfidence)) {
-    return { eligible: false, blocked_reason: "car_confidence_low" };
-  }
-
-  const candidateCount = uniqueTextCount((payload.extractedCarCandidates ?? []).map((candidate) => candidate.text));
-  if (candidateCount > 1 && !isHighTargetConfidence(payload.aiTargetCarConfidence)) {
-    return { eligible: false, blocked_reason: "multiple_car_candidates" };
-  }
+  const carMatchProblem = lineAutoSaveCarMatchProblem({ row, payload });
+  if (carMatchProblem) return { eligible: false, blocked_reason: carMatchProblem };
 
   const items = payload.items ?? [];
   if (items.length === 0) return { eligible: false, blocked_reason: "no_items" };
-  if (hasTooManyLineAutoSaveItems(items.length)) return { eligible: false, blocked_reason: "too_many_items" };
 
   const actions: PersistConfirmRow[] = [];
   for (const item of items) {
     const name = itemDisplayName(item);
-    if (!name) return { eligible: false, blocked_reason: "blank_item" };
-    if (isVagueAutoSaveItem(name)) return { eligible: false, blocked_reason: "vague_item" };
-    if (Number(item.confidence ?? 0) < AUTO_SAVE_MIN_ITEM_CONFIDENCE) {
-      return { eligible: false, blocked_reason: "item_confidence_low" };
-    }
+    if (!name) continue;
 
     const duplicateStatus = item.duplicate_status as DuplicateStatus;
     if (duplicateStatus === "new") {
@@ -275,7 +246,14 @@ export function evaluateLineAutoSaveEligibility(params: {
       continue;
     }
 
-    return { eligible: false, blocked_reason: `unsafe_duplicate_status_${duplicateStatus || "unknown"}` };
+    // Item uncertainty is not a car-match problem. Preserve it as a new task
+    // instead of blocking the entire matched vehicle in the review queue.
+    actions.push({
+      action: "create",
+      item_name: name,
+      item_status: safeStatus(item),
+      note: cleanLine(item.suggested_note) || undefined,
+    });
   }
 
   return actions.length > 0 ? { eligible: true, actions } : { eligible: false, blocked_reason: "no_actions" };
@@ -566,7 +544,21 @@ export async function maybeAutoSaveAnalyzedLineInbox(
     enabled: enabled || dryRun,
     allowedGroupIds: process.env.LINE_AUTO_SAVE_ALLOWED_GROUP_IDS,
   });
-  if (!decision.eligible) return { ...baseDisabled, blocked_reason: decision.blocked_reason };
+  if (!decision.eligible) {
+    const canFinalizeWithoutWork = decision.blocked_reason === "no_items" || decision.blocked_reason === "no_actions";
+    if (!canFinalizeWithoutWork || dryRun) {
+      return { ...baseDisabled, blocked_reason: decision.blocked_reason };
+    }
+    const claimed = await claimLineInboxMessageForAutoSave(supabase, params.row.id, params.payload);
+    if (!claimed) return { ...baseDisabled, blocked_reason: "not_pending_or_already_claimed" };
+    await updateLineInboxAutoSaveStatus(supabase, params.row.id, params.payload, "finalized_without_work");
+    return {
+      ...baseDisabled,
+      attempted: true,
+      blocked_reason: "no_items",
+      finalized_without_work: true,
+    };
+  }
   if (dryRun) {
     return {
       ...baseDisabled,

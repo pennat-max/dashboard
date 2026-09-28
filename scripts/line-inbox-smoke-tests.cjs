@@ -1060,9 +1060,24 @@ assert.strictEqual(
     payload: autoSavePayload({ needs_human_review: true }),
     enabled: true,
     allowedGroupIds: "C-real-group",
-  }).blocked_reason,
-  "needs_human_review",
-  "needs_human_review blocks auto-save"
+  }).eligible,
+  true,
+  "item-review flags do not block a message whose car is already matched"
+);
+assert.strictEqual(
+  evaluateLineAutoSaveEligibility({
+    row: autoSaveRow,
+    payload: autoSavePayload({
+      needs_human_review: true,
+      detected_car: { ...autoSavePayload().detected_car, confidence: 0.55 },
+      aiTargetCarConfidence: "",
+      matchStatus: "matched",
+    }),
+    enabled: true,
+    allowedGroupIds: "C-real-group",
+  }).eligible,
+  true,
+  "an exact stored car match auto-saves even when analyzer confidence is below the old threshold"
 );
 assert.strictEqual(
   evaluateLineAutoSaveEligibility({
@@ -1219,9 +1234,9 @@ assert.strictEqual(
     }),
     enabled: true,
     allowedGroupIds: "*",
-  }).blocked_reason,
-  "vague_item",
-  "vague text blocks auto-save"
+  }).eligible,
+  true,
+  "vague work text is saved on the matched car instead of becoming a manual car-match problem"
 );
 assert.strictEqual(
   evaluateLineAutoSaveEligibility({
@@ -1270,9 +1285,9 @@ assert.strictEqual(
     }),
     enabled: true,
     allowedGroupIds: "*",
-  }).blocked_reason,
-  "unsafe_duplicate_status_possible_duplicate",
-  "possible duplicate blocks auto-save"
+  }).eligible,
+  true,
+  "possible duplicate work is preserved as a new task instead of blocking a matched car"
 );
 assert.strictEqual(
   evaluateLineAutoSaveEligibility({
@@ -1288,9 +1303,9 @@ assert.strictEqual(
     }),
     enabled: true,
     allowedGroupIds: "*",
-  }).blocked_reason,
-  "unsafe_duplicate_status_unclear",
-  "unclear duplicate status blocks auto-save"
+  }).eligible,
+  true,
+  "unclear duplicate work is preserved as a new task instead of blocking a matched car"
 );
 
 const tooManyAutoSaveItems = Array.from({ length: LINE_AUTO_SAVE_MAX_ITEMS }, (_, index) => ({
@@ -1313,9 +1328,9 @@ assert.strictEqual(
     payload: autoSavePayload({ items: tooManyAutoSaveItems }),
     enabled: true,
     allowedGroupIds: "*",
-  }).blocked_reason,
-  "too_many_items",
-  "long LINE messages with too many extracted items block auto-save"
+  }).eligible,
+  true,
+  "long matched-car messages save all extracted items instead of entering car-match review"
 );
 
 const autoSaveReply = buildLineAutoSaveAcknowledgementText({
@@ -1692,7 +1707,8 @@ assert(autoSaveSource.includes("LINE_AUTO_SAVE_ALLOWED_GROUP_IDS"), "auto-save h
 assert(autoSaveSource.includes("LINE_AUTO_SAVE_REPLY_ENABLED"), "auto-save reply is independently gated");
 assert(autoSaveSource.includes("LINE_AUTO_SAVE_DRY_RUN_ENABLED"), "auto-save has a dry-run flag");
 assert(autoSaveSource.includes('blocked_reason: "noise_or_separator"'), "auto-save blocks separator/noise/header-only rows");
-assert(autoSaveSource.includes('blocked_reason: "too_many_items"'), "auto-save blocks overly large item batches");
+assert(autoSaveSource.includes("lineAutoSaveCarMatchProblem"), "auto-save blocks only explicit car-match problems");
+assert(autoSaveSource.includes('status: "finalized_without_work"') || autoSaveSource.includes('"finalized_without_work"'), "matched messages without work are finalized instead of shown for review");
 assert(autoSaveSource.includes('blocked_reason: "dry_run"'), "dry-run reports planned save without writing");
 assert(autoSaveSource.includes("markLineInboxMessageWorkflowConfirmed"), "auto-save marks the source message confirmed for idempotency");
 assert(autoSaveSource.includes("ORDER_TRACKING_PHOTOS_TABLE"), "auto-save attaches related LINE photos through order_tracking_photos");

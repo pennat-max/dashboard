@@ -4,6 +4,7 @@ import {
 } from "@/lib/line-inbox/line-inbox-messages";
 import {
   isTruthyEnvFlag,
+  lineAutoSaveCarMatchProblem,
   maybeAutoSaveAnalyzedLineInbox,
   type LineAutoSaveRunResult,
 } from "@/lib/line-inbox/auto-save";
@@ -236,8 +237,8 @@ async function resolveFallbackPreviousMessageContext(
  * Pending analyzer for webhook captures.
  *
  * By default this only updates line_inbox_messages analyze fields. If explicit
- * LINE_AUTO_SAVE_* flags allow it, a high-confidence group message can be
- * persisted automatically after analyze; otherwise it remains in manual review.
+ * LINE_AUTO_SAVE_* flags allow it, a group message matched to one car can be
+ * persisted automatically after analyze. Only car-match problems remain for review.
  */
 export async function runAnalyzePendingJob(
   options: AnalyzePendingOptions = {}
@@ -254,7 +255,7 @@ export async function runAnalyzePendingJob(
         "id,line_message_id,raw_text,source_type,group_id,user_id,received_at,workflow_status,analyze_status,analyze_payload,car_row_id"
       )
       .eq("workflow_status", "pending")
-      .eq("analyze_status", "pending")
+      .in("analyze_status", ["pending", "ok"])
       .order("received_at", { ascending: false })
       .limit(limit);
 
@@ -283,18 +284,22 @@ export async function runAnalyzePendingJob(
       const existingCarRowId = String(row.car_row_id ?? "").trim();
 
       try {
-        const replyContext =
-          (await resolveLineReplyContext(supabase, row)) ||
-          (await resolveFallbackPreviousMessageContext(supabase, row));
+        const storedPayload = isAnalyzePayload(row.analyze_payload) ? row.analyze_payload : null;
+        const replyContext = storedPayload
+          ? null
+          : (await resolveLineReplyContext(supabase, row)) ||
+            (await resolveFallbackPreviousMessageContext(supabase, row));
         const replyCarRowId = cleanLine(replyContext?.source_car_row_id);
-        const payload = await runLineInboxAnalyzeCore(supabase, {
-          raw_text: rawText,
-          car_row_id: existingCarRowId || replyCarRowId || null,
-          car_context_text: replyContext?.source_raw_text ?? null,
-          attachmentsCount: 0,
-          useAi,
-        });
-        const payloadWithReplyContext = withLineReplyAnalyzeContext(payload, replyContext);
+        const payloadWithReplyContext = storedPayload ?? withLineReplyAnalyzeContext(
+          await runLineInboxAnalyzeCore(supabase, {
+            raw_text: rawText,
+            car_row_id: existingCarRowId || replyCarRowId || null,
+            car_context_text: replyContext?.source_raw_text ?? null,
+            attachmentsCount: 0,
+            useAi,
+          }),
+          replyContext
+        );
         const detectedCarRowId = String(payloadWithReplyContext.detected_car.car_row_id ?? "").trim();
         const carRowId = detectedCarRowId || existingCarRowId || null;
 
@@ -335,7 +340,7 @@ export async function runAnalyzePendingJob(
           });
         }
 
-        if (payloadWithReplyContext.needs_human_review || !autoSave || !("saved" in autoSave) || !autoSave.saved) {
+        if (lineAutoSaveCarMatchProblem({ row: { ...row, car_row_id: carRowId }, payload: payloadWithReplyContext })) {
           await maybeSendHumanReviewLineJobMessage({
             row,
             payload: payloadWithReplyContext,
