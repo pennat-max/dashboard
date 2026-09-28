@@ -5045,6 +5045,20 @@ export function MobileOrderTrackingHome({
     if (!querySearch) return;
     setVehicleSearch((prev) => (prev === querySearch ? prev : querySearch));
   }, [deepLinkParams.search]);
+  const taskFirstQuerySearch = sanitizeVehicleSearchInput(deepLinkParams.search);
+  const taskFirstSearchPending = taskFirstLiff && vehicleSearch !== taskFirstQuerySearch;
+  useEffect(() => {
+    if (!taskFirstLiff || vehicleSearch === taskFirstQuerySearch) return;
+    const timer = window.setTimeout(() => {
+      const params = new URLSearchParams(searchParams?.toString() ?? "");
+      if (vehicleSearch) params.set("search", vehicleSearch);
+      else params.delete("search");
+      params.delete("limit");
+      params.delete("load");
+      router.replace(`${pathname}${params.size > 0 ? `?${params.toString()}` : ""}`, { scroll: false });
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [pathname, router, searchParams, taskFirstLiff, taskFirstQuerySearch, vehicleSearch]);
   const vehicleSearchForFiltering = useDebouncedValue(vehicleSearch, 120);
   const [translateAllBusy, setTranslateAllBusy] = useState(false);
   const [translateAllMessage, setTranslateAllMessage] = useState("");
@@ -7051,7 +7065,7 @@ export function MobileOrderTrackingHome({
             setVisibleLimit((current) => current + ORDERS_PAGE_INCREMENT);
           }
         }}
-        isLoading={isDeferredHydrationLoading || experimentLoadingDetails}
+        isLoading={isDeferredHydrationLoading || experimentLoadingDetails || taskFirstSearchPending}
         warning={dataWarnings.length > 0 && !suppressDataWarningsDuringDeferredHydration ? dataWarnings[0] : null}
         uiLang={uiLang}
         onToggleLanguage={() => setUiLang((current) => (current === "th" ? "en" : "th"))}
