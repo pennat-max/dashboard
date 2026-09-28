@@ -1,6 +1,6 @@
 # Chang Joe n8n LINE Inbox Runbook
 
-This runbook starts in dry-run only. Do not turn on LINE replies or auto-save without owner approval.
+This runbook reflects the owner-approved production behavior: matched cars auto-save, unmatched cars appear only in the problem drawer, and saved jobs receive one LINE completion reply.
 
 ## 1. Site Environment
 
@@ -9,10 +9,13 @@ Required before n8n can call the Site endpoints:
 ```text
 LINE_N8N_ENABLED=true
 LINE_N8N_WORKER_SECRET=<store as Site secret>
-LINE_N8N_DRY_RUN=true
-LINE_N8N_AUTO_SAVE=false
-LINE_N8N_LINE_REPLY=false
-LINE_N8N_USE_AI=false
+LINE_N8N_DRY_RUN=false
+LINE_N8N_AUTO_SAVE=true
+LINE_N8N_LINE_REPLY=true
+LINE_N8N_USE_AI=true
+LINE_AUTO_SAVE_ENABLED=true
+LINE_AUTO_SAVE_DRY_RUN_ENABLED=false
+LINE_AUTO_SAVE_REPLY_ENABLED=true
 ```
 
 `LINE_INBOX_CRON_SECRET` can also authenticate these endpoints if already present. Do not put either secret in GitHub, n8n JSON exports, screenshots, logs, or chat.
@@ -38,57 +41,52 @@ Import:
 docs/n8n/line-inbox-dry-run-workflow.json
 ```
 
-Keep workflow inactive first.
+Import the workflow and bind every HTTP Request node to the `VIGO4U Site Bearer Token` credential. Activate it after the manual health check succeeds.
 
-## 4. First Dry Run
+## 4. First Production Check
 
 1. Open workflow.
 2. Confirm config:
-   - `ACTIVE=false`
-   - `DRY_RUN=true`
-   - `AUTO_SAVE=false`
-   - `LINE_REPLY=false`
-   - `USE_AI=false`
-3. Run `Health Check` manually.
-4. If health is OK, temporarily set runtime `ACTIVE=true` in the Set node for a manual test run only.
-5. Run manually.
+   - `ACTIVE=true`
+   - `DRY_RUN=false`
+   - `AUTO_SAVE=true`
+   - `LINE_REPLY=true`
+   - `USE_AI=true`
+3. Run `Health Check` manually and confirm all production flags are true except dry-run.
+4. Run the complete workflow manually once.
+5. Activate the workflow.
 6. Confirm:
    - Health returns queue counts.
    - Analyze pending returns processed/analyzed/error counts.
    - Queue summary returns messages.
-   - Replay errors runs with `dry_run=true`.
+   - Error inspection runs with `dry_run=true` and does not create a retry loop.
 
-## 5. Safe Schedule
+## 5. Production Schedule
 
-After manual dry-run passes:
+After the manual production check passes:
 
 ```text
-Schedule: every 5 minutes
-LIMIT: 10
-USE_AI=false
-AUTO_SAVE=false
-LINE_REPLY=false
+Schedule: every 1 minute
+LIMIT: 20
+USE_AI=true
+AUTO_SAVE=true
+LINE_REPLY=true
 ```
 
-Leave the workflow inactive until owner says to activate.
+The owner has approved activation for this LINE order-tracking workflow.
 
-## 6. What Must Not Happen Yet
+## 6. Guardrails
 
 - Do not change LINE OA production webhook to n8n.
-- Do not enable `LINE_N8N_AUTO_SAVE=true`.
-- Do not enable `LINE_N8N_LINE_REPLY=true`.
-- Do not enable external AI for LINE content.
 - Do not store secrets in workflow export.
 - Do not delete or modify historical LINE rows manually.
+- Do not automatically reset the same analyze error every minute.
+- Do not send review/problem messages repeatedly to the LINE group; unmatched rows belong in the problem drawer.
 
-## 7. Owner Approval Required
+## 7. Separate Approval Still Required
 
-Owner approval is required before:
+Separate approval is still required before:
 
-- Activating scheduled n8n workflow.
-- Enabling auto-save.
-- Enabling LINE replies.
-- Sending LINE content to external AI.
 - Moving LINE webhook away from ChatGPT Site.
 - Opening ports or changing firewall on QNAP.
 
@@ -101,4 +99,4 @@ Disable in this order:
 3. Keep LINE OA webhook pointing at ChatGPT Site.
 4. Staff can continue manual review in `/m/orders`.
 
-No database rollback is required for dry-run because it only updates analyze fields; it does not create order items or send replies.
+Deactivating the workflow stops future scheduled processing. Work already saved in Order Tracking is not rolled back automatically.

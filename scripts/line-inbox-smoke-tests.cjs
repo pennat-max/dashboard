@@ -1722,6 +1722,7 @@ const autoSaveSource = fs.readFileSync(
   "utf8"
 );
 assert(analyzePendingJobSource.includes("maybeAutoSaveAnalyzedLineInbox"), "analyze-pending is wired to guarded auto-save");
+assert(!analyzePendingJobSource.includes("pushLineJobReviewMessage"), "unmatched cars stay in the problem drawer without repeated LINE review messages");
 assert(autoSaveSource.includes("LINE_AUTO_SAVE_ENABLED"), "auto-save is gated by LINE_AUTO_SAVE_ENABLED");
 assert(autoSaveSource.includes("LINE_AUTO_SAVE_ALLOWED_GROUP_IDS"), "auto-save has a separate group allow-list");
 assert(autoSaveSource.includes("LINE_AUTO_SAVE_REPLY_ENABLED"), "auto-save reply is independently gated");
@@ -1750,6 +1751,24 @@ assert(
 );
 assert(autoSaveSource.includes("photo attach failed after save"), "photo attach failure is logged after save without retrying order_items");
 assert(autoSaveSource.includes("error_after_lock"), "persist failure after atomic lock records a non-retry error state");
+const n8nProductionWorkflow = JSON.parse(
+  fs.readFileSync(
+    path.join(root, "docs/n8n/line-inbox-dry-run-workflow.json"),
+    "utf8"
+  )
+);
+const n8nRuntimeAssignments = Object.fromEntries(
+  n8nProductionWorkflow.nodes
+    .find((node) => node.name === "Runtime Guard")
+    .parameters.assignments.assignments.map((entry) => [entry.name, entry.value])
+);
+assert.strictEqual(n8nProductionWorkflow.active, true, "n8n production workflow is active after import");
+assert.strictEqual(n8nRuntimeAssignments.ACTIVE, true, "n8n runtime guard allows production execution");
+assert.strictEqual(n8nRuntimeAssignments.DRY_RUN, false, "n8n production workflow is not a dry run");
+assert.strictEqual(n8nRuntimeAssignments.AUTO_SAVE, true, "n8n production workflow enables matched-car auto-save");
+assert.strictEqual(n8nRuntimeAssignments.LINE_REPLY, true, "n8n production workflow enables completion replies");
+assert.strictEqual(n8nRuntimeAssignments.USE_AI, true, "n8n production workflow enables AI analysis");
+assert.strictEqual(n8nRuntimeAssignments.LIMIT, 20, "n8n processes a bounded batch each minute");
 assert(
   pendingSaveRoute.includes("claimPendingInboxForManualSave") &&
     pendingSaveRoute.includes('.eq("workflow_status", "pending")'),

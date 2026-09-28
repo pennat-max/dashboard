@@ -1,18 +1,15 @@
 {
-  "id": "VIGO4ULineDry001",
-  "name": "VIGO4U LINE Inbox Dry Run",
+  "id": "VIGO4ULineProd001",
+  "name": "VIGO4U LINE Inbox Production",
   "active": true,
   "nodes": [
     {
       "parameters": {},
       "id": "manual-trigger",
-      "name": "Manual Dry Run",
+      "name": "Manual Production Run",
       "type": "n8n-nodes-base.manualTrigger",
       "typeVersion": 1,
-      "position": [
-        -700,
-        -60
-      ]
+      "position": [-700, -60]
     },
     {
       "parameters": {
@@ -20,19 +17,16 @@
           "interval": [
             {
               "field": "minutes",
-              "minutesInterval": 5
+              "minutesInterval": 1
             }
           ]
         }
       },
       "id": "schedule-trigger",
-      "name": "Schedule Every 5 Minutes",
+      "name": "Schedule Every Minute",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [
-        -700,
-        160
-      ]
+      "position": [-700, 160]
     },
     {
       "parameters": {
@@ -54,31 +48,31 @@
               "id": "dry-run",
               "name": "DRY_RUN",
               "type": "boolean",
-              "value": true
+              "value": false
             },
             {
               "id": "auto-save",
               "name": "AUTO_SAVE",
               "type": "boolean",
-              "value": false
+              "value": true
             },
             {
               "id": "line-reply",
               "name": "LINE_REPLY",
               "type": "boolean",
-              "value": false
+              "value": true
             },
             {
               "id": "use-ai",
               "name": "USE_AI",
               "type": "boolean",
-              "value": false
+              "value": true
             },
             {
               "id": "limit",
               "name": "LIMIT",
               "type": "number",
-              "value": 10
+              "value": 20
             },
             {
               "id": "bearer",
@@ -94,10 +88,7 @@
       "name": "Runtime Guard",
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
-      "position": [
-        -420,
-        40
-      ]
+      "position": [-420, 40]
     },
     {
       "parameters": {
@@ -118,8 +109,17 @@
               }
             },
             {
-              "id": "dry-run-true",
+              "id": "dry-run-false",
               "leftValue": "={{ $json.DRY_RUN }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "auto-save-true",
+              "leftValue": "={{ $json.AUTO_SAVE }}",
               "rightValue": true,
               "operator": {
                 "type": "boolean",
@@ -127,18 +127,9 @@
               }
             },
             {
-              "id": "auto-save-false",
-              "leftValue": "={{ $json.AUTO_SAVE }}",
-              "rightValue": false,
-              "operator": {
-                "type": "boolean",
-                "operation": "equals"
-              }
-            },
-            {
-              "id": "line-reply-false",
+              "id": "line-reply-true",
               "leftValue": "={{ $json.LINE_REPLY }}",
-              "rightValue": false,
+              "rightValue": true,
               "operator": {
                 "type": "boolean",
                 "operation": "equals"
@@ -149,14 +140,11 @@
         },
         "options": {}
       },
-      "id": "allow-dry-run",
-      "name": "Allow Dry Run Only",
+      "id": "allow-production-run",
+      "name": "Allow Production Run",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [
-        -160,
-        40
-      ]
+      "position": [-160, 40]
     },
     {
       "parameters": {
@@ -171,16 +159,16 @@
       "name": "Health Check",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [
-        120,
-        -120
-      ],
+      "position": [120, -120],
       "credentials": {
         "httpHeaderAuth": {
           "id": "PLACEHOLDER",
           "name": "VIGO4U Site Bearer Token"
         }
-      }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
     },
     {
       "parameters": {
@@ -190,7 +178,7 @@
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ { limit: $('Runtime Guard').item.json.LIMIT, use_ai: false } }}",
+        "jsonBody": "={{ { limit: $('Runtime Guard').item.json.LIMIT, use_ai: $('Runtime Guard').item.json.USE_AI } }}",
         "options": {
           "timeout": 120000
         }
@@ -199,20 +187,20 @@
       "name": "Analyze Pending",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [
-        420,
-        -120
-      ],
+      "position": [420, -120],
       "credentials": {
         "httpHeaderAuth": {
           "id": "PLACEHOLDER",
           "name": "VIGO4U Site Bearer Token"
         }
-      }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
     },
     {
       "parameters": {
-        "url": "={{ $('Runtime Guard').item.json.SITE_URL + '/api/n8n/line-inbox/pending-queue?analyze_status=all&limit=20' }}",
+        "url": "={{ $('Runtime Guard').item.json.SITE_URL + '/api/n8n/line-inbox/pending-queue?analyze_status=all&limit=50' }}",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "options": {
@@ -223,16 +211,16 @@
       "name": "Read Queue Summary",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [
-        720,
-        -120
-      ],
+      "position": [720, -120],
       "credentials": {
         "httpHeaderAuth": {
           "id": "PLACEHOLDER",
           "name": "VIGO4U Site Bearer Token"
         }
-      }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
     },
     {
       "parameters": {
@@ -247,20 +235,20 @@
           "timeout": 30000
         }
       },
-      "id": "replay-errors-dry-run",
-      "name": "Replay Errors Dry Run",
+      "id": "inspect-errors",
+      "name": "Inspect Errors Safely",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [
-        1020,
-        -120
-      ],
+      "position": [1020, -120],
       "credentials": {
         "httpHeaderAuth": {
           "id": "PLACEHOLDER",
           "name": "VIGO4U Site Bearer Token"
         }
-      }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
     },
     {
       "parameters": {
@@ -270,7 +258,7 @@
               "id": "blocked",
               "name": "blocked_reason",
               "type": "string",
-              "value": "Workflow guard blocked execution. Keep ACTIVE=false, DRY_RUN=true, AUTO_SAVE=false, LINE_REPLY=false until owner approves."
+              "value": "Workflow guard blocked execution. Production requires ACTIVE=true, DRY_RUN=false, AUTO_SAVE=true, LINE_REPLY=true, and USE_AI=true."
             }
           ]
         },
@@ -280,14 +268,11 @@
       "name": "Blocked Output",
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
-      "position": [
-        120,
-        180
-      ]
+      "position": [120, 180]
     }
   ],
   "connections": {
-    "Manual Dry Run": {
+    "Manual Production Run": {
       "main": [
         [
           {
@@ -298,7 +283,7 @@
         ]
       ]
     },
-    "Schedule Every 5 Minutes": {
+    "Schedule Every Minute": {
       "main": [
         [
           {
@@ -313,14 +298,14 @@
       "main": [
         [
           {
-            "node": "Allow Dry Run Only",
+            "node": "Allow Production Run",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Allow Dry Run Only": {
+    "Allow Production Run": {
       "main": [
         [
           {
@@ -364,7 +349,7 @@
       "main": [
         [
           {
-            "node": "Replay Errors Dry Run",
+            "node": "Inspect Errors Safely",
             "type": "main",
             "index": 0
           }
@@ -376,14 +361,16 @@
     "executionOrder": "v1"
   },
   "pinData": {},
-  "versionId": "dry-run-template",
+  "versionId": "production-template-v1",
   "meta": {
     "templateCredsSetupCompleted": false,
     "vigo4u": {
-      "active": false,
-      "dry_run": true,
-      "auto_save": false,
-      "line_reply": false
+      "active": true,
+      "dry_run": false,
+      "auto_save": true,
+      "line_reply": true,
+      "use_ai": true,
+      "schedule_minutes": 1
     }
   }
 }

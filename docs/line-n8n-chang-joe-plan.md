@@ -1,6 +1,6 @@
 # VIGO4U LINE + n8n Plan for Chang Joe
 
-Status: ready for dry-run wiring. Production LINE webhook is not changed by this plan.
+Status: production workflow prepared. Production LINE webhook remains on the ChatGPT Site.
 
 ## Architecture
 
@@ -9,23 +9,26 @@ LINE OA
 → ChatGPT Site /api/line/webhook
 → Verify LINE signature
 → Capture text/image/file metadata in line_inbox_messages
-→ n8n on Chang Joe pulls pending rows
+→ n8n on Chang Joe triggers the queue every minute
 → Analyze pending messages through existing parser/AI pipeline
-→ Classify High confidence / Human review / Blocked
-→ Send result back to ChatGPT Site APIs
+→ Matched car: auto-save work and attach related LINE photos
+→ Unmatched car: keep only in the AI · LINE problem drawer
+→ Send one completion reply only after a matched job is saved
 → D1 + R2
-→ Staff review in /m/orders
-→ Reply LINE later only after owner approval
+→ Staff sees only car-match problems in the AI · LINE problem drawer
+→ Saved work is immediately available in Order Tracking
 ```
 
-## Production Safety Defaults
+## Production Runtime
 
 ```text
-ACTIVE=false
-DRY_RUN=true
-AUTO_SAVE=false
-LINE_REPLY=false
-USE_AI=false
+ACTIVE=true
+DRY_RUN=false
+AUTO_SAVE=true
+LINE_REPLY=true
+USE_AI=true
+LIMIT=20
+SCHEDULE=every 1 minute
 ```
 
 No secret, token, LINE channel secret, password, or service role key is stored in this repository or in the n8n export.
@@ -40,12 +43,12 @@ Authorization: Bearer <LINE_N8N_WORKER_SECRET or LINE_INBOX_CRON_SECRET>
 
 The new endpoints are disabled unless `LINE_N8N_ENABLED=true`.
 
-| Endpoint | Method | Purpose | Writes |
-| --- | --- | --- | --- |
-| `/api/n8n/line-inbox/health` | GET | Check flags, auth readiness, pending/error counts | No |
-| `/api/n8n/line-inbox/pending-queue` | GET | Read lightweight pending/error queue summaries | No |
-| `/api/n8n/line-inbox/analyze-pending` | POST | Run existing analyze pipeline on captured pending rows | Updates analyze fields only |
-| `/api/n8n/line-inbox/replay-errors` | POST | Dry-run or reset failed analyze rows to pending | Dry-run by default |
+| Endpoint                              | Method | Purpose                                                | Writes                      |
+| ------------------------------------- | ------ | ------------------------------------------------------ | --------------------------- |
+| `/api/n8n/line-inbox/health`          | GET    | Check flags, auth readiness, pending/error counts      | No                          |
+| `/api/n8n/line-inbox/pending-queue`   | GET    | Read lightweight pending/error queue summaries         | No                          |
+| `/api/n8n/line-inbox/analyze-pending` | POST   | Run existing analyze pipeline on captured pending rows | Updates analyze fields only |
+| `/api/n8n/line-inbox/replay-errors`   | POST   | Dry-run or reset failed analyze rows to pending        | Dry-run by default          |
 
 Existing staff UI endpoints remain unchanged:
 
@@ -56,27 +59,29 @@ Existing staff UI endpoints remain unchanged:
 
 ## n8n Workflow Design
 
-1. Manual trigger first; schedule node is included but disabled.
+1. Manual trigger remains available for diagnosis; the production schedule runs every minute.
 2. Runtime guard checks:
-   - `ACTIVE=false`
-   - `DRY_RUN=true`
-   - `AUTO_SAVE=false`
-   - `LINE_REPLY=false`
+   - `ACTIVE=true`
+   - `DRY_RUN=false`
+   - `AUTO_SAVE=true`
+   - `LINE_REPLY=true`
+   - `USE_AI=true`
 3. Health check calls the Site n8n health endpoint.
-4. Analyze step calls existing analyzer through the Site API with `use_ai=false`.
+4. Analyze step calls the existing Site analyzer with AI enabled, up to 20 rows per run.
 5. Queue summary reads current queue after analyze.
-6. Replay error step runs in dry-run mode only.
-7. Future branch can notify Telegram/LINE internal group, but not reply to customer LINE OA yet.
+6. Error inspection remains read-only to prevent an infinite retry loop.
+7. The Site, not n8n, performs car matching, persistence, photo linking, and the LINE completion reply.
 
 ## Classification
 
 n8n should treat results as:
 
-- High confidence: analyzed, matched car, no manual review flag, no errors.
-- Human review: analyzed but `needs_human_review=true`, duplicate/merge decision, photo context, or low confidence.
-- Blocked: missing car, analyze error, auth failure, disabled flag, or Site API failure.
+- Matched car: persist automatically, including photos related to the LINE message.
+- Unmatched car: do not persist; show it in the LIFF AI · LINE problem drawer.
+- Analyze error: leave it in the error queue for inspection.
+- Auth or Site failure: n8n retries the HTTP request up to three times.
 
-High confidence is still review-only until `AUTO_SAVE=true` is separately approved.
+Item-confidence and human-review hints do not block a message after a real `car_row_id` has been resolved.
 
 ## Error Queue and Replay
 
@@ -84,10 +89,10 @@ Failed rows stay in `line_inbox_messages` with `analyze_status=error`.
 
 Replay path:
 
-1. `POST /api/n8n/line-inbox/replay-errors` with `{ "dry_run": true }`
-2. Owner reviews returned rows.
-3. Only after approval, send `{ "dry_run": false }` to reset those rows to pending.
-4. Run analyze pending again.
+1. The scheduled workflow calls `POST /api/n8n/line-inbox/replay-errors` with `{ "dry_run": true }`.
+2. Review the returned rows before resetting them.
+3. A deliberate manual run with `{ "dry_run": false }` resets selected failed rows to pending.
+4. The next scheduled run analyzes them again.
 
 ## Cutover Rule
 
@@ -95,7 +100,7 @@ Do not point LINE OA webhook to n8n during phase 1. Keep ChatGPT Site as the pub
 
 ## File
 
-Importable dry-run workflow:
+Importable production workflow (legacy filename retained so existing deployment notes still resolve):
 
 ```text
 docs/n8n/line-inbox-dry-run-workflow.json
