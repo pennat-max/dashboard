@@ -24,9 +24,7 @@ import {
 import {
   LINE_INBOX_QUEUE_REFRESH_MS,
   addBangkokCalendarDaysForLineInboxQueue,
-  lineInboxQueueGroupMatchesFilter,
   lineInboxQueueMessageNeedsManualReview,
-  lineInboxQueueMessageIsReadyActionable,
   todayYmdBangkokForLineInboxQueue,
   ymdBangkokFromLineInboxIso,
   type LineInboxQueueFilter,
@@ -690,6 +688,35 @@ function queueGroupIsAmbiguousVehicle(group: PendingQueueGroup): boolean {
   );
 }
 
+/**
+ * The review drawer is only for vehicle matching problems. Messages that already
+ * have a car_row_id are saved automatically and must not remain as review work.
+ */
+function queueMessageHasCarMatchProblem(message: PendingQueueMessage): boolean {
+  return !queueMessageHasMatchedCar(message);
+}
+
+function queueMessageMatchesCarProblemFilter(
+  message: PendingQueueMessage,
+  filter: LineInboxQueueFilter,
+  todayYmd: string
+): boolean {
+  if (!queueMessageHasCarMatchProblem(message)) return false;
+  if (filter === "all") return true;
+  if (filter === "waiting_for_car") return queueMessageIsWaitingForCarRecord(message);
+  if (filter === "manual") return !queueMessageIsWaitingForCarRecord(message);
+  const targetYmd = filter === "yesterday" ? addBangkokCalendarDaysForLineInboxQueue(todayYmd, -1) : todayYmd;
+  return ymdBangkokFromLineInboxIso(message.received_at) === targetYmd;
+}
+
+function queueGroupMatchesCarProblemFilter(
+  group: PendingQueueGroup,
+  filter: LineInboxQueueFilter,
+  todayYmd: string
+): boolean {
+  return group.messages.some((message) => queueMessageMatchesCarProblemFilter(message, filter, todayYmd));
+}
+
 type LineInboxQueueCardKind = "actionable" | "matched_no_work" | "waiting_for_car_record" | "unresolved";
 
 function queueMessageIsMatchedNoWork(message: PendingQueueMessage): boolean {
@@ -698,23 +725,6 @@ function queueMessageIsMatchedNoWork(message: PendingQueueMessage): boolean {
   return (
     String(message.extractionStatus ?? "").trim() === "matched_no_work" ||
     (queueMessageHasMatchedCar(message) && !queueMessageHasWorkItems(message))
-  );
-}
-
-function queueMessageMatchesLineInboxFilter(
-  message: PendingQueueMessage,
-  filter: LineInboxQueueDateFilter,
-  todayYmd: string
-): boolean {
-  if (filter === "all") return lineInboxQueueMessageIsReadyActionable(message);
-  if (filter === "manual") return queueMessageNeedsManualReview(message);
-  if (filter === "waiting_for_car") return queueMessageIsWaitingForCarRecord(message);
-  const targetYmd = filter === "yesterday" ? addBangkokCalendarDaysForLineInboxQueue(todayYmd, -1) : todayYmd;
-  if (ymdBangkokFromLineInboxIso(message.received_at) !== targetYmd) return false;
-  return (
-    lineInboxQueueMessageIsReadyActionable(message) ||
-    queueMessageNeedsManualReview(message) ||
-    queueMessageIsWaitingForCarRecord(message)
   );
 }
 
@@ -1259,14 +1269,6 @@ function groupLatestReceivedMs(group: PendingQueueGroup): number {
   return max;
 }
 
-function groupMatchesLineInboxFilter(
-  group: PendingQueueGroup,
-  filter: LineInboxQueueDateFilter,
-  todayYmd: string
-): boolean {
-  return lineInboxQueueGroupMatchesFilter(group, filter, todayYmd);
-}
-
 function queueGroupPhotoCount(group: PendingQueueGroup): number {
   return Math.max(0, Number(group.linePhotoCount ?? group.line_photo_count ?? group.attachments?.length ?? 0));
 }
@@ -1378,13 +1380,6 @@ function useLineInboxBridgeState({
   const [queueTotalNew, setQueueTotalNew] = useState(0);
   const [queueTotalAction, setQueueTotalAction] = useState(0);
   const [queueTotalManualReview, setQueueTotalManualReview] = useState(0);
-  const [queueFilterCounts, setQueueFilterCounts] = useState<LineInboxQueueFilterCounts>({
-    all: 0,
-    today: 0,
-    yesterday: 0,
-    manual: 0,
-    waiting_for_car: 0,
-  });
   const [queueTab, setQueueTab] = useState<"actions" | "messages" | "photos">("actions");
   const [queueDateFilter, setQueueDateFilter] = useState<LineInboxQueueDateFilter>("all");
   const [queueDrafts, setQueueDrafts] = useState<Record<string, QueueActionDraft>>({});
@@ -1406,7 +1401,9 @@ function useLineInboxBridgeState({
     try {
       const params = new URLSearchParams({
         mode: "summary",
-        filter: queueDateFilter,
+        // Fetch one compact queue and filter matching problems locally. This
+        // avoids another request every time the user changes the problem tab.
+        filter: "all",
       });
       const res = await fetch(`/api/line-inbox/pending-queue?${params.toString()}`, {
         credentials: "same-origin",
@@ -1414,7 +1411,6 @@ function useLineInboxBridgeState({
       });
       const data = (await res.json()) as {
         ok?: boolean;
-        filter_counts?: Partial<LineInboxQueueFilterCounts>;
         total_new_lines?: number;
         total_action_lines?: number;
         total_manual_reviews?: number;
@@ -1427,22 +1423,6 @@ function useLineInboxBridgeState({
       const list = data.messages ?? [];
       const groups = data.groups ?? [];
       const attachments = (data.recent_attachments ?? []).filter((attachment) => attachment.url);
-      const todayYmd = todayYmdBangkokForLineInboxQueue();
-      const fallbackCounts: LineInboxQueueFilterCounts = {
-        all: groups.filter((group) => groupMatchesLineInboxFilter(group, "all", todayYmd)).length,
-        today: groups.filter((group) => groupMatchesLineInboxFilter(group, "today", todayYmd)).length,
-        yesterday: groups.filter((group) => groupMatchesLineInboxFilter(group, "yesterday", todayYmd)).length,
-        manual: groups.filter((group) => groupMatchesLineInboxFilter(group, "manual", todayYmd)).length,
-        waiting_for_car: groups.filter((group) => groupMatchesLineInboxFilter(group, "waiting_for_car", todayYmd))
-          .length,
-      };
-      setQueueFilterCounts({
-        all: Number(data.filter_counts?.all ?? fallbackCounts.all) || 0,
-        today: Number(data.filter_counts?.today ?? fallbackCounts.today) || 0,
-        yesterday: Number(data.filter_counts?.yesterday ?? fallbackCounts.yesterday) || 0,
-        manual: Number(data.filter_counts?.manual ?? fallbackCounts.manual) || 0,
-        waiting_for_car: Number(data.filter_counts?.waiting_for_car ?? fallbackCounts.waiting_for_car) || 0,
-      });
       setQueueTotalNew(typeof data.total_new_lines === "number" ? data.total_new_lines : 0);
       setQueueTotalAction(typeof data.total_action_lines === "number" ? data.total_action_lines : 0);
       setQueueTotalManualReview(typeof data.total_manual_reviews === "number" ? data.total_manual_reviews : 0);
@@ -1499,7 +1479,7 @@ function useLineInboxBridgeState({
       window.clearTimeout(timeout);
       if (!background) setQueueLoading(false);
     }
-  }, [queueDateFilter, saleAssigneesBySale, uiLang]);
+  }, [saleAssigneesBySale, uiLang]);
 
   useEffect(() => {
     void fetchQueue();
@@ -1792,11 +1772,24 @@ function useLineInboxBridgeState({
       ? "new jobs"
       : "งานใหม่";
 
+  const carMatchProblemCounts = useMemo((): LineInboxQueueFilterCounts => {
+    const todayYmd = todayYmdBangkokForLineInboxQueue();
+    return {
+      all: queueGroups.filter((group) => queueGroupMatchesCarProblemFilter(group, "all", todayYmd)).length,
+      today: queueGroups.filter((group) => queueGroupMatchesCarProblemFilter(group, "today", todayYmd)).length,
+      yesterday: queueGroups.filter((group) => queueGroupMatchesCarProblemFilter(group, "yesterday", todayYmd)).length,
+      manual: queueGroups.filter((group) => queueGroupMatchesCarProblemFilter(group, "manual", todayYmd)).length,
+      waiting_for_car: queueGroups.filter((group) =>
+        queueGroupMatchesCarProblemFilter(group, "waiting_for_car", todayYmd)
+      ).length,
+    };
+  }, [queueGroups]);
+
   const carPickerRows = useMemo((): LineInboxCarPickerRow[] => {
     const todayYmd = todayYmdBangkokForLineInboxQueue();
     const rows: LineInboxCarPickerRow[] = [];
     for (const group of queueGroups) {
-      if (!groupMatchesLineInboxFilter(group, queueDateFilter, todayYmd)) continue;
+      if (!queueGroupMatchesCarProblemFilter(group, queueDateFilter, todayYmd)) continue;
       const carRowId = String(group.car_row_id ?? "").trim() || null;
       const matched = carRowId
         ? orders.find((o) => String(o.carRowId ?? "").trim() === carRowId)
@@ -1832,7 +1825,6 @@ function useLineInboxBridgeState({
         : isUnresolved
           ? primaryLabel || String(group.aiTargetCarReference ?? "").trim() || fallbackDescription || ""
           : "";
-      if (jobCount === 0 && photoCount === 0 && !isWaitingForCarRecord) continue;
       rows.push({
         groupKey: group.group_key,
         orderId: matched?.id ?? null,
@@ -1875,40 +1867,40 @@ function useLineInboxBridgeState({
     return rows.sort((a, b) => b.latestMessageAt - a.latestMessageAt);
   }, [orders, queueDateFilter, queueGroups, uiLang]);
 
-  /** Badge = number of ready-to-approve LINE/AI groups, not manual review rows. */
-  const lineInboxCarCount = queueFilterCounts.all;
+  /** Badge = only groups where LINE work still cannot be matched to a car. */
+  const lineInboxCarCount = carMatchProblemCounts.all;
 
   const queueDateFilterOptions = useMemo(() => {
     const todayYmd = todayYmdBangkokForLineInboxQueue();
     const options: Array<{ value: LineInboxQueueDateFilter; label: string; count: number }> = [
       {
         value: "all",
-        label: uiLang === "en" ? "Ready to approve" : "พร้อมตรวจงาน",
-        count: queueFilterCounts.all,
+        label: uiLang === "en" ? "Car match problems" : "จับคู่รถไม่ได้",
+        count: carMatchProblemCounts.all,
       },
       {
         value: "today",
         label: uiLang === "en" ? "Today" : "วันนี้",
-        count: queueFilterCounts.today,
+        count: carMatchProblemCounts.today,
       },
       {
         value: "yesterday",
         label: uiLang === "en" ? "Yesterday" : "เมื่อวาน",
-        count: queueFilterCounts.yesterday,
+        count: carMatchProblemCounts.yesterday,
       },
       {
         value: "manual",
-        label: uiLang === "en" ? "Manual review" : "ต้องตรวจเอง",
-        count: queueFilterCounts.manual,
+        label: uiLang === "en" ? "Choose a car" : "ต้องเลือกคันรถ",
+        count: carMatchProblemCounts.manual,
       },
       {
         value: "waiting_for_car",
         label: uiLang === "en" ? "Waiting for car" : "รอรถเข้า",
-        count: queueFilterCounts.waiting_for_car,
+        count: carMatchProblemCounts.waiting_for_car,
       },
     ];
     return options;
-  }, [queueFilterCounts, uiLang]);
+  }, [carMatchProblemCounts, uiLang]);
 
   const toggleQueueLine = useCallback((inboxId: string, itemIndex: number) => {
     setQueueDeselected((prev) => {
@@ -3023,7 +3015,7 @@ function useLineInboxBridgeState({
         onPointerDown={(e) => e.preventDefault()}
         onClick={() => setOpen(!open)}
         aria-expanded={open}
-        aria-label={uiLang === "en" ? "LINE cars with pending work" : "รถที่มีงาน LINE รอดำเนินการ"}
+        aria-label={uiLang === "en" ? "LINE vehicle matching problems" : "ปัญหาจับคู่รถจาก LINE"}
         className={cn(
           "fixed z-[65] flex h-14 min-w-[3.5rem] items-center justify-center gap-1 rounded-full px-4 text-xs font-bold text-white shadow-lg ring-2 touch-manipulation",
           "bottom-[max(1rem,env(safe-area-inset-bottom))] right-[max(0.75rem,env(safe-area-inset-right))]",
@@ -3058,12 +3050,12 @@ function useLineInboxBridgeState({
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <h2 id="line-inbox-car-drawer-title" className="text-base font-bold text-violet-950">
-                    {uiLang === "en" ? "Pending LINE work" : "งาน LINE รอดำเนินการ"}
+                    {uiLang === "en" ? "Vehicle matching problems" : "ปัญหาจับคู่รถจาก LINE"}
                   </h2>
                   <p className="mt-1 text-[11px] font-medium text-slate-500">
                     {uiLang === "en"
-                      ? `${carPickerRows.length} shown · ${lineInboxCarCount} ready group(s)`
-                      : `แสดง ${carPickerRows.length} รายการ · พร้อมตรวจงาน ${lineInboxCarCount} กลุ่ม`}
+                      ? `${carPickerRows.length} shown · ${lineInboxCarCount} matching problem(s)`
+                      : `แสดงเฉพาะปัญหาจับคู่รถ ${lineInboxCarCount} รายการ`}
                   </p>
                 </div>
                 <button
@@ -3114,7 +3106,7 @@ function useLineInboxBridgeState({
                 <p className="py-6 text-center text-sm text-slate-500">{uiLang === "en" ? "Loading…" : "กำลังโหลด…"}</p>
               ) : carPickerRows.length === 0 ? (
                 <p className="py-6 text-center text-sm text-slate-500">
-                  {uiLang === "en" ? "No pending LINE work for this filter." : "ไม่มีงาน LINE รอดำเนินการในตัวกรองนี้"}
+                  {uiLang === "en" ? "No vehicle matching problems for this filter." : "ไม่มีปัญหาจับคู่รถในตัวกรองนี้"}
                 </p>
               ) : (
                 <>
@@ -3159,7 +3151,7 @@ function useLineInboxBridgeState({
     const acceptedReplyCopied = copiedQueueReplyKey === group.group_key;
     const todayYmd = todayYmdBangkokForLineInboxQueue();
     const visibleMessages = group.messages.filter((message) =>
-      queueMessageMatchesLineInboxFilter(message, queueDateFilter, todayYmd)
+      queueMessageMatchesCarProblemFilter(message, queueDateFilter, todayYmd)
     );
     const groupSelectedCount = visibleMessages.reduce((sum, message) => {
       const fallbackAssignee = resolveSaleStaffForOrder(String(message.sale ?? group.sale ?? ""), saleAssigneesBySale);

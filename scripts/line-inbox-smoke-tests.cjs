@@ -1564,9 +1564,9 @@ assert(
   "AI LINE navigator tells staff that fallback context is only a suggestion"
 );
 assert(
-  lineInboxToolbar.includes("groupMatchesLineInboxFilter(group, queueDateFilter") &&
+  lineInboxToolbar.includes("queueGroupMatchesCarProblemFilter(group, queueDateFilter") &&
     !lineInboxToolbar.includes("groupHasLineWorkToday"),
-  "AI LINE navigator no longer defaults to today-only filtering"
+  "AI LINE navigator filters every date tab down to vehicle matching problems"
 );
 assert(
   lineInboxToolbar.includes("LINE_INBOX_QUEUE_REFRESH_MS"),
@@ -1574,9 +1574,15 @@ assert(
 );
 assert(
   lineInboxToolbar.includes("mode: \"summary\"") &&
-    lineInboxToolbar.includes("filter: queueDateFilter") &&
+    lineInboxToolbar.includes('filter: "all"') &&
     lineInboxToolbar.includes("AbortController"),
-  "AI LINE drawer fetches the lightweight filtered queue with a timeout"
+  "AI LINE drawer fetches one lightweight queue with a timeout and filters problem tabs locally"
+);
+assert(
+  lineInboxToolbar.includes("queueMessageHasCarMatchProblem") &&
+    lineInboxToolbar.includes("แสดงเฉพาะปัญหาจับคู่รถ") &&
+    lineInboxToolbar.includes("จับคู่รถไม่ได้"),
+  "AI LINE drawer only presents vehicle matching problems to staff"
 );
 assert(
   lineInboxToolbar.includes("const nextDrafts: Record<string, QueueActionDraft> = { ...prev }") &&
