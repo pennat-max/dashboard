@@ -693,7 +693,34 @@ function queueGroupIsAmbiguousVehicle(group: PendingQueueGroup): boolean {
  * have a car_row_id are saved automatically and must not remain as review work.
  */
 function queueMessageHasCarMatchProblem(message: PendingQueueMessage): boolean {
-  return !queueMessageHasMatchedCar(message);
+  const carRowId = String(message.car_row_id ?? message.detected_car?.car_row_id ?? "").trim();
+  if (!carRowId) return true;
+
+  const matchStatus = String(message.matchStatus ?? "").trim();
+  if (["waiting_for_car_record", "ambiguous_vehicle", "no_vehicle_context", "unresolved"].includes(matchStatus)) {
+    return true;
+  }
+
+  const unmatchedReason = String(message.unmatchedReason ?? message.unmatched_reason ?? "").trim();
+  if (["pending_car_record", "multiple_candidates", "no_car_candidate"].includes(unmatchedReason)) return true;
+
+  const contextSource = String(message.contextSource ?? message.context_source ?? "").trim();
+  if (contextSource === "fallback_previous_message") return true;
+
+  const candidateCount = new Set(
+    (message.extractedCarCandidates ?? [])
+      .map((candidate) => String(candidate.text ?? "").replace(/\s+/g, " ").trim().toLowerCase())
+      .filter(Boolean)
+  ).size;
+  if (candidateCount <= 1) return false;
+
+  const confidence = String(message.aiTargetCarConfidence ?? "").trim().toLowerCase();
+  if (["high", "matched", "exact", "sure"].includes(confidence)) return false;
+  const numericConfidence = Number(confidence.replace("%", ""));
+  if (Number.isFinite(numericConfidence)) {
+    return confidence.includes("%") ? numericConfidence < 75 : numericConfidence < 0.75;
+  }
+  return true;
 }
 
 function queueMessageMatchesCarProblemFilter(
