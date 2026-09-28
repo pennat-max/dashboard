@@ -741,6 +741,10 @@ function queueGroupMatchesCarProblemFilter(
   filter: LineInboxQueueFilter,
   todayYmd: string
 ): boolean {
+  // A photo or follow-up message can lack its own car_row_id while belonging to
+  // a group whose text message already matched a car. Treat the whole group as
+  // resolved so matched LINE work never leaks back into the problem drawer.
+  if (queueGroupHasMatchedCar(group)) return false;
   return group.messages.some((message) => queueMessageMatchesCarProblemFilter(message, filter, todayYmd));
 }
 
