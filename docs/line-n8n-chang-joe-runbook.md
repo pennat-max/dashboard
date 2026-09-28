@@ -41,7 +41,7 @@ Import:
 docs/n8n/line-inbox-dry-run-workflow.json
 ```
 
-Import the workflow and bind every HTTP Request node to the `VIGO4U Site Bearer Token` credential. Activate it after the manual health check succeeds.
+Import the workflow and bind its `Analyze Pending` HTTP Request node to the `VIGO4U Site Bearer Token` credential. Activate it after the site health check succeeds.
 
 ## 4. First Production Check
 
@@ -52,14 +52,12 @@ Import the workflow and bind every HTTP Request node to the `VIGO4U Site Bearer 
    - `AUTO_SAVE=true`
    - `LINE_REPLY=true`
    - `USE_AI=true`
-3. Run `Health Check` manually and confirm all production flags are true except dry-run.
-4. Run the complete workflow manually once.
+3. Call the site health endpoint once and confirm all production flags are true except dry-run.
+4. Run `Analyze Pending` manually once.
 5. Activate the workflow.
 6. Confirm:
-   - Health returns queue counts.
    - Analyze pending returns processed/analyzed/error counts.
-   - Queue summary returns messages.
-   - Error inspection runs with `dry_run=true` and does not create a retry loop.
+   - The scheduled run makes only one Site API request.
 
 ## 5. Production Schedule
 
@@ -82,6 +80,7 @@ The owner has approved activation for this LINE order-tracking workflow.
 - Do not delete or modify historical LINE rows manually.
 - Do not automatically reset the same analyze error every minute.
 - Do not send review/problem messages repeatedly to the LINE group; unmatched rows belong in the problem drawer.
+- Do not add health, queue-summary, reporting, or error-inspection calls to the one-minute workflow. Run those checks only during maintenance.
 
 ## 7. Separate Approval Still Required
 

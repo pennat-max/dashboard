@@ -148,30 +148,6 @@
     },
     {
       "parameters": {
-        "url": "={{ $json.SITE_URL + '/api/n8n/line-inbox/health' }}",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "options": {
-          "timeout": 30000
-        }
-      },
-      "id": "health-check",
-      "name": "Health Check",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [120, -120],
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "PLACEHOLDER",
-          "name": "VIGO4U Site Bearer Token"
-        }
-      },
-      "retryOnFail": true,
-      "maxTries": 3,
-      "waitBetweenTries": 5000
-    },
-    {
-      "parameters": {
         "method": "POST",
         "url": "={{ $('Runtime Guard').item.json.SITE_URL + '/api/n8n/line-inbox/analyze-pending' }}",
         "authentication": "genericCredentialType",
@@ -187,59 +163,7 @@
       "name": "Analyze Pending",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [420, -120],
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "PLACEHOLDER",
-          "name": "VIGO4U Site Bearer Token"
-        }
-      },
-      "retryOnFail": true,
-      "maxTries": 3,
-      "waitBetweenTries": 5000
-    },
-    {
-      "parameters": {
-        "url": "={{ $('Runtime Guard').item.json.SITE_URL + '/api/n8n/line-inbox/pending-queue?analyze_status=all&limit=50' }}",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "options": {
-          "timeout": 30000
-        }
-      },
-      "id": "read-queue",
-      "name": "Read Queue Summary",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [720, -120],
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "PLACEHOLDER",
-          "name": "VIGO4U Site Bearer Token"
-        }
-      },
-      "retryOnFail": true,
-      "maxTries": 3,
-      "waitBetweenTries": 5000
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "={{ $('Runtime Guard').item.json.SITE_URL + '/api/n8n/line-inbox/replay-errors' }}",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ { limit: 10, dry_run: true } }}",
-        "options": {
-          "timeout": 30000
-        }
-      },
-      "id": "inspect-errors",
-      "name": "Inspect Errors Safely",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [1020, -120],
+      "position": [120, -120],
       "credentials": {
         "httpHeaderAuth": {
           "id": "PLACEHOLDER",
@@ -309,7 +233,7 @@
       "main": [
         [
           {
-            "node": "Health Check",
+            "node": "Analyze Pending",
             "type": "main",
             "index": 0
           }
@@ -323,45 +247,15 @@
         ]
       ]
     },
-    "Health Check": {
-      "main": [
-        [
-          {
-            "node": "Analyze Pending",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
     "Analyze Pending": {
-      "main": [
-        [
-          {
-            "node": "Read Queue Summary",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Read Queue Summary": {
-      "main": [
-        [
-          {
-            "node": "Inspect Errors Safely",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[]]
     }
   },
   "settings": {
     "executionOrder": "v1"
   },
   "pinData": {},
-  "versionId": "production-template-v1",
+  "versionId": "production-template-v2-minimal",
   "meta": {
     "templateCredsSetupCompleted": false,
     "vigo4u": {
@@ -370,7 +264,8 @@
       "auto_save": true,
       "line_reply": true,
       "use_ai": true,
-      "schedule_minutes": 1
+      "schedule_minutes": 1,
+      "api_calls_per_run": 1
     }
   }
 }
