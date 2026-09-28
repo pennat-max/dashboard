@@ -1,7 +1,7 @@
 {
   "id": "VIGO4ULineDry001",
   "name": "VIGO4U LINE Inbox Dry Run",
-  "active": true,
+  "active": false,
   "nodes": [
     {
       "parameters": {},
@@ -48,7 +48,7 @@
               "id": "active",
               "name": "ACTIVE",
               "type": "boolean",
-              "value": true
+              "value": false
             },
             {
               "id": "dry-run",
