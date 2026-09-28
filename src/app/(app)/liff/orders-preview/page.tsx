@@ -1,8 +1,5 @@
 import { LiffOrdersShell } from "@/components/liff/liff-orders-shell";
-import {
-  MobileOrderTrackingHome,
-  type LiffTaskFirstScope,
-} from "@/components/orders/mobile-v2/mobile-order-tracking-home";
+import { MobileOrderTrackingHome } from "@/components/orders/mobile-v2/mobile-order-tracking-home";
 import { loadOrderTrackingPageData } from "@/lib/order-tracking/load-order-tracking-page";
 
 export const dynamic = "force-dynamic";
@@ -12,11 +9,10 @@ type PageProps = {
     order?: string | string[];
     scope?: string | string[];
     demo?: string | string[];
-    limit?: string | string[];
   };
 };
 
-function parseScope(value: string | string[] | undefined): LiffTaskFirstScope {
+function parseScope(value: string | string[] | undefined): "active" | "shipped" | "all" {
   const raw = Array.isArray(value) ? value[0] : value;
   if (raw === "shipped" || raw === "all") return raw;
   return "active";
@@ -26,8 +22,6 @@ export default async function LiffOrdersPreviewPage({ searchParams }: PageProps)
   const scope = parseScope(searchParams?.scope);
   const demoRaw = Array.isArray(searchParams?.demo) ? searchParams.demo[0] : searchParams?.demo;
   const demo = demoRaw === "1";
-  const limitRaw = Array.isArray(searchParams?.limit) ? searchParams.limit[0] : searchParams?.limit;
-  const queueLimit = Math.max(6, Math.min(150, Math.floor(Number(limitRaw) || 6)));
   const initialSaleStatusFilters: Array<"จอง" | "รอส่ง" | "ส่งแล้ว" | "ว่าง"> =
     scope === "shipped" ? ["ส่งแล้ว"] : scope === "active" ? ["จอง", "รอส่ง", "ว่าง"] : [];
   const props = await loadOrderTrackingPageData(searchParams ?? {}, {
@@ -35,15 +29,13 @@ export default async function LiffOrdersPreviewPage({ searchParams }: PageProps)
     includeShipped: scope !== "active",
     shippedOnly: scope === "shipped",
     chipCacheExperiment: true,
-    initialDetailLimit: queueLimit,
-    leanInitialDetails: true,
-    skipGlobalSummary: true,
+    initialDetailLimit: 6,
     initialSaleStatusFilters,
     maxCars: scope === "all" ? 250 : 150,
   });
 
   return (
-    <LiffOrdersShell taskFirst>
+    <LiffOrdersShell>
       <MobileOrderTrackingHome
         key={scope}
         carsData={props.carsData}
@@ -60,9 +52,6 @@ export default async function LiffOrdersPreviewPage({ searchParams }: PageProps)
         shareBaseUrl={props.shareBaseUrl}
         initialSaleStatusFilters={initialSaleStatusFilters}
         initialUiLang="th"
-        taskFirstLiff
-        taskFirstScope={scope}
-        taskFirstInitialCount={queueLimit}
       />
     </LiffOrdersShell>
   );
