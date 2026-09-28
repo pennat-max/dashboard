@@ -84,7 +84,8 @@ export function makeLineInboxAttachmentMeta(
 }
 
 export function makeLineAttachmentAnalyzePayload(
-  attachment: LineInboxAttachmentMeta
+  attachment: LineInboxAttachmentMeta,
+  imageSet?: { id: string; index: number; total: number } | null
 ): LineInboxAnalyzeResponse {
   return {
     detected_car: {
@@ -97,6 +98,7 @@ export function makeLineAttachmentAnalyzePayload(
     ignored_mention_lines: [],
     ignored_noise_lines: [],
     line_attachments: [attachment],
+    ...(imageSet ? { line_image_set: imageSet } : {}),
     attachments_meta_count: 1,
     existing_items: [],
     items: [],

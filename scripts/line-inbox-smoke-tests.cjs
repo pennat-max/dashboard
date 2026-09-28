@@ -74,6 +74,13 @@ const {
   classifyLineSendError,
 } = loadTsFile(path.join(root, "src/lib/line/push-message.ts"));
 const {
+  extractReceiptCardDetails,
+  isLineImageSetComplete,
+  isLineReceiptVehicleText,
+  normalizeLineImageSet,
+  shouldAttemptLineReceiptReply,
+} = loadTsFile(path.join(root, "src/lib/line-inbox/webhook-receipt.ts"));
+const {
   buildLineCarDisplayLabel,
   buildLineOrderSearchRef,
   buildLineOrderReviewUrl,
@@ -319,6 +326,53 @@ assert.strictEqual(
   "webhook receipt can include a LINE-clickable review link"
 );
 assert(!receiptReplyWithLink.includes("บันทึกงาน"), "linked webhook receipt still must not claim work was saved");
+assert.strictEqual(
+  shouldAttemptLineReceiptReply({ messageType: "text" }),
+  false,
+  "webhook waits for a photo instead of acknowledging vehicle text immediately"
+);
+assert.strictEqual(
+  shouldAttemptLineReceiptReply({ messageType: "image", imageSet: { id: "set-1", index: 1, total: 4 } }),
+  true,
+  "every photo webhook can check whether its unordered LINE image set is complete"
+);
+assert.strictEqual(
+  isLineImageSetComplete(
+    { id: "set-1", index: 4, total: 4 },
+    [4, 2, 1].map((index) => ({ line_image_set: { id: "set-1", index, total: 4 } }))
+  ),
+  false,
+  "an image whose index equals total cannot acknowledge before every unordered image arrives"
+);
+assert.strictEqual(
+  isLineImageSetComplete(
+    { id: "set-1", index: 3, total: 4 },
+    [4, 2, 1, 3].map((index) => ({ line_image_set: { id: "set-1", index, total: 4 } }))
+  ),
+  true,
+  "webhook acknowledges after every image-set index has been observed, regardless of arrival order"
+);
+assert.strictEqual(
+  shouldAttemptLineReceiptReply({ messageType: "image" }),
+  true,
+  "a standalone photo can trigger the acknowledgement"
+);
+assert.deepStrictEqual(
+  normalizeLineImageSet({ id: "set-1", index: 2, total: 4 }),
+  { id: "set-1", index: 2, total: 4 },
+  "valid LINE image-set metadata is normalized for durable storage"
+);
+assert.strictEqual(
+  normalizeLineImageSet({ id: "set-1", index: 5, total: 4 }),
+  null,
+  "invalid LINE image-set metadata is ignored"
+);
+const photoReceiptDetails = extractReceiptCardDetails("สว-5391 - 90300 km. Chassis : MR0YX59G200004516");
+assert.strictEqual(photoReceiptDetails.plate, "สว-5391", "photo receipt keeps the plate from the preceding text");
+assert.strictEqual(photoReceiptDetails.mileage, "90300", "photo receipt keeps mileage from the preceding text");
+assert.strictEqual(photoReceiptDetails.chassis, "MR0YX59G200004516", "photo receipt keeps chassis from the preceding text");
+assert.strictEqual(isLineReceiptVehicleText("[LINE image]"), false, "attachment placeholders are not receipt context");
+assert.strictEqual(isLineReceiptVehicleText("สว-5391 - 90300 km."), true, "vehicle text can anchor a later photo receipt");
 assert.strictEqual(classifyLineSendError(429, "You have reached your monthly limit."), "line_quota_limit", "LINE monthly quota errors are classified");
 assert.strictEqual(classifyLineSendError(400, "Bad request"), "line_error", "other LINE errors stay generic");
 
@@ -1609,10 +1663,10 @@ assert(lineWebhookRoute.includes("buildLineWebhookReceiptAcknowledgementText"), 
 assert(lineWebhookRoute.includes("extractReceiptCardDetails"), "webhook receipt extracts plate, mileage, and chassis for the card");
 assert(lineWebhookRoute.includes("isLineInboxSystemAcknowledgementText(text)"), "webhook ignores bot/system acknowledgement text");
 assert(
-  lineWebhookRoute.includes("isLineInboxNoiseOrSeparatorOnlyText(params.text)"),
+  lineWebhookRoute.includes("isLineInboxNoiseOrSeparatorOnlyText(rawText)"),
   "webhook skips separator/noise-only receipt replies"
 );
-assert(lineWebhookRoute.includes("duplicate: captured.duplicate"), "webhook de-dupes receipt replies by insert duplicate state");
+assert(lineWebhookRoute.includes("claimReceiptReply"), "webhook claims one receipt per source text across multiple photos and redeliveries");
 assert(
     lineInboxToolbar.includes("line_quota_limit") &&
     lineInboxToolbar.includes("กรุณากด Copy แล้ววางใน LINE เอง") &&

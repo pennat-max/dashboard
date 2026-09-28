@@ -39,6 +39,11 @@ export type LineInboxAnalyzeResponse = {
   ignored_mention_lines?: string[];
   ignored_noise_lines?: string[];
   line_attachments?: LineInboxAttachmentMeta[];
+  line_image_set?: {
+    id: string;
+    index: number;
+    total: number;
+  };
   attachments_meta_count?: number;
   extractedCarCandidates?: LineInboxCarCandidate[];
   aiTargetCarReference?: string;

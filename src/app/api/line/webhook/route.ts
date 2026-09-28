@@ -3,6 +3,7 @@ import { verifyLineWebhookSignature } from "@/lib/line/verify-line-signature";
 import { isLineGroupAllowed, parseLineAllowedGroups } from "@/lib/line/allowed-groups";
 import {
   insertLineInboxMessage,
+  LINE_INBOX_MESSAGES_TABLE,
   updateLineInboxMessageAnalyze,
 } from "@/lib/line-inbox/line-inbox-messages";
 import {
@@ -23,6 +24,15 @@ import {
   makeLineInboxAttachmentMeta,
   uploadLineInboxImageAttachment,
 } from "@/lib/line-inbox/line-inbox-attachments";
+import {
+  extractReceiptCardDetails,
+  isLineImageSetComplete,
+  isLineReceiptVehicleText,
+  LINE_RECEIPT_IMAGE_AFTER_TEXT_WINDOW_MS,
+  normalizeLineImageSet,
+  shouldAttemptLineReceiptReply,
+  type LineImageSet,
+} from "@/lib/line-inbox/webhook-receipt";
 
 export const dynamic = "force-dynamic";
 
@@ -38,6 +48,7 @@ type LineEvent = {
     fileSize?: number;
     quotedMessageId?: string;
     quoteToken?: string;
+    imageSet?: LineImageSet;
   };
   source?: { type?: string; groupId?: string; userId?: string; roomId?: string };
   replyToken?: string;
@@ -61,23 +72,115 @@ function maskLineTarget(value: unknown): string {
   return `${raw.slice(0, 4)}...${raw.slice(-4)}`;
 }
 
-function extractReceiptCardDetails(text: string): {
-  plate?: string;
-  mileage?: string;
-  chassis?: string;
-} {
-  const raw = cleanLine(text);
-  const plate = raw.match(/[0-9]?[ก-ฮ]{1,3}[-\u2013\u2014]\d{2,5}[A-Z]?/u)?.[0]?.replace(/[\u2013\u2014]/g, "-");
-  const mileage = raw.match(/(\d{1,3}(?:,\d{3})+|\d{4,6})\s*(?:km|กม\.?|กิโล)/i)?.[1]?.replace(/,/g, "");
-  const chassisCandidates = raw.match(/\b[A-HJ-NPR-Z0-9]{12,20}\b/gi) ?? [];
-  const chassis = chassisCandidates.find((candidate) => /[A-Z]/i.test(candidate) && /\d/.test(candidate));
-  return { plate, mileage, chassis };
-}
-
 function receivedAtFromLineTimestamp(timestamp: number | undefined): string | undefined {
   if (!Number.isFinite(timestamp)) return undefined;
   const date = new Date(Number(timestamp));
   return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
+type ReceiptTextContext = {
+  inboxMessageId: string;
+  lineMessageId: string;
+  rawText: string;
+};
+
+async function findRecentReceiptTextContext(params: {
+  sourceType: "group" | "user" | "room";
+  groupId: string | null;
+  userId: string | null;
+  receivedAt?: string;
+}): Promise<ReceiptTextContext | null> {
+  // In a busy group, the sender identity is required so a photo cannot be
+  // acknowledged with another person's vehicle text.
+  if (params.sourceType !== "group" || !params.groupId || !params.userId) return null;
+  const receivedMs = Date.parse(params.receivedAt ?? "");
+  const imageTime = Number.isFinite(receivedMs) ? receivedMs : Date.now();
+  const dataClient = createServiceRoleClient();
+  const { data, error } = await dataClient
+    .from(LINE_INBOX_MESSAGES_TABLE)
+    .select("id,line_message_id,raw_text,received_at")
+    .eq("source_type", "group")
+    .eq("group_id", params.groupId)
+    .eq("user_id", params.userId)
+    .gte("received_at", new Date(imageTime - LINE_RECEIPT_IMAGE_AFTER_TEXT_WINDOW_MS).toISOString())
+    .lte("received_at", new Date(imageTime).toISOString())
+    .order("received_at", { ascending: false })
+    .limit(20);
+
+  if (error) {
+    console.warn("[line-webhook] receipt context lookup failed", { error: cleanLine(error.message).slice(0, 300) });
+    return null;
+  }
+
+  for (const row of (data ?? []) as Array<Record<string, unknown>>) {
+    const rawText = cleanLine(row.raw_text);
+    if (!isLineReceiptVehicleText(rawText)) continue;
+    if (isLineInboxSystemAcknowledgementText(rawText) || isLineInboxNoiseOrSeparatorOnlyText(rawText)) continue;
+    const inboxMessageId = cleanLine(row.id);
+    const lineMessageId = cleanLine(row.line_message_id);
+    if (inboxMessageId && lineMessageId) return { inboxMessageId, lineMessageId, rawText };
+  }
+  return null;
+}
+
+async function claimReceiptReply(params: {
+  context: ReceiptTextContext;
+  destination?: string;
+  groupId: string;
+  userId: string;
+  receivedAt?: string;
+}): Promise<{ id: string | null; duplicate: boolean }> {
+  return insertLineInboxMessage(createServiceRoleClient(), {
+    line_message_id: `receipt-ack:${params.context.lineMessageId}`,
+    destination: params.destination ?? null,
+    source_type: "group",
+    group_id: params.groupId,
+    user_id: params.userId,
+    raw_text: "[LINE receipt acknowledgement]",
+    received_at: params.receivedAt,
+    analyze_status: "ok",
+    needs_human_review: false,
+    workflow_status: "skipped",
+  });
+}
+
+async function releaseReceiptReplyClaim(id: string | null): Promise<void> {
+  if (!id) return;
+  const { error } = await createServiceRoleClient().from(LINE_INBOX_MESSAGES_TABLE).delete().eq("id", id);
+  if (error) console.warn("[line-webhook] receipt claim release failed", { error: cleanLine(error.message).slice(0, 300) });
+}
+
+async function isReceiptImageSetReady(params: {
+  groupId: string;
+  userId: string;
+  receivedAt?: string;
+  imageSet?: LineImageSet;
+}): Promise<boolean> {
+  const imageSet = normalizeLineImageSet(params.imageSet);
+  if (!imageSet || imageSet.total <= 1) return true;
+
+  const receivedMs = Date.parse(params.receivedAt ?? "");
+  const imageTime = Number.isFinite(receivedMs) ? receivedMs : Date.now();
+  const { data, error } = await createServiceRoleClient()
+    .from(LINE_INBOX_MESSAGES_TABLE)
+    .select("analyze_payload")
+    .eq("source_type", "group")
+    .eq("group_id", params.groupId)
+    .eq("user_id", params.userId)
+    .gte("received_at", new Date(imageTime - LINE_RECEIPT_IMAGE_AFTER_TEXT_WINDOW_MS).toISOString())
+    .lte("received_at", new Date(imageTime + LINE_RECEIPT_IMAGE_AFTER_TEXT_WINDOW_MS).toISOString())
+    .order("received_at", { ascending: false })
+    .limit(100);
+
+  if (error) {
+    console.warn("[line-webhook] image-set lookup failed", { error: cleanLine(error.message).slice(0, 300) });
+    return false;
+  }
+
+  return isLineImageSetComplete(
+    imageSet,
+    ((data ?? []) as Array<Record<string, unknown>>).map((row) => row.analyze_payload)
+  );
 }
 
 async function captureTextMessage(params: {
@@ -112,22 +215,27 @@ async function captureTextMessage(params: {
 }
 
 async function maybeSendWebhookReceiptReply(params: {
+  destination: string | undefined;
   replyToken: string | undefined;
   lineMessageId: string;
   sourceType: "group" | "user" | "room";
   groupId: string | null;
+  userId: string | null;
   messageType: CapturableLineMessageType;
-  text: string;
-  duplicate: boolean;
+  receivedAt?: string;
+  imageSet?: LineImageSet;
 }): Promise<void> {
   if (!isTruthyEnvFlag(process.env.LINE_WEBHOOK_RECEIPT_REPLY_ENABLED)) return;
-  if (params.duplicate) return;
   if (!params.replyToken) return;
   if (params.sourceType !== "group") return;
-  if (params.messageType === "text") {
-    if (isLineInboxSystemAcknowledgementText(params.text)) return;
-    if (isLineInboxNoiseOrSeparatorOnlyText(params.text)) return;
-  }
+  if (!shouldAttemptLineReceiptReply({ messageType: params.messageType, imageSet: params.imageSet })) return;
+  if (!params.groupId || !params.userId) return;
+  if (!(await isReceiptImageSetReady({
+    groupId: params.groupId,
+    userId: params.userId,
+    receivedAt: params.receivedAt,
+    imageSet: params.imageSet,
+  }))) return;
 
   const token = process.env.LINE_CHANNEL_ACCESS_TOKEN?.trim() ?? "";
   if (!token) {
@@ -138,16 +246,25 @@ async function maybeSendWebhookReceiptReply(params: {
     return;
   }
 
-  const reviewUrl = params.messageType === "text" ? buildLineOrderReviewUrl({ plate: params.text }) : "";
-  const cardDetails = params.messageType === "text" ? extractReceiptCardDetails(params.text) : {};
-  let sent = reviewUrl
-    ? await replyLineJobReceiptMessage({
-        accessToken: token,
-        replyToken: params.replyToken,
-        reviewUrl,
-        ...cardDetails,
-      })
-    : { ok: false as const, error: "Missing LINE review URL" };
+  const context = await findRecentReceiptTextContext(params);
+  if (!context) return;
+  const claim = await claimReceiptReply({
+    context,
+    destination: params.destination,
+    groupId: params.groupId,
+    userId: params.userId,
+    receivedAt: params.receivedAt,
+  });
+  if (claim.duplicate) return;
+
+  const cardDetails = extractReceiptCardDetails(context.rawText);
+  const reviewUrl = buildLineOrderReviewUrl({ plate: cardDetails.plate ?? context.rawText });
+  let sent = await replyLineJobReceiptMessage({
+    accessToken: token,
+    replyToken: params.replyToken,
+    reviewUrl,
+    ...cardDetails,
+  });
 
   if (!sent.ok && reviewUrl) {
     sent = await replyLineTextMessage({
@@ -158,6 +275,7 @@ async function maybeSendWebhookReceiptReply(params: {
   }
 
   if (!sent.ok) {
+    await releaseReceiptReplyClaim(claim.id);
     console.warn("[line-webhook] receipt reply not sent", {
       line_message_id: maskLineTarget(params.lineMessageId),
       group_id: maskLineTarget(params.groupId),
@@ -194,8 +312,10 @@ async function captureAttachmentMessage(params: {
   userId: string | null;
   replyToken: string | undefined;
   receivedAt?: string | undefined;
+  imageSet?: LineImageSet;
 }): Promise<CaptureLineMessageResult> {
   const supabase = createServiceRoleClient();
+  const imageSet = normalizeLineImageSet(params.imageSet);
   const pendingAttachment = makeLineInboxAttachmentMeta({
     lineMessageId: params.lineMessageId,
     lineMessageType: params.lineMessageType,
@@ -214,7 +334,7 @@ async function captureAttachmentMessage(params: {
     reply_token: params.replyToken ?? null,
     received_at: params.receivedAt,
     analyze_status: "ok",
-    analyze_payload: makeLineAttachmentAnalyzePayload(pendingAttachment),
+    analyze_payload: makeLineAttachmentAnalyzePayload(pendingAttachment, imageSet),
     needs_human_review: true,
   });
 
@@ -233,7 +353,7 @@ async function captureAttachmentMessage(params: {
     await updateLineInboxMessageAnalyze(supabase, inserted.id, {
       analyze_status: "error",
       analyze_error: "Missing LINE_CHANNEL_ACCESS_TOKEN",
-      analyze_payload: makeLineAttachmentAnalyzePayload(missing),
+      analyze_payload: makeLineAttachmentAnalyzePayload(missing, imageSet),
       needs_human_review: true,
       car_row_id: null,
     });
@@ -253,7 +373,7 @@ async function captureAttachmentMessage(params: {
     await updateLineInboxMessageAnalyze(supabase, inserted.id, {
       analyze_status: "ok",
       analyze_error: attachment.status === "unsupported" ? attachment.error ?? null : null,
-      analyze_payload: makeLineAttachmentAnalyzePayload(attachment),
+      analyze_payload: makeLineAttachmentAnalyzePayload(attachment, imageSet),
       needs_human_review: true,
       car_row_id: null,
     });
@@ -273,7 +393,7 @@ async function captureAttachmentMessage(params: {
     await updateLineInboxMessageAnalyze(supabase, inserted.id, {
       analyze_status: "error",
       analyze_error: msg,
-      analyze_payload: makeLineAttachmentAnalyzePayload(failed),
+      analyze_payload: makeLineAttachmentAnalyzePayload(failed, imageSet),
       needs_human_review: true,
       car_row_id: null,
     });
@@ -363,6 +483,7 @@ export async function POST(request: Request) {
         userId,
         replyToken,
         receivedAt,
+        imageSet: msg.imageSet,
       });
     };
 
@@ -389,15 +510,17 @@ export async function POST(request: Request) {
       }
 
       try {
-        const captured = await runCapture("group", gid, src.userId ? String(src.userId) : null);
+        await runCapture("group", gid, src.userId ? String(src.userId) : null);
         await maybeSendWebhookReceiptReply({
+          destination,
           replyToken,
           lineMessageId: mid,
           sourceType: "group",
           groupId: gid,
+          userId: src.userId ? String(src.userId) : null,
           messageType,
-          text,
-          duplicate: captured.duplicate,
+          receivedAt,
+          imageSet: msg.imageSet,
         });
       } catch (e) {
         console.error("[line-webhook] capture failed:", e instanceof Error ? e.message : e);
