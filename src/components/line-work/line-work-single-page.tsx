@@ -25,6 +25,15 @@ type QueueAttachment = {
   received_at?: string;
 };
 
+type ManualCarCandidate = {
+  car_row_id?: string;
+  label?: string;
+  plate?: string;
+  spec?: string;
+  chassis_short?: string;
+  sale?: string;
+};
+
 type QueueMessage = {
   inbox_id?: string;
   received_at?: string;
@@ -40,6 +49,8 @@ type QueueMessage = {
   bookedShipping?: string;
   manualCarSearchQuery?: string;
   manual_car_search_query?: string;
+  manualCarCandidates?: ManualCarCandidate[];
+  manual_car_candidates?: ManualCarCandidate[];
   action_lines?: QueueLine[];
   new_lines?: QueueLine[];
   attachments?: QueueAttachment[];
@@ -60,6 +71,8 @@ type QueueGroup = {
   bookedShipping?: string;
   total_action_lines?: number;
   total_new_lines?: number;
+  manualCarCandidates?: ManualCarCandidate[];
+  manual_car_candidates?: ManualCarCandidate[];
   attachments?: QueueAttachment[];
   messages?: QueueMessage[];
 };
@@ -159,6 +172,27 @@ function rawMessagesFor(group: QueueGroup): string[] {
   return out;
 }
 
+function candidatesFor(group: QueueGroup): ManualCarCandidate[] {
+  const seen = new Set<string>();
+  return [
+    ...(group.manualCarCandidates ?? group.manual_car_candidates ?? []),
+    ...(group.messages ?? []).flatMap((message) => message.manualCarCandidates ?? message.manual_car_candidates ?? []),
+  ].filter((candidate) => {
+    const rowId = clean(candidate.car_row_id);
+    if (!rowId || seen.has(rowId)) return false;
+    seen.add(rowId);
+    return true;
+  });
+}
+
+function candidateLabel(candidate: ManualCarCandidate): string {
+  return clean(candidate.label) || [candidate.plate, candidate.spec].map(clean).filter(Boolean).join(" ") || clean(candidate.car_row_id);
+}
+
+function carRowIdFor(group: QueueGroup, selectedCarRowId: string): string {
+  return clean(group.car_row_id) || clean(group.messages?.find((message) => clean(message.car_row_id))?.car_row_id) || clean(selectedCarRowId);
+}
+
 function findTargetGroup(groups: QueueGroup[], job: string, search: string, focusCarRowId: string): QueueGroup | null {
   const jobKey = clean(job);
   const searchKey = compact(search);
@@ -185,19 +219,19 @@ function findTargetGroup(groups: QueueGroup[], job: string, search: string, focu
   );
 }
 
-function orderHref(group: QueueGroup): string {
+function orderHref(group: QueueGroup, selectedCarRowId: string): string {
   const params = new URLSearchParams();
   params.set("load", "full");
   params.set("scope", "active");
-  const rowId = clean(group.car_row_id);
+  const rowId = carRowIdFor(group, selectedCarRowId);
   const search = clean(group.plate_display) || titleFor(group);
   if (rowId) params.set("focusCarRowId", rowId);
   if (search) params.set("search", search);
   return `/liff/orders?${params.toString()}`;
 }
 
-function saveBlocks(group: QueueGroup) {
-  const carRowId = clean(group.car_row_id);
+function saveBlocks(group: QueueGroup, selectedCarRowId: string) {
+  const carRowId = carRowIdFor(group, selectedCarRowId);
   return (group.messages ?? [])
     .map((message) => {
       const inboxId = clean(message.inbox_id);
@@ -237,6 +271,7 @@ export function LineWorkSinglePage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [selectedCarRowId, setSelectedCarRowId] = useState(focusCarRowId);
 
   const loadQueue = useCallback(async () => {
     setError(null);
@@ -260,12 +295,20 @@ export function LineWorkSinglePage() {
   const lines = useMemo(() => (group ? linesFor(group) : []), [group]);
   const photos = useMemo(() => (group ? attachmentsFor(group) : []), [group]);
   const messages = useMemo(() => (group ? rawMessagesFor(group) : []), [group]);
-  const canSave = Boolean(group && clean(group.car_row_id) && lines.length > 0);
-  const detailHref = group ? orderHref(group) : `/liff/orders?search=${encodeURIComponent(search || job)}`;
+  const candidates = useMemo(() => (group ? candidatesFor(group) : []), [group]);
+  const effectiveCarRowId = group ? carRowIdFor(group, selectedCarRowId) : "";
+  const canSave = Boolean(group && effectiveCarRowId && lines.length > 0);
+  const detailHref = group ? orderHref(group, selectedCarRowId) : `/liff/orders?search=${encodeURIComponent(search || job)}`;
+
+  useEffect(() => {
+    if (!group) return;
+    const nextRowId = carRowIdFor(group, selectedCarRowId) || clean(candidates[0]?.car_row_id);
+    if (nextRowId && nextRowId !== selectedCarRowId) setSelectedCarRowId(nextRowId);
+  }, [candidates, group, selectedCarRowId]);
 
   async function saveToOrder() {
     if (!group) return;
-    const saves = saveBlocks(group);
+    const saves = saveBlocks(group, selectedCarRowId);
     if (!canSave || saves.length === 0) {
       setError("ยังบันทึกไม่ได้ เพราะระบบยังจับคู่รถหรืองานที่ต้องทำไม่ครบ");
       return;
@@ -352,6 +395,35 @@ export function LineWorkSinglePage() {
                   <p className="mt-1 font-black">{photos.length} รูป</p>
                 </div>
               </div>
+              {candidates.length > 0 || effectiveCarRowId ? (
+                <div className="mt-3 rounded-2xl bg-teal-50 p-3">
+                  <p className="text-xs font-semibold text-teal-700">รถในระบบที่จะบันทึกเข้า</p>
+                  {candidates.length > 0 ? (
+                    <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
+                      {candidates.map((candidate) => {
+                        const rowId = clean(candidate.car_row_id);
+                        const active = rowId === effectiveCarRowId;
+                        return (
+                          <button
+                            key={rowId}
+                            type="button"
+                            onClick={() => setSelectedCarRowId(rowId)}
+                            className={cn(
+                              "min-w-[220px] rounded-2xl border px-3 py-2 text-left text-xs font-black",
+                              active ? "border-teal-700 bg-white text-teal-950" : "border-teal-100 bg-teal-100/60 text-teal-800"
+                            )}
+                          >
+                            {candidateLabel(candidate)}
+                            {clean(candidate.chassis_short) ? <span className="mt-1 block font-semibold text-slate-500">{clean(candidate.chassis_short)}</span> : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className="mt-1 text-sm font-black text-teal-950">จับคู่รถแล้ว</p>
+                  )}
+                </div>
+              ) : null}
             </section>
 
             <section className="rounded-[22px] border border-slate-200 bg-white p-4">
