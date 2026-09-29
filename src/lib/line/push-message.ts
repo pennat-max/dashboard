@@ -135,43 +135,57 @@ function lineOrderReviewFlexMessage(reviewUrl: string, carTitle?: string | null)
 
 function lineReceiptReviewFlexMessage({
   plate,
+  reviewUrl,
 }: {
   plate: string;
+  reviewUrl: string;
 }): LineFlexMessage {
   const safePlate = plate.trim();
+  const safeReviewUrl = reviewUrl.trim();
 
   return {
     type: "flex",
     altText: `รับทราบงานแล้ว - ${safePlate}`,
     contents: {
       type: "bubble",
-      size: "kilo",
+      size: "micro",
       body: {
         type: "box",
         layout: "vertical",
-        spacing: "md",
+        spacing: "sm",
         contents: [
           {
             type: "text",
-            text: "ORDER TRACKING AI",
-            size: "xs",
-            weight: "bold",
-            color: "#0f766e",
-          },
-          {
-            type: "text",
             text: "รับทราบงานแล้ว",
-            size: "lg",
+            size: "md",
             weight: "bold",
             color: "#111827",
           },
           {
             type: "text",
             text: safePlate,
-            size: "xl",
+            size: "md",
             weight: "bold",
             color: "#020617",
             wrap: true,
+          },
+        ],
+      },
+      footer: {
+        type: "box",
+        layout: "vertical",
+        spacing: "sm",
+        contents: [
+          {
+            type: "button",
+            style: "primary",
+            height: "sm",
+            color: "#0f172a",
+            action: {
+              type: "uri",
+              label: "ดูรายละเอียด",
+              uri: safeReviewUrl,
+            },
           },
         ],
       },
@@ -354,23 +368,27 @@ export async function replyLineJobReceiptMessage({
   accessToken,
   replyToken,
   plate,
+  reviewUrl,
 }: {
   accessToken: string;
   replyToken: string;
   plate?: string;
+  reviewUrl?: string;
 }): Promise<LinePushTextResult> {
   const token = accessToken.trim();
   const lineReplyToken = replyToken.trim();
   const safePlate = plate?.trim() ?? "";
+  const safeReviewUrl = reviewUrl?.trim() ?? "";
   if (!token) return { ok: false, error: "Missing LINE_CHANNEL_ACCESS_TOKEN" };
   if (!lineReplyToken) return { ok: false, error: "Missing LINE reply token" };
   if (!safePlate) return { ok: false, error: "Missing LINE receipt plate" };
+  if (!safeReviewUrl) return { ok: false, error: "Missing LINE receipt review URL" };
   return sendLineMessages({
     accessToken: token,
     url: LINE_REPLY_MESSAGE_URL,
     body: {
       replyToken: lineReplyToken,
-      messages: [lineReceiptReviewFlexMessage({ plate: safePlate })],
+      messages: [lineReceiptReviewFlexMessage({ plate: safePlate, reviewUrl: safeReviewUrl })],
     },
     missingTargetError: "Missing LINE reply token",
   });

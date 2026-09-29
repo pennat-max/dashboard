@@ -1705,6 +1705,8 @@ assert(linePushMessageSource.includes('label: "ดูรายละเอีย
 assert(linePushMessageSource.includes("carTitle"), "LINE review acknowledgement can include the matched car title");
 assert(linePushMessageSource.includes("รับทราบงานแล้ว"), "LINE receipt card keeps only the short received-job title");
 assert(linePushMessageSource.includes("Missing LINE receipt plate"), "LINE receipt card refuses generic no-plate replies");
+assert(linePushMessageSource.includes("Missing LINE receipt review URL"), "LINE receipt card requires a detail URL for the button");
+assert(!linePushMessageSource.includes("ORDER TRACKING AI"), "LINE receipt card omits the redundant bot name header");
 assert(!linePushMessageSource.includes("รอตรวจงานจากกลุ่ม LINE"), "LINE receipt card omits long explanatory copy");
 assert(linePushMessageSource.includes('type: "uri"'), "LINE review acknowledgement button opens the review URL");
 assert(linePushMessageSource.includes("classifyLineSendError"), "LINE helper exposes send error classification");
@@ -1714,6 +1716,7 @@ assert(
   "auto-save LINE reply is skipped when webhook receipt replies own the acknowledgement"
 );
 assert(lineWebhookRoute.includes("if (!cardDetails.plate)"), "webhook receipt waits when no plate can be extracted");
+assert(lineWebhookRoute.includes("buildLineOrderReviewUrl({ plate: cardDetails.plate })"), "webhook receipt builds a per-car detail URL");
 assert(lineWebhookRoute.includes("replyLineJobReceiptMessage"), "webhook receipt uses LINE flex card reply");
 assert(lineWebhookRoute.includes("replyLineTextMessage"), "webhook receipt keeps a LINE text fallback");
 assert(lineWebhookRoute.includes("รับทราบงานแล้ว"), "webhook receipt fallback stays short without LIFF links");
