@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   ArrowLeft,
@@ -24,6 +24,34 @@ type FilterOption = {
   label: string;
   count: number;
   active: boolean;
+};
+
+type LinePendingMessage = {
+  inbox_id?: string;
+  plate_display?: string;
+  raw_text?: string;
+  manualCarSearchQuery?: string;
+  manual_car_search_query?: string;
+  reviewUrl?: string;
+  review_url?: string;
+  action_lines?: Array<{ suggested_item_name?: string; raw_text?: string }>;
+  new_lines?: Array<{ suggested_item_name?: string; raw_text?: string }>;
+  attachments?: unknown[];
+};
+
+type LinePendingGroup = {
+  group_key?: string;
+  reviewUrl?: string;
+  review_url?: string;
+  messages?: LinePendingMessage[];
+};
+
+type LinePendingJob = {
+  key: string;
+  title: string;
+  items: string[];
+  photoCount: number;
+  href: string;
 };
 
 type Props = {
@@ -87,6 +115,88 @@ function insideDeliveryRange(order: Order, range: DeliveryRange): boolean {
   if (range === "today") return timestamp >= todayStart;
   const days = range === "7" ? 7 : 30;
   return timestamp >= todayStart - (days - 1) * 24 * 60 * 60 * 1000;
+}
+
+function normalizeSearch(value: unknown): string {
+  return String(value ?? "")
+    .replace(/[^0-9a-zA-Z\u0E00-\u0E7F]+/g, "")
+    .toLowerCase();
+}
+
+function lineJobMatchesSearch(message: LinePendingMessage, searchValue: string): boolean {
+  const q = normalizeSearch(searchValue);
+  if (!q) return false;
+  const candidates = [
+    message.plate_display,
+    message.manualCarSearchQuery,
+    message.manual_car_search_query,
+    message.raw_text,
+    message.reviewUrl,
+    message.review_url,
+  ];
+  return candidates.some((value) => normalizeSearch(value).includes(q));
+}
+
+function lineJobItems(message: LinePendingMessage): string[] {
+  const source = [...(message.action_lines ?? []), ...(message.new_lines ?? [])];
+  const out: string[] = [];
+  for (const line of source) {
+    const value = String(line.suggested_item_name ?? line.raw_text ?? "").replace(/\s+/g, " ").trim();
+    if (value && !out.includes(value)) out.push(value);
+  }
+  return out;
+}
+
+function pendingJobsFromGroups(groups: LinePendingGroup[], searchValue: string): LinePendingJob[] {
+  const out: LinePendingJob[] = [];
+  for (const group of groups) {
+    for (const message of group.messages ?? []) {
+      if (!lineJobMatchesSearch(message, searchValue)) continue;
+      const key = String(message.inbox_id ?? group.group_key ?? out.length);
+      const items = lineJobItems(message);
+      out.push({
+        key,
+        title: String(message.plate_display ?? message.manualCarSearchQuery ?? message.raw_text ?? "LINE").replace(/\s+/g, " ").trim(),
+        items,
+        photoCount: Array.isArray(message.attachments) ? message.attachments.length : 0,
+        href: String(message.reviewUrl ?? message.review_url ?? group.reviewUrl ?? group.review_url ?? "/line-jobs-v2"),
+      });
+    }
+  }
+  return out.slice(0, 3);
+}
+
+function PendingLineJobs({ jobs }: { jobs: LinePendingJob[] }) {
+  if (jobs.length === 0) return null;
+  return (
+    <section className="space-y-3 rounded-[18px] border border-cyan-200 bg-cyan-50 p-4 text-cyan-950 shadow-[0_8px_22px_rgba(8,145,178,0.08)]">
+      <div>
+        <p className="text-[11px] font-bold uppercase tracking-wide text-cyan-700">LINE pending</p>
+        <h2 className="mt-1 text-lg font-bold leading-6">งานจาก LINE รอบันทึก</h2>
+        <p className="mt-1 text-xs font-medium text-cyan-800">พบงานที่จับคู่รถได้แล้ว แต่ยังไม่ได้บันทึกเข้า Order</p>
+      </div>
+      {jobs.map((job) => (
+        <a key={job.key} href={job.href} className="block rounded-2xl bg-white p-3 ring-1 ring-cyan-100 transition active:scale-[0.99]">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h3 className="truncate text-base font-bold text-slate-950">{job.title}</h3>
+              <p className="mt-1 text-xs font-semibold text-cyan-700">
+                {job.items.length} งาน · {job.photoCount} รูป
+              </p>
+            </div>
+            <span className="shrink-0 rounded-full bg-cyan-100 px-2.5 py-1 text-[11px] font-bold text-cyan-800">เปิดงาน</span>
+          </div>
+          {job.items.length > 0 ? (
+            <ul className="mt-3 space-y-1">
+              {job.items.slice(0, 4).map((item) => (
+                <li key={item} className="rounded-xl bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-900">{item}</li>
+              ))}
+            </ul>
+          ) : null}
+        </a>
+      ))}
+    </section>
+  );
 }
 
 function TaskCard({ order }: { order: Order }) {
@@ -198,6 +308,7 @@ export function LiffTaskQueueView({
   const [sheetOpen, setSheetOpen] = useState(false);
   const [draftScope, setDraftScope] = useState<LiffQueueScope>(scope);
   const [deliveryRange, setDeliveryRange] = useState<DeliveryRange>("30");
+  const [pendingLineJobs, setPendingLineJobs] = useState<LinePendingJob[]>([]);
   const tabs = useMemo(() => [
     { id: "all" as const, label: "ทั้งหมด" },
     { id: "check" as const, label: "ต้องเช็ก" },
@@ -208,6 +319,25 @@ export function LiffTaskQueueView({
     () => scope === "shipped" ? orders.filter((order) => insideDeliveryRange(order, deliveryRange)) : orders,
     [deliveryRange, orders, scope]
   );
+
+  useEffect(() => {
+    const search = String(searchValue ?? "").trim();
+    if (!search) {
+      setPendingLineJobs([]);
+      return;
+    }
+    const controller = new AbortController();
+    fetch("/api/line-inbox/pending-queue?mode=full&filter=all", { cache: "no-store", signal: controller.signal })
+      .then(async (res) => {
+        const body = (await res.json()) as { groups?: LinePendingGroup[] };
+        if (!res.ok) throw new Error("LINE pending queue failed");
+        setPendingLineJobs(pendingJobsFromGroups(body.groups ?? [], search));
+      })
+      .catch((error) => {
+        if ((error as Error).name !== "AbortError") setPendingLineJobs([]);
+      });
+    return () => controller.abort();
+  }, [searchValue]);
 
   const openFilters = () => {
     setDraftScope(scope);
@@ -274,6 +404,7 @@ export function LiffTaskQueueView({
         {warning ? <div className="mx-4 mt-4 flex items-start gap-2 rounded-2xl bg-amber-50 px-3 py-2.5 text-xs font-medium leading-5 text-amber-900 ring-1 ring-amber-200"><AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden /><span>{warning}</span></div> : null}
 
         <main className="space-y-3 px-4 py-4">
+          <PendingLineJobs jobs={pendingLineJobs} />
           {rangeFilteredOrders.map((order) => scope === "shipped" ? <ShippedRow key={order.id} order={order} /> : <TaskCard key={order.id} order={order} />)}
           {isLoading ? <div className="rounded-[18px] border border-slate-200 bg-white p-4"><div className="h-5 w-2/3 animate-pulse rounded-full bg-slate-200" /><div className="mt-3 h-3 w-1/3 animate-pulse rounded-full bg-slate-100" /><div className="mt-5 h-12 animate-pulse rounded-2xl bg-slate-100" /></div> : null}
           {!isLoading && rangeFilteredOrders.length === 0 ? (
