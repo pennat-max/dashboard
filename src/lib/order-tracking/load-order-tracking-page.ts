@@ -111,7 +111,7 @@ export async function loadOrderTrackingPageData(
     parseFirstSearchParam(searchParams?.car_row_id);
 
   if (!summaryOnly || chipCacheExperiment) {
-    if (chipCacheExperiment && focusedCarRef) {
+    if (focusedCarRef) {
       const focusedPack = await fetchCarById(focusedCarRef);
       cars = focusedPack.car ? [focusedPack.car] : [];
       carsError = focusedPack.error;

@@ -95,6 +95,7 @@ function orderEditorHref(order: Order): string {
   const params = new URLSearchParams();
   params.set("load", "full");
   params.set("scope", order.shipped ? "shipped" : "active");
+  if (order.carRowId) params.set("focusCarRowId", order.carRowId);
   const search = order.fullPlate && order.fullPlate !== "-" ? order.fullPlate : order.chassis;
   if (search) params.set("search", search);
   return `/liff/orders?${params.toString()}`;
