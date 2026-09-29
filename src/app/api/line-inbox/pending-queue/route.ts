@@ -157,6 +157,8 @@ type PendingQueueMsg = {
   received_at: string;
   source_type: string;
   group_id_display: string;
+  sender_display: string;
+  senderDisplay: string;
   source_label: string;
   plate_display: string;
   car_title: string;
@@ -255,6 +257,8 @@ type PendingQueueGroup = {
   source_label: string;
   source_type: string;
   group_id_display: string;
+  sender_display: string;
+  senderDisplay: string;
   is_unresolved: boolean;
   total_action_lines: number;
   total_new_lines: number;
@@ -443,6 +447,20 @@ function groupIdDisplay(row: Pick<PendingQueueDbRow, "group_id" | "user_id" | "s
   if (sourceType === "group") return maskLineSourceId(row.group_id);
   if (sourceType === "user") return maskLineSourceId(row.user_id);
   return maskLineSourceId(row.group_id) || maskLineSourceId(row.user_id);
+}
+
+function senderDisplay(row: Pick<PendingQueueDbRow, "user_id" | "source_type">): string {
+  const masked = maskLineSourceId(row.user_id);
+  if (!masked) return "";
+  return cleanString(row.source_type) === "user" ? `LINE DM ${masked}` : `คนส่ง ${masked}`;
+}
+
+function mergeSenderDisplay(existing: string, next: string): string {
+  const a = cleanString(existing);
+  const b = cleanString(next);
+  if (!a) return b;
+  if (!b || a === b) return a;
+  return "หลายคน";
 }
 
 function isLineImageOnlyText(value: unknown): boolean {
@@ -899,6 +917,8 @@ function groupMessages(messages: PendingQueueMsg[]): PendingQueueGroup[] {
       if (!existing.review_url) existing.review_url = message.review_url;
       if (!existing.booked_shipping) existing.booked_shipping = message.booked_shipping;
       if (!existing.bookedShipping) existing.bookedShipping = message.bookedShipping;
+      existing.sender_display = mergeSenderDisplay(existing.sender_display, message.sender_display);
+      existing.senderDisplay = existing.sender_display;
       continue;
     }
 
@@ -946,6 +966,8 @@ function groupMessages(messages: PendingQueueMsg[]): PendingQueueGroup[] {
       source_label: message.source_label,
       source_type: message.source_type,
       group_id_display: message.group_id_display,
+      sender_display: message.sender_display,
+      senderDisplay: message.senderDisplay,
       is_unresolved: !message.car_row_id,
       total_action_lines: message.action_line_count,
       total_new_lines: message.new_line_count,
@@ -1387,6 +1409,8 @@ export async function GET(request: Request) {
         received_at: String(row.received_at ?? ""),
         source_type: cleanString(row.source_type),
         group_id_display: groupIdDisplay(row),
+        sender_display: senderDisplay(row),
+        senderDisplay: senderDisplay(row),
         source_label: sourceLabel(row.source_type),
         plate_display: plateText,
         car_title: carTitle,

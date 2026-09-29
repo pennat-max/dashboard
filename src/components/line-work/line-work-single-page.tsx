@@ -38,6 +38,8 @@ type QueueMessage = {
   inbox_id?: string;
   received_at?: string;
   source_label?: string;
+  sender_display?: string;
+  senderDisplay?: string;
   plate_display?: string;
   car_title?: string;
   raw_text?: string;
@@ -66,6 +68,8 @@ type QueueGroup = {
   fallback_description?: string;
   fallbackDescription?: string;
   source_label?: string;
+  sender_display?: string;
+  senderDisplay?: string;
   sale?: string;
   booked_shipping?: string;
   bookedShipping?: string;
@@ -142,6 +146,10 @@ function bookedShippingFor(group: QueueGroup): string {
 
 function sourceFor(group: QueueGroup): string {
   return clean(group.source_label) || clean(group.messages?.find((m) => clean(m.source_label))?.source_label) || "LINE";
+}
+
+function senderFor(group: QueueGroup): string {
+  return clean(group.senderDisplay ?? group.sender_display) || clean(group.messages?.find((m) => clean(m.senderDisplay ?? m.sender_display))?.senderDisplay) || sourceFor(group);
 }
 
 function saleFor(group: QueueGroup): string {
@@ -406,8 +414,8 @@ export function LineWorkSinglePage() {
                   <p className="truncate font-black">{bookedShippingFor(group) || "-"}</p>
                 </div>
                 <div className="rounded-xl bg-slate-50 p-1.5">
-                  <p className="font-semibold text-slate-500">จาก</p>
-                  <p className="truncate font-black">{sourceFor(group)}</p>
+                  <p className="font-semibold text-slate-500">คนส่ง</p>
+                  <p className="truncate font-black">{senderFor(group)}</p>
                 </div>
                 <div className="rounded-xl bg-slate-50 p-1.5">
                   <p className="font-semibold text-slate-500">รูป</p>
