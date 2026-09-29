@@ -360,16 +360,16 @@ export function LineWorkSinglePage() {
   return (
     <main className="min-h-dvh bg-[#f6f8fb] px-3 pb-24 pt-3 text-slate-950">
       <div className="mx-auto flex w-full max-w-md flex-col gap-3">
-        <header className="sticky top-0 z-10 -mx-3 border-b border-slate-200 bg-[#f6f8fb]/95 px-3 pb-3 pt-2 backdrop-blur">
+        <header className="sticky top-0 z-10 -mx-3 border-b border-slate-200 bg-[#f6f8fb]/95 px-3 py-2 backdrop-blur">
           <div className="flex items-center gap-2">
-            <Link href="/line-jobs-v2" className="grid size-10 shrink-0 place-items-center rounded-full bg-white text-slate-700 shadow-sm ring-1 ring-slate-200" aria-label="กลับ">
-              <ArrowLeft className="size-5" aria-hidden />
+            <Link href="/line-jobs-v2" className="grid size-9 shrink-0 place-items-center rounded-full bg-white text-slate-700 shadow-sm ring-1 ring-slate-200" aria-label="กลับ">
+              <ArrowLeft className="size-4" aria-hidden />
             </Link>
             <div className="min-w-0 flex-1">
-              <h1 className="truncate text-lg font-black">รายละเอียดงาน</h1>
-              <p className="truncate text-xs font-semibold text-slate-500">ตรวจจาก LINE ก่อนบันทึกเข้า Order</p>
+              <h1 className="truncate text-base font-black">รายละเอียดงาน</h1>
+              <p className="truncate text-[11px] font-semibold text-slate-500">ตรวจจาก LINE ก่อนบันทึกเข้า Order</p>
             </div>
-            <Button type="button" variant="outline" size="icon" className="size-10 rounded-full bg-white" onClick={() => void loadQueue()} disabled={loading || saving} aria-label="โหลดใหม่">
+            <Button type="button" variant="outline" size="icon" className="size-9 rounded-full bg-white" onClick={() => void loadQueue()} disabled={loading || saving} aria-label="โหลดใหม่">
               <RefreshCcw className={cn("size-4", loading ? "animate-spin" : "")} aria-hidden />
             </Button>
           </div>
@@ -386,39 +386,39 @@ export function LineWorkSinglePage() {
           </section>
         ) : group ? (
           <>
-            <section className="rounded-[20px] border border-slate-200 bg-white p-3 shadow-sm">
-              <div className="flex items-start gap-3">
-                <div className="grid size-10 shrink-0 place-items-center rounded-2xl bg-teal-50 text-teal-700">
-                  <Car className="size-5" aria-hidden />
+            <section className="rounded-[18px] border border-slate-200 bg-white p-3 shadow-sm">
+              <div className="flex items-start gap-2">
+                <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-teal-50 text-teal-700">
+                  <Car className="size-4" aria-hidden />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <h2 className="text-xl font-black leading-tight">{titleFor(group)}</h2>
+                  <h2 className="text-lg font-black leading-tight">{titleFor(group)}</h2>
                   <p className="mt-1 line-clamp-2 text-xs font-semibold text-slate-600">{descriptionFor(group)}</p>
                 </div>
               </div>
-              <div className="mt-3 grid grid-cols-4 gap-2 text-sm">
-                <div className="rounded-2xl bg-slate-50 p-2">
-                  <p className="text-xs font-semibold text-slate-500">ผู้รับผิดชอบ</p>
-                  <p className="mt-1 truncate font-black">{saleFor(group)}</p>
+              <div className="mt-3 grid grid-cols-4 gap-1.5 text-[11px]">
+                <div className="rounded-xl bg-slate-50 p-1.5">
+                  <p className="font-semibold text-slate-500">ผู้รับผิดชอบ</p>
+                  <p className="truncate font-black">{saleFor(group)}</p>
                 </div>
-                <div className="rounded-2xl bg-slate-50 p-2">
-                  <p className="text-xs font-semibold text-slate-500">รอบเรือ</p>
-                  <p className="mt-1 truncate font-black">{bookedShippingFor(group) || "-"}</p>
+                <div className="rounded-xl bg-slate-50 p-1.5">
+                  <p className="font-semibold text-slate-500">รอบเรือ</p>
+                  <p className="truncate font-black">{bookedShippingFor(group) || "-"}</p>
                 </div>
-                <div className="rounded-2xl bg-slate-50 p-2">
-                  <p className="text-xs font-semibold text-slate-500">จาก</p>
-                  <p className="mt-1 truncate font-black">{sourceFor(group)}</p>
+                <div className="rounded-xl bg-slate-50 p-1.5">
+                  <p className="font-semibold text-slate-500">จาก</p>
+                  <p className="truncate font-black">{sourceFor(group)}</p>
                 </div>
-                <div className="rounded-2xl bg-slate-50 p-2">
-                  <p className="text-xs font-semibold text-slate-500">รูป</p>
-                  <p className="mt-1 font-black">{photos.length} รูป</p>
+                <div className="rounded-xl bg-slate-50 p-1.5">
+                  <p className="font-semibold text-slate-500">รูป</p>
+                  <p className="font-black">{photos.length} รูป</p>
                 </div>
               </div>
               {candidates.length > 0 || effectiveCarRowId ? (
-                <div className="mt-3 rounded-2xl border border-teal-100 bg-teal-50/80 p-2">
+                <div className="mt-2 rounded-xl border border-teal-100 bg-teal-50/80 p-2">
                   <p className="text-xs font-semibold text-teal-700">รถในระบบที่จะบันทึกเข้า</p>
                   {candidates.length > 0 ? (
-                    <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
+                    <div className="mt-1.5 flex gap-2 overflow-x-auto pb-1">
                       {candidates.map((candidate) => {
                         const rowId = clean(candidate.car_row_id);
                         const active = rowId === effectiveCarRowId;
@@ -428,7 +428,7 @@ export function LineWorkSinglePage() {
                             type="button"
                             onClick={() => setSelectedCarRowId(rowId)}
                             className={cn(
-                              "min-w-[180px] rounded-xl border px-3 py-2 text-left text-xs font-black",
+                              "min-w-[170px] rounded-xl border px-2.5 py-2 text-left text-xs font-black",
                               active ? "border-teal-700 bg-white text-teal-950" : "border-teal-100 bg-teal-100/60 text-teal-800"
                             )}
                           >
@@ -445,7 +445,7 @@ export function LineWorkSinglePage() {
               ) : null}
             </section>
 
-            <section className="rounded-[20px] border border-slate-200 bg-white p-3 shadow-sm">
+            <section className="rounded-[18px] border border-slate-200 bg-white p-3 shadow-sm">
               <div className="mb-3 flex items-center gap-2">
                 <ClipboardList className="size-5 text-teal-700" aria-hidden />
                 <h2 className="text-lg font-black">งานที่ต้องทำ</h2>
@@ -453,8 +453,8 @@ export function LineWorkSinglePage() {
               {lines.length > 0 ? (
                 <div className="space-y-2">
                   {lines.map((line, index) => (
-                    <div key={`${line.inbox_id}:${line.item_index ?? index}`} className="rounded-2xl bg-slate-50 p-3 ring-1 ring-slate-100">
-                      <div className="flex gap-3">
+                    <div key={`${line.inbox_id}:${line.item_index ?? index}`} className="rounded-xl bg-slate-50 p-2.5 ring-1 ring-slate-100">
+                      <div className="flex gap-2">
                         <span className="grid size-7 shrink-0 place-items-center rounded-full bg-white text-sm font-black text-slate-500 ring-1 ring-slate-200">{index + 1}</span>
                         <div className="min-w-0 flex-1">
                           <p className="text-[16px] font-black leading-snug">{lineLabel(line, index)}</p>
@@ -469,7 +469,7 @@ export function LineWorkSinglePage() {
               )}
             </section>
 
-            <section className="rounded-[20px] border border-slate-200 bg-white p-3 shadow-sm">
+            <section className="rounded-[18px] border border-slate-200 bg-white p-3 shadow-sm">
               <div className="mb-3 flex items-center gap-2">
                 <Camera className="size-5 text-teal-700" aria-hidden />
                 <h2 className="text-lg font-black">รูปจาก LINE</h2>
@@ -477,7 +477,7 @@ export function LineWorkSinglePage() {
               {photos.length > 0 ? (
                 <div className="flex gap-2 overflow-x-auto pb-1">
                   {photos.map((photo, index) => (
-                    <a key={clean(photo.line_message_id) || clean(photo.url) || index} href={clean(photo.url)} target="_blank" rel="noreferrer" className="block size-24 shrink-0 overflow-hidden rounded-2xl bg-slate-100 ring-1 ring-slate-200">
+                    <a key={clean(photo.line_message_id) || clean(photo.url) || index} href={clean(photo.url)} target="_blank" rel="noreferrer" className="block size-20 shrink-0 overflow-hidden rounded-xl bg-slate-100 ring-1 ring-slate-200">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img src={clean(photo.url)} alt={clean(photo.file_name) || `LINE photo ${index + 1}`} className="size-full object-cover" loading="lazy" />
                     </a>
@@ -490,7 +490,7 @@ export function LineWorkSinglePage() {
               )}
             </section>
 
-            <section className="rounded-[20px] border border-slate-200 bg-white p-3 shadow-sm">
+            <section className="rounded-[18px] border border-slate-200 bg-white p-3 shadow-sm">
               <div className="mb-3 flex items-center gap-2">
                 <MessageCircle className="size-5 text-teal-700" aria-hidden />
                 <h2 className="text-lg font-black">ข้อความต้นทาง</h2>
@@ -518,13 +518,13 @@ export function LineWorkSinglePage() {
       </div>
 
       {group ? (
-        <div className="fixed inset-x-0 bottom-0 z-20 border-t border-slate-200 bg-white/95 px-3 py-3 shadow-[0_-10px_30px_rgba(15,23,42,0.12)] backdrop-blur">
+        <div className="fixed inset-x-0 bottom-0 z-20 border-t border-slate-200 bg-white/95 px-3 py-2 shadow-[0_-10px_30px_rgba(15,23,42,0.12)] backdrop-blur">
           <div className="mx-auto flex max-w-md gap-2">
-            <Link href={detailHref} className={cn(buttonVariants({ variant: "outline" }), "h-12 flex-1 rounded-2xl font-black")}>
+            <Link href={detailHref} className={cn(buttonVariants({ variant: "outline" }), "h-11 flex-1 rounded-xl font-black")}>
               เปิด Order
               <ExternalLink className="ml-2 size-4" aria-hidden />
             </Link>
-            <Button type="button" className="h-12 flex-[1.2] rounded-2xl font-black" onClick={() => void saveToOrder()} disabled={!canSave || saving || saved}>
+            <Button type="button" className="h-11 flex-[1.2] rounded-xl font-black" onClick={() => void saveToOrder()} disabled={!canSave || saving || saved}>
               {saving ? <Loader2 className="mr-2 size-4 animate-spin" aria-hidden /> : <CheckCircle2 className="mr-2 size-4" aria-hidden />}
               {saved ? "บันทึกแล้ว" : "บันทึกเข้า Order"}
             </Button>
