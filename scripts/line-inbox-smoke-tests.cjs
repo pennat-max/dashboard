@@ -1547,7 +1547,8 @@ assert(
   "pending queue links LINE intake to the original LIFF order page"
 );
 assert(
-  lineWorkPageRoute.includes("redirect(`/liff/orders") &&
+  lineWorkPageRoute.includes("window.location.replace") &&
+    lineWorkPageRoute.includes("/liff/orders") &&
     lineWorkPageRoute.includes('params.set("load", "full")') &&
     lineWorkPageRoute.includes('params.set("scope", "active")'),
   "old /liff/work links redirect into the original order page"

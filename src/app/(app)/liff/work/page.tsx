@@ -1,25 +1,30 @@
-import { redirect } from "next/navigation";
-
 export const dynamic = "force-dynamic";
 
-type PageProps = {
-  searchParams: Promise<Record<string, string | string[] | undefined>> | Record<string, string | string[] | undefined>;
-};
-
-function firstParam(value: string | string[] | undefined): string {
-  return typeof value === "string" ? value : Array.isArray(value) ? String(value[0] ?? "") : "";
-}
-
-export default async function LiffWorkPage({ searchParams }: PageProps) {
-  const resolvedSearchParams = await searchParams;
-  const params = new URLSearchParams();
-  for (const [key, value] of Object.entries(resolvedSearchParams ?? {})) {
-    const first = firstParam(value).trim();
-    if (first) params.set(key, first);
-  }
-  if (params.get("focusCarRowId")) {
-    params.set("load", "full");
-    if (!params.get("scope")) params.set("scope", "active");
-  }
-  redirect(`/liff/orders${params.size ? `?${params.toString()}` : ""}`);
+export default function LiffWorkPage() {
+  return (
+    <main className="grid min-h-dvh place-items-center bg-slate-50 px-4 text-center text-slate-900">
+      <div>
+        <p className="text-lg font-bold">กำลังเปิดหน้า Order</p>
+        <p className="mt-2 text-sm text-slate-500">ถ้าหน้าไม่เปลี่ยน ให้กดปุ่มด้านล่าง</p>
+        <a className="mt-4 inline-flex rounded-xl bg-slate-950 px-4 py-3 text-sm font-bold text-white" href="/liff/orders">
+          เปิดหน้า Order
+        </a>
+      </div>
+      <script
+        dangerouslySetInnerHTML={{
+          __html: `
+            (function () {
+              var params = new URLSearchParams(window.location.search);
+              if (params.get("focusCarRowId")) {
+                params.set("load", "full");
+                if (!params.get("scope")) params.set("scope", "active");
+              }
+              var query = params.toString();
+              window.location.replace("/liff/orders" + (query ? "?" + query : "") + window.location.hash);
+            })();
+          `,
+        }}
+      />
+    </main>
+  );
 }
