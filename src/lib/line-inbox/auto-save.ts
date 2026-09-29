@@ -1,6 +1,6 @@
 import type { SiteDataClient as SupabaseClient } from "@/lib/site/db-client";
 import { isLineGroupAllowed, parseLineAllowedGroups } from "@/lib/line/allowed-groups";
-import { pushLineOrderReviewMessage } from "@/lib/line/push-message";
+import { pushLineJobReceiptMessage } from "@/lib/line/push-message";
 import { resolveSaleStaffForOrder, normalizeSaleAssigneesMap } from "@/lib/orders/sale-assignees-shared";
 import { createOrderTaskUpdate } from "@/lib/orders/task-update-log";
 import {
@@ -17,7 +17,6 @@ import {
 import { isLineInboxNoiseOrSeparatorOnlyText } from "@/lib/line-inbox/split-line-text";
 import type {
   DuplicateStatus,
-  ExistingOrderItemRow,
   LineInboxAnalyzeItem,
   LineInboxAnalyzeResponse,
   LineInboxAttachmentMeta,
@@ -172,21 +171,8 @@ function detectedCarTitle(payload: LineInboxAnalyzeResponse): string {
   });
 }
 
-function existingItemById(payload: LineInboxAnalyzeResponse): Map<string, ExistingOrderItemRow> {
-  const map = new Map<string, ExistingOrderItemRow>();
-  for (const item of payload.existing_items ?? []) {
-    const id = cleanLine(item.id);
-    if (id) map.set(id, item);
-  }
-  return map;
-}
-
-function lineApprovalItem(item: SavedReplyItem): LineApprovalAcknowledgementItem {
-  return {
-    name: item.label,
-    assignee: item.assignee_staff,
-    status: item.status,
-  };
+function detectedCarReceiptPlate(payload: LineInboxAnalyzeResponse): string {
+  return cleanLine(payload.detected_car?.plate_text) || detectedCarTitle(payload);
 }
 
 export function buildLineAutoSaveAcknowledgementText(params: {
@@ -430,21 +416,19 @@ function sourceTarget(row: AutoSaveInboxRow): string {
 
 async function maybeSendAutoSaveReply(params: {
   row: AutoSaveInboxRow;
-  text: string;
   reviewUrl: string;
-  carTitle?: string | null;
+  plate?: string | null;
 }): Promise<{ attempted: boolean; sent: boolean; error?: string }> {
   if (!isTruthyEnvFlag(process.env.LINE_AUTO_SAVE_REPLY_ENABLED)) return { attempted: false, sent: false };
-  if (isTruthyEnvFlag(process.env.LINE_WEBHOOK_RECEIPT_REPLY_ENABLED)) return { attempted: false, sent: false };
   const token = cleanLine(process.env.LINE_CHANNEL_ACCESS_TOKEN);
   const target = sourceTarget(params.row);
   if (!token || !target) return { attempted: false, sent: false, error: !token ? "missing_token" : "missing_target" };
 
-  const sent = await pushLineOrderReviewMessage({
+  const sent = await pushLineJobReceiptMessage({
     accessToken: token,
     to: target,
     reviewUrl: params.reviewUrl,
-    carTitle: params.carTitle,
+    plate: params.plate,
   });
   if (sent.ok) return { attempted: true, sent: true };
   return { attempted: true, sent: false, error: sent.error };
@@ -585,7 +569,6 @@ export async function maybeAutoSaveAnalyzedLineInbox(
   const defaultAssignee = resolveSaleStaffForOrder(params.payload.detected_car?.sale ?? "", saleAssignees);
   const actions = applyDefaultAssignee(decision.actions, defaultAssignee);
   const carRowId = cleanLine(params.payload.detected_car?.car_row_id) || cleanLine(params.row.car_row_id);
-  const existingById = existingItemById(params.payload);
 
   let orderTaskId = "";
   let saved: Array<{ order_item_id: string; label: string; action: string }> = [];
@@ -668,23 +651,12 @@ export async function maybeAutoSaveAnalyzedLineInbox(
     }
   }
 
-  const created = savedItems.filter((item) => item.action === "create").map(lineApprovalItem);
-  const updated = savedItems
-    .filter((item) => item.action === "merge")
-    .map((item) => ({ item, previous: existingById.get(item.order_item_id) }));
   const reviewUrl = reviewUrlFor(params.payload, carRowId);
-  const carTitle = detectedCarTitle(params.payload);
-  const replyText = buildLineAutoSaveAcknowledgementText({
-    carTitle,
-    createdItems: created,
-    updatedItems: updated,
-    attachedPhotoCount,
-    reviewUrl,
-  });
+  const receiptPlate = detectedCarReceiptPlate(params.payload);
 
   let reply: { attempted: boolean; sent: boolean; error?: string } = { attempted: false, sent: false };
   try {
-    reply = await maybeSendAutoSaveReply({ row: params.row, text: replyText, reviewUrl, carTitle });
+    reply = await maybeSendAutoSaveReply({ row: params.row, reviewUrl, plate: receiptPlate });
   } catch (error) {
     reply = { attempted: true, sent: false, error: cleanError(error) };
     console.warn("[line-auto-save] acknowledgement failed", { error: reply.error });

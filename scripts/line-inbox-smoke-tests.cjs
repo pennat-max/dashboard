@@ -1699,6 +1699,7 @@ assert(
 assert(pendingSaveRoute.includes("maskLineTarget"), "manual approval reply masks LINE targets in logs");
 assert(linePushMessageSource.includes("replyLineTextMessage"), "LINE helper supports replyToken receipt replies");
 assert(linePushMessageSource.includes("replyLineJobReceiptMessage"), "LINE helper supports replyToken flex receipt cards");
+assert(linePushMessageSource.includes("pushLineJobReceiptMessage"), "LINE helper supports post-save receipt cards");
 assert(linePushMessageSource.includes("https://api.line.me/v2/bot/message/reply"), "LINE reply helper uses the LINE reply API");
 assert(linePushMessageSource.includes('type: "flex"'), "LINE helper supports flex messages");
 assert(linePushMessageSource.includes('label: "ดูรายละเอียด"'), "LINE review acknowledgement uses a clickable detail button");
@@ -1712,8 +1713,8 @@ assert(linePushMessageSource.includes('type: "uri"'), "LINE review acknowledgeme
 assert(linePushMessageSource.includes("classifyLineSendError"), "LINE helper exposes send error classification");
 assert(lineWebhookRoute.includes("LINE_WEBHOOK_RECEIPT_REPLY_ENABLED"), "webhook receipt replies are gated by env");
 assert(
-  fs.readFileSync(path.join(process.cwd(), "src/lib/line-inbox/auto-save.ts"), "utf8").includes("LINE_WEBHOOK_RECEIPT_REPLY_ENABLED"),
-  "auto-save LINE reply is skipped when webhook receipt replies own the acknowledgement"
+  lineWebhookRoute.includes("LINE_AUTO_SAVE_REPLY_ENABLED") && lineWebhookRoute.includes("isReceiptContextPersisted(context)"),
+  "webhook receipt does not acknowledge until auto-save owns replies or the source row is already persisted"
 );
 assert(lineWebhookRoute.includes("if (!cardDetails.plate)"), "webhook receipt waits when no plate can be extracted");
 assert(lineWebhookRoute.includes("buildLineOrderReviewUrl({ plate: cardDetails.plate })"), "webhook receipt builds a per-car detail URL");
@@ -1751,6 +1752,8 @@ assert(!analyzePendingJobSource.includes("pushLineJobReviewMessage"), "unmatched
 assert(autoSaveSource.includes("LINE_AUTO_SAVE_ENABLED"), "auto-save is gated by LINE_AUTO_SAVE_ENABLED");
 assert(autoSaveSource.includes("LINE_AUTO_SAVE_ALLOWED_GROUP_IDS"), "auto-save has a separate group allow-list");
 assert(autoSaveSource.includes("LINE_AUTO_SAVE_REPLY_ENABLED"), "auto-save reply is independently gated");
+assert(autoSaveSource.includes("pushLineJobReceiptMessage"), "auto-save sends the compact LINE receipt card after persistence");
+assert(!autoSaveSource.includes("LINE_WEBHOOK_RECEIPT_REPLY_ENABLED"), "auto-save reply is no longer disabled by the webhook receipt flag");
 assert(autoSaveSource.includes("LINE_AUTO_SAVE_DRY_RUN_ENABLED"), "auto-save has a dry-run flag");
 assert(autoSaveSource.includes('blocked_reason: "noise_or_separator"'), "auto-save blocks separator/noise/header-only rows");
 assert(autoSaveSource.includes("lineAutoSaveCarMatchProblem"), "auto-save blocks only explicit car-match problems");
@@ -1773,6 +1776,11 @@ assert(
   autoSaveSource.indexOf('params.payload, "saved"') <
     autoSaveSource.indexOf("related = await findRelatedLineAttachments"),
   "auto-save records saved state before optional photo/reply work"
+);
+assert(
+  autoSaveSource.indexOf("related = await findRelatedLineAttachments") <
+    autoSaveSource.indexOf("reply = await maybeSendAutoSaveReply"),
+  "auto-save sends LINE acknowledgement only after related photos have been checked and attached"
 );
 assert(autoSaveSource.includes("photo attach failed after save"), "photo attach failure is logged after save without retrying order_items");
 assert(autoSaveSource.includes("error_after_lock"), "persist failure after atomic lock records a non-retry error state");

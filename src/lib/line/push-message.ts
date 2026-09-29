@@ -301,6 +301,28 @@ export async function pushLineOrderReviewMessage({
   });
 }
 
+export async function pushLineJobReceiptMessage({
+  accessToken,
+  to,
+  plate,
+  reviewUrl,
+}: {
+  accessToken: string;
+  to: string;
+  plate?: string;
+  reviewUrl?: string;
+}): Promise<LinePushTextResult> {
+  const safeUrl = reviewUrl?.trim() ?? "";
+  const safePlate = plate?.trim() ?? "";
+  if (!safeUrl) return { ok: false, error: "Missing LINE receipt review URL" };
+  if (!safePlate) return { ok: false, error: "Missing LINE receipt plate" };
+  return pushLineMessages({
+    accessToken,
+    to,
+    messages: [lineReceiptReviewFlexMessage({ plate: safePlate, reviewUrl: safeUrl })],
+  });
+}
+
 export async function pushLineJobReviewMessage({
   accessToken,
   to,

@@ -81,7 +81,22 @@ type ReceiptTextContext = {
   inboxMessageId: string;
   lineMessageId: string;
   rawText: string;
+  workflowStatus: string;
+  analyzePayload?: unknown;
 };
+
+function lineAutoSaveStatusFromPayload(value: unknown): string {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+  const autoSave = (value as Record<string, unknown>).auto_save;
+  if (!autoSave || typeof autoSave !== "object" || Array.isArray(autoSave)) return "";
+  return cleanLine((autoSave as Record<string, unknown>).status);
+}
+
+function isReceiptContextPersisted(context: ReceiptTextContext): boolean {
+  if (context.workflowStatus !== "confirmed") return false;
+  const status = lineAutoSaveStatusFromPayload(context.analyzePayload);
+  return !status || status === "saved";
+}
 
 async function findRecentReceiptTextContext(params: {
   sourceType: "group" | "user" | "room";
@@ -97,7 +112,7 @@ async function findRecentReceiptTextContext(params: {
   const dataClient = createServiceRoleClient();
   const { data, error } = await dataClient
     .from(LINE_INBOX_MESSAGES_TABLE)
-    .select("id,line_message_id,raw_text,received_at")
+    .select("id,line_message_id,raw_text,received_at,workflow_status,analyze_payload")
     .eq("source_type", "group")
     .eq("group_id", params.groupId)
     .eq("user_id", params.userId)
@@ -117,7 +132,10 @@ async function findRecentReceiptTextContext(params: {
     if (isLineInboxSystemAcknowledgementText(rawText) || isLineInboxNoiseOrSeparatorOnlyText(rawText)) continue;
     const inboxMessageId = cleanLine(row.id);
     const lineMessageId = cleanLine(row.line_message_id);
-    if (inboxMessageId && lineMessageId) return { inboxMessageId, lineMessageId, rawText };
+    const workflowStatus = cleanLine(row.workflow_status);
+    if (inboxMessageId && lineMessageId) {
+      return { inboxMessageId, lineMessageId, rawText, workflowStatus, analyzePayload: row.analyze_payload };
+    }
   }
   return null;
 }
@@ -226,6 +244,7 @@ async function maybeSendWebhookReceiptReply(params: {
   imageSet?: LineImageSet;
 }): Promise<void> {
   if (!isTruthyEnvFlag(process.env.LINE_WEBHOOK_RECEIPT_REPLY_ENABLED)) return;
+  if (isTruthyEnvFlag(process.env.LINE_AUTO_SAVE_REPLY_ENABLED)) return;
   if (!params.replyToken) return;
   if (params.sourceType !== "group") return;
   if (!shouldAttemptLineReceiptReply({ messageType: params.messageType, imageSet: params.imageSet, rawText: params.rawText })) return;
@@ -248,6 +267,7 @@ async function maybeSendWebhookReceiptReply(params: {
 
   const context = await findRecentReceiptTextContext(params);
   if (!context) return;
+  if (!isReceiptContextPersisted(context)) return;
   const claim = await claimReceiptReply({
     context,
     destination: params.destination,
