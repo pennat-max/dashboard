@@ -186,7 +186,12 @@ function candidatesFor(group: QueueGroup): ManualCarCandidate[] {
 }
 
 function candidateLabel(candidate: ManualCarCandidate): string {
-  return clean(candidate.label) || [candidate.plate, candidate.spec].map(clean).filter(Boolean).join(" ") || clean(candidate.car_row_id);
+  const plate = clean(candidate.plate);
+  const spec = clean(candidate.spec);
+  const compactSpec = plate && spec.toLowerCase().startsWith(plate.toLowerCase())
+    ? spec.slice(plate.length).replace(/^[\s:|/-]+/, "").trim()
+    : spec;
+  return [plate, compactSpec].filter(Boolean).join(" ") || clean(candidate.label) || clean(candidate.car_row_id);
 }
 
 function carRowIdFor(group: QueueGroup, selectedCarRowId: string): string {
