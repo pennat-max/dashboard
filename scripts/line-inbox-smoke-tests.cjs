@@ -947,16 +947,16 @@ const sampleThaiPlateReviewUrl = buildLineOrderReviewUrl({
 });
 assert.strictEqual(
   sampleThaiPlateReviewUrl,
-  "https://vigo4u-operations.pennat.chatgpt.site/line-jobs-v2?focusCarRowId=ignored-row-id&search=6286",
-  "review URL opens the LINE jobs board with focused car row id and Thai plate search fallback"
+  "https://vigo4u-operations.pennat.chatgpt.site/m/orders?focusCarRowId=ignored-row-id&search=6286",
+  "review URL opens the saved order page with focused car row id and Thai plate search fallback"
 );
 const searchOnlyReviewUrl = buildLineOrderReviewUrl({
   plate: "51072",
 });
 assert.strictEqual(
   searchOnlyReviewUrl,
-  "https://vigo4u-operations.pennat.chatgpt.site/line-jobs-v2?search=51072",
-  "review URL opens the LINE jobs board with search when focused car row id is missing"
+  "https://vigo4u-operations.pennat.chatgpt.site/m/orders?search=51072",
+  "review URL opens the saved order page with search when focused car row id is missing"
 );
 
 const approvalReply = buildLineApprovalAcknowledgementText({
@@ -978,8 +978,8 @@ const travo95295ReviewUrl = buildLineOrderReviewUrl({
 });
 assert.strictEqual(
   travo95295ReviewUrl,
-  "https://vigo4u-operations.pennat.chatgpt.site/line-jobs-v2?focusCarRowId=a18c7942-10fc-4d32-8059-5b97f86ec9e8&search=95295",
-  "review URL opens the LINE jobs board and focuses 95295 by car_row_id with short search fallback"
+  "https://vigo4u-operations.pennat.chatgpt.site/m/orders?focusCarRowId=a18c7942-10fc-4d32-8059-5b97f86ec9e8&search=95295",
+  "review URL opens the saved order page and focuses 95295 by car_row_id with short search fallback"
 );
 
 function autoSavePayload(overrides = {}) {

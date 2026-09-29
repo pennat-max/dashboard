@@ -110,7 +110,7 @@ export function buildLineOrderSearchRef(value?: string | null): string {
 }
 
 export function buildLineOrderReviewUrl({ carRowId, plate }: LineReviewUrlInput): string {
-  const url = new URL(LINE_WORK_BOARD_LIFF_URL);
+  const url = new URL(LINE_ORDER_REVIEW_URL);
   const searchRef = buildLineOrderSearchRef(plate);
   const safeCarRowId = String(carRowId ?? "").trim();
   if (safeCarRowId) url.searchParams.set("focusCarRowId", safeCarRowId);
