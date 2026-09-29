@@ -15,7 +15,9 @@ export type VehicleSearchRecord = {
 };
 
 export function normalizeVehicleSearchText(value: unknown): string {
-  return String(value || "").replace(/\s+/g, "").toLowerCase();
+  return String(value || "")
+    .replace(/[^0-9a-zA-Z\u0E00-\u0E7F]+/g, "")
+    .toLowerCase();
 }
 
 function vehicleSearchHaystack(record: VehicleSearchRecord): string {

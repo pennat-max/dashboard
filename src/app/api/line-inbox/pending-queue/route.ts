@@ -1344,7 +1344,13 @@ export async function GET(request: Request) {
           ? ""
           : (cleanString(payload.unmatchedReason) as LineInboxUnmatchedReason) || matchMeta.unmatchedReason;
       const manualCarSearchQuery =
-        !car_row_id && (matchStatus === "ambiguous_vehicle" || matchStatus === "unresolved" || matchStatus === "no_vehicle_context")
+        !car_row_id &&
+        (
+          matchStatus === "waiting_for_car_record" ||
+          matchStatus === "ambiguous_vehicle" ||
+          matchStatus === "unresolved" ||
+          matchStatus === "no_vehicle_context"
+        )
           ? manualCarSearchQueryForQueue({
               rawText: row.raw_text,
               aiTargetCarReference,

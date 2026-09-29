@@ -463,7 +463,6 @@ assertItems(thaiAwning, [thaiAwning], "normal work line remains unchanged");
 assertItems(thaiAddMoreAwning, [thaiAwning], "header prefix with real work keeps the work part");
 const thaiMileage47500 = "\u0e01\u0e23\u0e2d\u0e44\u0e21\u0e25\u0e4c 47,000 KM";
 const thaiMileage67500 = "\u0e01\u0e23\u0e2d\u0e44\u0e21\u0e25\u0e4c 67,500 KM";
-const thaiMileage39800 = "\u0e01\u0e23\u0e2d\u0e44\u0e21\u0e25\u0e4c 39,800 KM";
 assertItems("4380 - 47000 KM.", [thaiMileage47500], "plate/ref plus mileage becomes a mileage work item");
 assertItems("4380 - 47,000 KM", [thaiMileage47500], "comma mileage is normalized");
 assertItems("\u0e19\u0e02-6866 - 67500 KM", [thaiMileage67500], "Thai plate plus mileage becomes a mileage work item");
@@ -478,6 +477,11 @@ assert.strictEqual(
   "manual car picker derives 1603 as the search query"
 );
 assert.strictEqual(
+  deriveVehicleSearchQueryFromLineText({ rawText: "\u0e01\u0e19-206 - 63000 KM.", candidateTexts: ["\u0e01\u0e19-206"] }),
+  "\u0e01\u0e19-206",
+  "manual car picker derives three-digit Thai plates from mileage-only LINE text"
+);
+assert.strictEqual(
   deriveVehicleSearchQueryFromLineText({ rawText: "9275 (high)", aiTargetCarReference: "9275 (high)" }),
   "9275",
   "manual car picker derives 9275 from confidence-labelled reference"
@@ -490,6 +494,13 @@ assert.deepStrictEqual(
   manual1603Candidates.map((car) => car.plate_number),
   ["บธ-1603", "ผข-1603"],
   "LINE AI manual picker search returns both 1603 car candidates"
+);
+assert(
+  vehicleMatchesOrderSearch(
+    { row_id: "car-kn-206", plate_number: "\u0e01\u0e19206", spec: "REVO PRE 2.4 G AT Double_Cab", color: "WHITE", model_year: "Aug15" },
+    "\u0e01\u0e19-206"
+  ),
+  "manual picker matches กน-206 even when stored without a dash"
 );
 assert.deepStrictEqual(extractStockNumbers("4380 - 47000 KM."), ["4380"], "mileage number is not a stock/ref candidate");
 assert.deepStrictEqual(extractStockNumbers("4380 - 47,000 KM"), ["4380"], "comma mileage number is not a stock/ref candidate");
