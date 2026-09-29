@@ -105,6 +105,7 @@ export function buildLineOrderSearchRef(value?: string | null): string {
   const candidate = firstPlateLike || (/\s/.test(raw) ? firstStockLike : clean);
   if (!candidate) return "";
   const normalized = candidate.replace(/[\u2013\u2014]/g, "-").replace(/\s+/g, "");
+  if (/[\u0E00-\u0E7F]/.test(normalized) && /-\d{2,8}[A-Z]?$/i.test(normalized)) return normalized;
   const parts = normalized.split("-").map((part) => part.trim()).filter(Boolean);
   return parts.length > 1 ? parts[parts.length - 1]! : normalized;
 }
