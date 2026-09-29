@@ -136,9 +136,9 @@ function lineOrderReviewFlexMessage(reviewUrl: string, carTitle?: string | null)
 function lineReceiptReviewFlexMessage({
   plate,
 }: {
-  plate?: string;
+  plate: string;
 }): LineFlexMessage {
-  const safePlate = plate?.trim() || "งานจาก LINE";
+  const safePlate = plate.trim();
 
   return {
     type: "flex",
@@ -361,14 +361,16 @@ export async function replyLineJobReceiptMessage({
 }): Promise<LinePushTextResult> {
   const token = accessToken.trim();
   const lineReplyToken = replyToken.trim();
+  const safePlate = plate?.trim() ?? "";
   if (!token) return { ok: false, error: "Missing LINE_CHANNEL_ACCESS_TOKEN" };
   if (!lineReplyToken) return { ok: false, error: "Missing LINE reply token" };
+  if (!safePlate) return { ok: false, error: "Missing LINE receipt plate" };
   return sendLineMessages({
     accessToken: token,
     url: LINE_REPLY_MESSAGE_URL,
     body: {
       replyToken: lineReplyToken,
-      messages: [lineReceiptReviewFlexMessage({ plate })],
+      messages: [lineReceiptReviewFlexMessage({ plate: safePlate })],
     },
     missingTargetError: "Missing LINE reply token",
   });

@@ -261,6 +261,11 @@ async function maybeSendWebhookReceiptReply(params: {
   if (claim.duplicate) return;
 
   const cardDetails = extractReceiptCardDetails(context.rawText);
+  if (!cardDetails.plate) {
+    await releaseReceiptReplyClaim(claim.id);
+    return;
+  }
+
   let sent = await replyLineJobReceiptMessage({
     accessToken: token,
     replyToken: params.replyToken,
