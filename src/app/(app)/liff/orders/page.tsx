@@ -19,7 +19,7 @@ export default async function LiffOrdersPage({ searchParams }: PageProps) {
   const isFullLoad = loadMode.trim().toLowerCase() === "full";
   const scopeRaw = searchParams?.scope;
   const requestedScope = (typeof scopeRaw === "string" ? scopeRaw : Array.isArray(scopeRaw) ? String(scopeRaw[0] ?? "") : "").trim().toLowerCase();
-  const scope = requestedScope === "shipped" || requestedScope === "all" ? requestedScope : "active";
+  const scope = requestedScope === "shipped" || requestedScope === "all" ? requestedScope : searchParams?.search ? "all" : "active";
   const searchRaw = searchParams?.search;
   const search = (typeof searchRaw === "string" ? searchRaw : Array.isArray(searchRaw) ? String(searchRaw[0] ?? "") : "").trim();
   const focusedSearch = search.length > 0;
