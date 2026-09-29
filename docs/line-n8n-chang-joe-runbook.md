@@ -1,5 +1,7 @@
 # Chang Joe n8n LINE Inbox Runbook
 
+Current status entrypoint: `docs/vigo4u-current-status.md`
+
 This runbook reflects the owner-approved production behavior: matched cars auto-save, unmatched cars appear only in the problem drawer, and saved jobs receive one LINE completion reply.
 
 ## 1. Site Environment
