@@ -435,6 +435,7 @@ async function maybeSendAutoSaveReply(params: {
   carTitle?: string | null;
 }): Promise<{ attempted: boolean; sent: boolean; error?: string }> {
   if (!isTruthyEnvFlag(process.env.LINE_AUTO_SAVE_REPLY_ENABLED)) return { attempted: false, sent: false };
+  if (isTruthyEnvFlag(process.env.LINE_WEBHOOK_RECEIPT_REPLY_ENABLED)) return { attempted: false, sent: false };
   const token = cleanLine(process.env.LINE_CHANNEL_ACCESS_TOKEN);
   const target = sourceTarget(params.row);
   if (!token || !target) return { attempted: false, sent: false, error: !token ? "missing_token" : "missing_target" };

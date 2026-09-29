@@ -76,10 +76,6 @@ function receivedAtFromLineTimestamp(timestamp: number | undefined): string | un
   return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
 
-function autoSaveCompletionReplyEnabled(): boolean {
-  return isTruthyEnvFlag(process.env.LINE_AUTO_SAVE_ENABLED) && isTruthyEnvFlag(process.env.LINE_AUTO_SAVE_REPLY_ENABLED);
-}
-
 type ReceiptTextContext = {
   inboxMessageId: string;
   lineMessageId: string;
@@ -224,14 +220,14 @@ async function maybeSendWebhookReceiptReply(params: {
   groupId: string | null;
   userId: string | null;
   messageType: CapturableLineMessageType;
+  rawText?: string;
   receivedAt?: string;
   imageSet?: LineImageSet;
 }): Promise<void> {
   if (!isTruthyEnvFlag(process.env.LINE_WEBHOOK_RECEIPT_REPLY_ENABLED)) return;
-  if (autoSaveCompletionReplyEnabled()) return;
   if (!params.replyToken) return;
   if (params.sourceType !== "group") return;
-  if (!shouldAttemptLineReceiptReply({ messageType: params.messageType, imageSet: params.imageSet })) return;
+  if (!shouldAttemptLineReceiptReply({ messageType: params.messageType, imageSet: params.imageSet, rawText: params.rawText })) return;
   if (!params.groupId || !params.userId) return;
   if (!(await isReceiptImageSetReady({
     groupId: params.groupId,
@@ -525,6 +521,7 @@ export async function POST(request: Request) {
           groupId: gid,
           userId: src.userId ? String(src.userId) : null,
           messageType,
+          rawText: text,
           receivedAt,
           imageSet: msg.imageSet,
         });

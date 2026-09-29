@@ -327,14 +327,19 @@ assert.strictEqual(
 );
 assert(!receiptReplyWithLink.includes("บันทึกงาน"), "linked webhook receipt still must not claim work was saved");
 assert.strictEqual(
-  shouldAttemptLineReceiptReply({ messageType: "text" }),
+  shouldAttemptLineReceiptReply({ messageType: "text", rawText: "----------" }),
+  true,
+  "webhook acknowledges when a separator/noise marker closes a vehicle job"
+);
+assert.strictEqual(
+  shouldAttemptLineReceiptReply({ messageType: "text", rawText: "สว-5391 - 90300 km." }),
   false,
-  "webhook waits for a photo instead of acknowledging vehicle text immediately"
+  "webhook does not acknowledge vehicle text immediately"
 );
 assert.strictEqual(
   shouldAttemptLineReceiptReply({ messageType: "image", imageSet: { id: "set-1", index: 1, total: 4 } }),
-  true,
-  "every photo webhook can check whether its unordered LINE image set is complete"
+  false,
+  "photo webhooks wait for a later explicit close marker"
 );
 assert.strictEqual(
   isLineImageSetComplete(
@@ -354,8 +359,8 @@ assert.strictEqual(
 );
 assert.strictEqual(
   shouldAttemptLineReceiptReply({ messageType: "image" }),
-  true,
-  "a standalone photo can trigger the acknowledgement"
+  false,
+  "a standalone photo does not trigger the acknowledgement"
 );
 assert.deepStrictEqual(
   normalizeLineImageSet({ id: "set-1", index: 2, total: 4 }),
@@ -1695,7 +1700,10 @@ assert(!linePushMessageSource.includes("รอตรวจงานจากก�
 assert(linePushMessageSource.includes('type: "uri"'), "LINE review acknowledgement button opens the review URL");
 assert(linePushMessageSource.includes("classifyLineSendError"), "LINE helper exposes send error classification");
 assert(lineWebhookRoute.includes("LINE_WEBHOOK_RECEIPT_REPLY_ENABLED"), "webhook receipt replies are gated by env");
-assert(lineWebhookRoute.includes("autoSaveCompletionReplyEnabled"), "webhook receipt avoids duplicate LINE replies when auto-save replies are active");
+assert(
+  fs.readFileSync(path.join(process.cwd(), "src/lib/line-inbox/auto-save.ts"), "utf8").includes("LINE_WEBHOOK_RECEIPT_REPLY_ENABLED"),
+  "auto-save LINE reply is skipped when webhook receipt replies own the acknowledgement"
+);
 assert(lineWebhookRoute.includes("if (!cardDetails.plate)"), "webhook receipt waits when no plate can be extracted");
 assert(lineWebhookRoute.includes("replyLineJobReceiptMessage"), "webhook receipt uses LINE flex card reply");
 assert(lineWebhookRoute.includes("replyLineTextMessage"), "webhook receipt keeps a LINE text fallback");

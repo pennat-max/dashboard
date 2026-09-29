@@ -1,3 +1,5 @@
+import { isLineInboxNoiseOrSeparatorOnlyText } from "@/lib/line-inbox/split-line-text";
+
 export type LineImageSet = {
   id?: string;
   index?: number;
@@ -81,7 +83,8 @@ export function isLineImageSetComplete(
 export function shouldAttemptLineReceiptReply(input: {
   messageType: "text" | "image" | "file";
   imageSet?: LineImageSet | null;
+  rawText?: string | null;
 }): boolean {
-  if (input.messageType !== "image") return false;
-  return true;
+  if (input.messageType !== "text") return false;
+  return isLineInboxNoiseOrSeparatorOnlyText(cleanLine(input.rawText));
 }
