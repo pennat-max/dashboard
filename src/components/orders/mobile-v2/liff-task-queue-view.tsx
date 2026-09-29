@@ -160,7 +160,7 @@ function pendingJobsFromGroups(groups: LinePendingGroup[], searchValue: string):
         title: String(message.plate_display ?? message.manualCarSearchQuery ?? message.raw_text ?? "LINE").replace(/\s+/g, " ").trim(),
         items,
         photoCount: Array.isArray(message.attachments) ? message.attachments.length : 0,
-        href: String(message.reviewUrl ?? message.review_url ?? group.reviewUrl ?? group.review_url ?? "/liff/work"),
+        href: String(message.reviewUrl ?? message.review_url ?? group.reviewUrl ?? group.review_url ?? "/liff/orders"),
       });
     }
   }

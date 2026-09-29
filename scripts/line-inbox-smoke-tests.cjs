@@ -980,8 +980,8 @@ const unlinkedJobReviewUrl = buildLineJobReviewUrl({
 });
 assert.strictEqual(
   unlinkedJobReviewUrl,
-  "https://vigo4u-operations.pennat.chatgpt.site/liff/work?job=4a056c55-d65e-4a97-845c-fbd024709f26&search=%E0%B8%81%E0%B8%99-206",
-  "unlinked LINE intake opens the focused LIFF work page instead of an order search that cannot find a car"
+  "https://vigo4u-operations.pennat.chatgpt.site/liff/orders?job=4a056c55-d65e-4a97-845c-fbd024709f26&search=%E0%B8%81%E0%B8%99-206",
+  "unlinked LINE intake opens the original LIFF order page with pending LINE context"
 );
 
 const approvalReply = buildLineApprovalAcknowledgementText({
@@ -1478,10 +1478,6 @@ const lineWorkBoardV2 = fs.readFileSync(
   path.join(root, "src/components/line-jobs/line-work-board-v2.tsx"),
   "utf8"
 );
-const lineWorkSinglePageSource = fs.readFileSync(
-  path.join(root, "src/components/line-work/line-work-single-page.tsx"),
-  "utf8"
-);
 const lineWorkPageRoute = fs.readFileSync(
   path.join(root, "src/app/(app)/liff/work/page.tsx"),
   "utf8"
@@ -1548,13 +1544,13 @@ assert(
   pendingQueueRoute.includes("buildLineJobReviewUrl") &&
     pendingQueueRoute.includes("inboxId: id") &&
     pendingQueueRoute.includes("carRowId: car_row_id"),
-  "pending queue links LINE intake to the focused one-car work page"
+  "pending queue links LINE intake to the original LIFF order page"
 );
 assert(
-  lineWorkPageRoute.includes("LineWorkSinglePage") &&
-    lineWorkSinglePageSource.includes("saveToOrder") &&
-    lineWorkSinglePageSource.includes("/api/line-inbox/pending-save"),
-  "focused LINE work page can save approved work into Order"
+  lineWorkPageRoute.includes("redirect(`/liff/orders") &&
+    lineWorkPageRoute.includes('params.set("load", "full")') &&
+    lineWorkPageRoute.includes('params.set("scope", "active")'),
+  "old /liff/work links redirect into the original order page"
 );
 assert(
   pendingQueueViewSource.includes('if (filter === "all") return true'),

@@ -2,7 +2,7 @@ const APP_BASE_URL =
   process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, "") ||
   "https://vigo4u-operations.pennat.chatgpt.site";
 
-const LINE_JOBS_PATH = "/liff/work";
+const LINE_JOBS_PATH = "/liff/orders";
 const LINE_LIFF_ID = process.env.NEXT_PUBLIC_LINE_LIFF_ID?.trim() ?? "";
 
 export const LINE_ORDER_REVIEW_URL = `${APP_BASE_URL}/m/orders`;
@@ -127,7 +127,11 @@ export function buildLineJobReviewUrl({ inboxId, carRowId, plate }: LineJobRevie
   const safeCarRowId = cleanLine(carRowId);
   const searchRef = buildLineOrderSearchRef(plate);
   if (safeInboxId) url.searchParams.set("job", safeInboxId);
-  if (safeCarRowId) url.searchParams.set("focusCarRowId", safeCarRowId);
+  if (safeCarRowId) {
+    url.searchParams.set("load", "full");
+    url.searchParams.set("scope", "active");
+    url.searchParams.set("focusCarRowId", safeCarRowId);
+  }
   if (searchRef) url.searchParams.set("search", searchRef);
   return url.toString();
 }
