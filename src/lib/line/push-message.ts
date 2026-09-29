@@ -124,18 +124,13 @@ function lineReceiptReviewFlexMessage({
   reviewUrl,
   plate,
   mileage,
-  chassis,
 }: {
   reviewUrl: string;
   plate?: string;
   mileage?: string;
-  chassis?: string;
 }): LineFlexMessage {
   const safePlate = plate?.trim() || "งานจาก LINE";
-  const detailLines = [
-    mileage?.trim() ? `${mileage.trim()} km.` : "",
-    chassis?.trim() ?? "",
-  ].filter(Boolean);
+  const detailLines = [mileage?.trim() ? `${mileage.trim()} km.` : ""].filter(Boolean);
 
   return {
     type: "flex",
@@ -177,13 +172,6 @@ function lineReceiptReviewFlexMessage({
             color: "#334155",
             wrap: true,
           })),
-          {
-            type: "text",
-            text: "รอตรวจงานจากกลุ่ม LINE",
-            size: "xs",
-            color: "#64748b",
-            wrap: true,
-          },
         ],
       },
       footer: {
@@ -383,14 +371,12 @@ export async function replyLineJobReceiptMessage({
   reviewUrl,
   plate,
   mileage,
-  chassis,
 }: {
   accessToken: string;
   replyToken: string;
   reviewUrl: string;
   plate?: string;
   mileage?: string;
-  chassis?: string;
 }): Promise<LinePushTextResult> {
   const token = accessToken.trim();
   const lineReplyToken = replyToken.trim();
@@ -403,7 +389,7 @@ export async function replyLineJobReceiptMessage({
     url: LINE_REPLY_MESSAGE_URL,
     body: {
       replyToken: lineReplyToken,
-      messages: [lineReceiptReviewFlexMessage({ reviewUrl: safeUrl, plate, mileage, chassis })],
+      messages: [lineReceiptReviewFlexMessage({ reviewUrl: safeUrl, plate, mileage })],
     },
     missingTargetError: "Missing LINE reply token",
   });
