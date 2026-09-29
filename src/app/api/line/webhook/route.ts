@@ -7,9 +7,9 @@ import {
   updateLineInboxMessageAnalyze,
 } from "@/lib/line-inbox/line-inbox-messages";
 import {
-  buildLineOrderReviewUrl,
   isLineInboxSystemAcknowledgementText,
 } from "@/lib/line-inbox/acknowledgement";
+import { buildLineJobReviewUrl } from "@/lib/line-inbox/review-link";
 import {
   extractLineQuotedMessageId,
   extractLineQuoteToken,
@@ -282,7 +282,10 @@ async function maybeSendWebhookReceiptReply(params: {
     await releaseReceiptReplyClaim(claim.id);
     return;
   }
-  const reviewUrl = buildLineOrderReviewUrl({ plate: cardDetails.plate });
+  const reviewUrl = buildLineJobReviewUrl({
+    inboxId: context.inboxMessageId,
+    plate: cardDetails.plate,
+  });
 
   let sent = await replyLineJobReceiptMessage({
     accessToken: token,

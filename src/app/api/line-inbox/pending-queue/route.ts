@@ -4,7 +4,7 @@ import { LINE_INBOX_MESSAGES_TABLE } from "@/lib/line-inbox/line-inbox-messages"
 import { buildFallbackAnalyzeItemsFromRawText } from "@/lib/line-inbox/fallback-analyze-items";
 import { buildFallbackAnalyzePayloadFromRawText } from "@/lib/line-inbox/fallback-analyze-payload";
 import { isLineInboxNoiseOrSeparatorOnlyText } from "@/lib/line-inbox/split-line-text";
-import { buildLineJobReviewUrl, buildLineOrderReviewUrl } from "@/lib/line-inbox/review-link";
+import { buildLineJobReviewUrl } from "@/lib/line-inbox/review-link";
 import {
   deriveVehicleSearchQueryFromLineText,
   vehicleMatchesOrderSearch,
@@ -1361,9 +1361,11 @@ export async function GET(request: Request) {
         ? await fetchManualCarCandidates(supabase, manualCarSearchQuery)
         : [];
       const queueNeedsHumanReview = needsHumanReview || matchedNoWorkOnly;
-      const reviewUrl = car_row_id
-        ? buildLineOrderReviewUrl({ carRowId: car_row_id, plate: plateText || carTitle || fallbackTitle })
-        : buildLineJobReviewUrl({ inboxId: id, plate: plateText || carTitle || fallbackTitle });
+      const reviewUrl = buildLineJobReviewUrl({
+        inboxId: id,
+        carRowId: car_row_id,
+        plate: plateText || carTitle || fallbackTitle,
+      });
       const manualReviewReason =
         matchedNoWorkOnly
           ? "จับรถได้แล้ว แต่ยังไม่พบรายการงาน"

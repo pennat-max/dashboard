@@ -980,8 +980,8 @@ const unlinkedJobReviewUrl = buildLineJobReviewUrl({
 });
 assert.strictEqual(
   unlinkedJobReviewUrl,
-  "https://vigo4u-operations.pennat.chatgpt.site/line-jobs-v2?job=4a056c55-d65e-4a97-845c-fbd024709f26&search=%E0%B8%81%E0%B8%99-206",
-  "unlinked LINE intake opens the LINE Jobs review page instead of an order search that cannot find a car"
+  "https://vigo4u-operations.pennat.chatgpt.site/liff/work?job=4a056c55-d65e-4a97-845c-fbd024709f26&search=%E0%B8%81%E0%B8%99-206",
+  "unlinked LINE intake opens the focused LIFF work page instead of an order search that cannot find a car"
 );
 
 const approvalReply = buildLineApprovalAcknowledgementText({
@@ -1478,6 +1478,14 @@ const lineWorkBoardV2 = fs.readFileSync(
   path.join(root, "src/components/line-jobs/line-work-board-v2.tsx"),
   "utf8"
 );
+const lineWorkSinglePageSource = fs.readFileSync(
+  path.join(root, "src/components/line-work/line-work-single-page.tsx"),
+  "utf8"
+);
+const lineWorkPageRoute = fs.readFileSync(
+  path.join(root, "src/app/(app)/liff/work/page.tsx"),
+  "utf8"
+);
 const pendingQueueViewSource = fs.readFileSync(
   path.join(root, "src/lib/line-inbox/pending-queue-view.ts"),
   "utf8"
@@ -1538,8 +1546,15 @@ assert(
 );
 assert(
   pendingQueueRoute.includes("buildLineJobReviewUrl") &&
-    pendingQueueRoute.includes("buildLineJobReviewUrl({ inboxId: id"),
-  "pending queue links unlinked LINE intake to the LINE Jobs review page"
+    pendingQueueRoute.includes("inboxId: id") &&
+    pendingQueueRoute.includes("carRowId: car_row_id"),
+  "pending queue links LINE intake to the focused one-car work page"
+);
+assert(
+  lineWorkPageRoute.includes("LineWorkSinglePage") &&
+    lineWorkSinglePageSource.includes("saveToOrder") &&
+    lineWorkSinglePageSource.includes("/api/line-inbox/pending-save"),
+  "focused LINE work page can save approved work into Order"
 );
 assert(
   pendingQueueViewSource.includes('if (filter === "all") return true'),
@@ -1755,7 +1770,12 @@ assert(
   "webhook receipt does not acknowledge until auto-save owns replies or the source row is already persisted"
 );
 assert(lineWebhookRoute.includes("if (!cardDetails.plate)"), "webhook receipt waits when no plate can be extracted");
-assert(lineWebhookRoute.includes("buildLineOrderReviewUrl({ plate: cardDetails.plate })"), "webhook receipt builds a per-car detail URL");
+assert(
+  lineWebhookRoute.includes("buildLineJobReviewUrl") &&
+    lineWebhookRoute.includes("inboxId: context.inboxMessageId") &&
+    lineWebhookRoute.includes("plate: cardDetails.plate"),
+  "webhook receipt builds a focused LIFF work URL for the source LINE message"
+);
 assert(lineWebhookRoute.includes("replyLineJobReceiptMessage"), "webhook receipt uses LINE flex card reply");
 assert(lineWebhookRoute.includes("replyLineTextMessage"), "webhook receipt keeps a LINE text fallback");
 assert(lineWebhookRoute.includes("รับทราบงานแล้ว"), "webhook receipt fallback stays short without LIFF links");

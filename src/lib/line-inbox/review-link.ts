@@ -2,11 +2,12 @@ const APP_BASE_URL =
   process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, "") ||
   "https://vigo4u-operations.pennat.chatgpt.site";
 
-const LINE_JOBS_PATH = "/line-jobs-v2";
+const LINE_JOBS_PATH = "/liff/work";
 const LINE_LIFF_ID = process.env.NEXT_PUBLIC_LINE_LIFF_ID?.trim() ?? "";
 
 export const LINE_ORDER_REVIEW_URL = `${APP_BASE_URL}/m/orders`;
 export const LINE_WORK_BOARD_URL = `${APP_BASE_URL}${LINE_JOBS_PATH}`;
+export const LINE_WORK_DETAIL_URL = LINE_WORK_BOARD_URL;
 export const LINE_WORK_BOARD_LIFF_URL = LINE_LIFF_ID
   ? `https://liff.line.me/${encodeURIComponent(LINE_LIFF_ID)}`
   : LINE_WORK_BOARD_URL;
@@ -121,7 +122,7 @@ export function buildLineOrderReviewUrl({ carRowId, plate }: LineReviewUrlInput)
 }
 
 export function buildLineJobReviewUrl({ inboxId, carRowId, plate }: LineJobReviewUrlInput): string {
-  const url = new URL(LINE_WORK_BOARD_LIFF_URL);
+  const url = new URL(LINE_WORK_DETAIL_URL);
   const safeInboxId = cleanLine(inboxId);
   const safeCarRowId = cleanLine(carRowId);
   const searchRef = buildLineOrderSearchRef(plate);

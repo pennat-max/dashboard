@@ -202,14 +202,14 @@ function lineJobReviewFlexMessage({
   carTitle: string;
   itemCount: number;
 }): LineFlexMessage {
-  const title = carTitle.trim() || "งานจาก LINE";
-  const count = Math.max(0, Math.floor(itemCount || 0));
+  void itemCount;
+  const title = carTitle.trim() || "\u0E07\u0E32\u0E19\u0E08\u0E32\u0E01 LINE";
   return {
     type: "flex",
-    altText: `รับทราบ - ${title}`,
+    altText: `\u0E23\u0E31\u0E1A\u0E17\u0E23\u0E32\u0E1A - ${title}`,
     contents: {
       type: "bubble",
-      size: "kilo",
+      size: "micro",
       body: {
         type: "box",
         layout: "vertical",
@@ -217,23 +217,17 @@ function lineJobReviewFlexMessage({
         contents: [
           {
             type: "text",
-            text: "รับทราบ",
+            text: "\u0E23\u0E31\u0E1A\u0E17\u0E23\u0E32\u0E1A\u0E07\u0E32\u0E19\u0E41\u0E25\u0E49\u0E27",
             weight: "bold",
-            size: "lg",
+            size: "md",
             color: "#111827",
           },
           {
             type: "text",
-            text: title.slice(0, 120),
-            size: "sm",
-            color: "#334155",
-            wrap: true,
-          },
-          {
-            type: "text",
-            text: count > 0 ? `ระบบจับงานได้ ${count} รายการ รอตรวจในเว็บ` : "ระบบจัดเข้าคิวงานแล้ว รอตรวจในเว็บ",
-            size: "xs",
-            color: "#64748b",
+            text: title.slice(0, 80),
+            weight: "bold",
+            size: "md",
+            color: "#020617",
             wrap: true,
           },
         ],
@@ -250,7 +244,7 @@ function lineJobReviewFlexMessage({
             color: "#0f172a",
             action: {
               type: "uri",
-              label: "ดูรายละเอียดงาน",
+              label: "\u0E14\u0E39\u0E23\u0E32\u0E22\u0E25\u0E30\u0E40\u0E2D\u0E35\u0E22\u0E14",
               uri: reviewUrl,
             },
           },
