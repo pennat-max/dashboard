@@ -432,13 +432,19 @@ async function maybeSendAutoSaveReply(params: {
   row: AutoSaveInboxRow;
   text: string;
   reviewUrl: string;
+  carTitle?: string | null;
 }): Promise<{ attempted: boolean; sent: boolean; error?: string }> {
   if (!isTruthyEnvFlag(process.env.LINE_AUTO_SAVE_REPLY_ENABLED)) return { attempted: false, sent: false };
   const token = cleanLine(process.env.LINE_CHANNEL_ACCESS_TOKEN);
   const target = sourceTarget(params.row);
   if (!token || !target) return { attempted: false, sent: false, error: !token ? "missing_token" : "missing_target" };
 
-  const sent = await pushLineOrderReviewMessage({ accessToken: token, to: target, reviewUrl: params.reviewUrl });
+  const sent = await pushLineOrderReviewMessage({
+    accessToken: token,
+    to: target,
+    reviewUrl: params.reviewUrl,
+    carTitle: params.carTitle,
+  });
   if (sent.ok) return { attempted: true, sent: true };
   return { attempted: true, sent: false, error: sent.error };
 }
@@ -666,8 +672,9 @@ export async function maybeAutoSaveAnalyzedLineInbox(
     .filter((item) => item.action === "merge")
     .map((item) => ({ item, previous: existingById.get(item.order_item_id) }));
   const reviewUrl = reviewUrlFor(params.payload, carRowId);
+  const carTitle = detectedCarTitle(params.payload);
   const replyText = buildLineAutoSaveAcknowledgementText({
-    carTitle: detectedCarTitle(params.payload),
+    carTitle,
     createdItems: created,
     updatedItems: updated,
     attachedPhotoCount,
@@ -676,7 +683,7 @@ export async function maybeAutoSaveAnalyzedLineInbox(
 
   let reply: { attempted: boolean; sent: boolean; error?: string } = { attempted: false, sent: false };
   try {
-    reply = await maybeSendAutoSaveReply({ row: params.row, text: replyText, reviewUrl });
+    reply = await maybeSendAutoSaveReply({ row: params.row, text: replyText, reviewUrl, carTitle });
   } catch (error) {
     reply = { attempted: true, sent: false, error: cleanError(error) };
     console.warn("[line-auto-save] acknowledgement failed", { error: reply.error });

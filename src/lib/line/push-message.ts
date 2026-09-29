@@ -77,10 +77,11 @@ async function sendLineMessages({
   }
 }
 
-function lineOrderReviewFlexMessage(reviewUrl: string): LineFlexMessage {
+function lineOrderReviewFlexMessage(reviewUrl: string, carTitle?: string | null): LineFlexMessage {
+  const safeCarTitle = carTitle?.trim() ?? "";
   return {
     type: "flex",
-    altText: "รับทราบ - ดูรายละเอียด",
+    altText: safeCarTitle ? `รับทราบ - ${safeCarTitle}` : "รับทราบ - ดูรายละเอียด",
     contents: {
       type: "bubble",
       size: "micro",
@@ -96,6 +97,18 @@ function lineOrderReviewFlexMessage(reviewUrl: string): LineFlexMessage {
             size: "md",
             color: "#111827",
           },
+          ...(safeCarTitle
+            ? [
+                {
+                  type: "text" as const,
+                  text: safeCarTitle,
+                  weight: "bold" as const,
+                  size: "md" as const,
+                  color: "#020617",
+                  wrap: true,
+                },
+              ]
+            : []),
         ],
       },
       footer: {
@@ -258,17 +271,19 @@ export async function pushLineOrderReviewMessage({
   accessToken,
   to,
   reviewUrl,
+  carTitle,
 }: {
   accessToken: string;
   to: string;
   reviewUrl: string;
+  carTitle?: string | null;
 }): Promise<LinePushTextResult> {
   const safeUrl = reviewUrl.trim();
   if (!safeUrl) return { ok: false, error: "Missing LINE review URL" };
   return pushLineMessages({
     accessToken,
     to,
-    messages: [lineOrderReviewFlexMessage(safeUrl)],
+    messages: [lineOrderReviewFlexMessage(safeUrl, carTitle)],
   });
 }
 
