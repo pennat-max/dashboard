@@ -7,8 +7,6 @@ import {
   updateLineInboxMessageAnalyze,
 } from "@/lib/line-inbox/line-inbox-messages";
 import {
-  buildLineOrderReviewUrl,
-  buildLineWebhookReceiptAcknowledgementText,
   isLineInboxSystemAcknowledgementText,
 } from "@/lib/line-inbox/acknowledgement";
 import {
@@ -258,19 +256,17 @@ async function maybeSendWebhookReceiptReply(params: {
   if (claim.duplicate) return;
 
   const cardDetails = extractReceiptCardDetails(context.rawText);
-  const reviewUrl = buildLineOrderReviewUrl({ plate: cardDetails.plate ?? context.rawText });
   let sent = await replyLineJobReceiptMessage({
     accessToken: token,
     replyToken: params.replyToken,
-    reviewUrl,
     ...cardDetails,
   });
 
-  if (!sent.ok && reviewUrl) {
+  if (!sent.ok) {
     sent = await replyLineTextMessage({
       accessToken: token,
       replyToken: params.replyToken,
-      text: buildLineWebhookReceiptAcknowledgementText(reviewUrl),
+      text: cardDetails.plate ? `รับทราบงานแล้ว\n${cardDetails.plate}` : "รับทราบงานแล้ว",
     });
   }
 

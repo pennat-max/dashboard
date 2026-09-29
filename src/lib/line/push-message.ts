@@ -121,16 +121,11 @@ function lineOrderReviewFlexMessage(reviewUrl: string): LineFlexMessage {
 }
 
 function lineReceiptReviewFlexMessage({
-  reviewUrl,
   plate,
-  mileage,
 }: {
-  reviewUrl: string;
   plate?: string;
-  mileage?: string;
 }): LineFlexMessage {
   const safePlate = plate?.trim() || "งานจาก LINE";
-  const detailLines = [mileage?.trim() ? `${mileage.trim()} km.` : ""].filter(Boolean);
 
   return {
     type: "flex",
@@ -164,31 +159,6 @@ function lineReceiptReviewFlexMessage({
             weight: "bold",
             color: "#020617",
             wrap: true,
-          },
-          ...detailLines.map((text) => ({
-            type: "text",
-            text,
-            size: "sm",
-            color: "#334155",
-            wrap: true,
-          })),
-        ],
-      },
-      footer: {
-        type: "box",
-        layout: "vertical",
-        spacing: "sm",
-        contents: [
-          {
-            type: "button",
-            style: "primary",
-            height: "sm",
-            color: "#0f172a",
-            action: {
-              type: "uri",
-              label: "ดูรายละเอียดงาน",
-              uri: reviewUrl,
-            },
           },
         ],
       },
@@ -368,28 +338,22 @@ export async function replyLineTextMessage({
 export async function replyLineJobReceiptMessage({
   accessToken,
   replyToken,
-  reviewUrl,
   plate,
-  mileage,
 }: {
   accessToken: string;
   replyToken: string;
-  reviewUrl: string;
   plate?: string;
-  mileage?: string;
 }): Promise<LinePushTextResult> {
   const token = accessToken.trim();
   const lineReplyToken = replyToken.trim();
-  const safeUrl = reviewUrl.trim();
   if (!token) return { ok: false, error: "Missing LINE_CHANNEL_ACCESS_TOKEN" };
   if (!lineReplyToken) return { ok: false, error: "Missing LINE reply token" };
-  if (!safeUrl) return { ok: false, error: "Missing LINE review URL" };
   return sendLineMessages({
     accessToken: token,
     url: LINE_REPLY_MESSAGE_URL,
     body: {
       replyToken: lineReplyToken,
-      messages: [lineReceiptReviewFlexMessage({ reviewUrl: safeUrl, plate, mileage })],
+      messages: [lineReceiptReviewFlexMessage({ plate })],
     },
     missingTargetError: "Missing LINE reply token",
   });
