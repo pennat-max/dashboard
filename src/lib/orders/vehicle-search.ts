@@ -51,6 +51,8 @@ export function vehicleMatchesOrderSearch(record: VehicleSearchRecord, raw: stri
   const q = raw.trim();
   if (!q) return true;
   const n = normalizeVehicleSearchText(q);
+  const explicitThaiPlate = q.match(/\d{0,2}[\u0E01-\u0E2E]{1,3}[-\s]?\d{2,4}/)?.[0] ?? "";
+  const normalizedExplicitThaiPlate = normalizeVehicleSearchText(explicitThaiPlate);
   const plate = String(record.plate ?? record.plate_number ?? "").trim();
   const fullPlate = String(record.fullPlate ?? record.plate_number ?? "").trim();
   const chassis = String(record.chassis ?? record.chassis_number ?? "").trim();
@@ -70,6 +72,12 @@ export function vehicleMatchesOrderSearch(record: VehicleSearchRecord, raw: stri
         .join(" ")
   );
   const normalizedHaystack = normalizeVehicleSearchText(vehicleSearchHaystack(record));
+  if (normalizedExplicitThaiPlate) {
+    return (
+      normalizeVehicleSearchText(plate) === normalizedExplicitThaiPlate ||
+      normalizeVehicleSearchText(fullPlate) === normalizedExplicitThaiPlate
+    );
+  }
   const tokens =
     q
       .match(/[\u0E00-\u0E7Fa-zA-Z0-9.]+/g)

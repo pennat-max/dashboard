@@ -502,6 +502,10 @@ assert(
   ),
   "manual picker matches กน-206 even when stored without a dash"
 );
+assert(
+  !vehicleMatchesOrderSearch({ row_id: "car-kn-2062", plate_number: "\u0e01\u0e19-2062", spec: "VIGO PRE 3.0 E MT Double_Cab" }, "\u0e01\u0e19-206"),
+  "manual picker does not treat กน-2062 as an exact กน-206 match"
+);
 assert.deepStrictEqual(extractStockNumbers("4380 - 47000 KM."), ["4380"], "mileage number is not a stock/ref candidate");
 assert.deepStrictEqual(extractStockNumbers("4380 - 47,000 KM"), ["4380"], "comma mileage number is not a stock/ref candidate");
 assert.deepStrictEqual(extractStockNumbers("\u0e19\u0e02-6866 67500 KM"), ["6866"], "Thai plate mileage keeps only plate digits as candidate");
