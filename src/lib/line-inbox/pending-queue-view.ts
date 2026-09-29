@@ -157,7 +157,7 @@ export function lineInboxQueueGroupMatchesFilter(
   filter: LineInboxQueueFilter,
   todayYmd: string
 ): boolean {
-  if (filter === "all") return lineInboxQueueGroupIsReadyActionable(group);
+  if (filter === "all") return true;
   if (filter === "waiting_for_car") return lineInboxQueueGroupIsWaitingForCarRecord(group);
   if (filter === "manual") return lineInboxQueueGroupHasManualReview(group);
   if (filter === "today") return lineInboxQueueGroupHasWorkOnYmd(group, todayYmd);

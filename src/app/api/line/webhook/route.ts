@@ -95,7 +95,7 @@ function lineAutoSaveStatusFromPayload(value: unknown): string {
 function isReceiptContextPersisted(context: ReceiptTextContext): boolean {
   if (context.workflowStatus !== "confirmed") return false;
   const status = lineAutoSaveStatusFromPayload(context.analyzePayload);
-  return !status || status === "saved";
+  return status === "saved";
 }
 
 async function findRecentReceiptTextContext(params: {

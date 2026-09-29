@@ -263,8 +263,8 @@ assert.strictEqual(
 );
 assert.strictEqual(
   lineInboxQueueGroupMatchesFilter(queueFilterGroups[3], "all", queueFilterToday),
-  false,
-  "waiting-for-car groups are excluded from the default ready list"
+  true,
+  "all filter includes waiting-for-car groups so new LINE intake is visible"
 );
 assert.strictEqual(
   lineInboxQueueGroupMatchesFilter(queueFilterGroups[4], "manual", queueFilterToday),
@@ -278,13 +278,13 @@ assert.strictEqual(
 );
 assert.strictEqual(
   lineInboxQueueGroupMatchesFilter(queueFilterGroups[4], "all", queueFilterToday),
-  false,
-  "no-car rows are excluded from the default ready list"
+  true,
+  "all filter includes no-car rows so staff can link them"
 );
 assert.strictEqual(
   lineInboxQueueGroupMatchesFilter(queueFilterGroups[5], "all", queueFilterToday),
-  false,
-  "ambiguous car rows are excluded from the default ready list even when work text exists"
+  true,
+  "all filter includes ambiguous car rows so staff can review them"
 );
 assert.strictEqual(
   lineInboxQueueMessageNeedsManualReview(queueFilterGroups[4].messages[0]),
@@ -308,13 +308,13 @@ assert.strictEqual(
 );
 assert.strictEqual(
   lineInboxQueueGroupMatchesFilter(queueFilterGroups[6], "all", queueFilterToday),
-  false,
-  "matched car with no work is excluded from the default ready list"
+  true,
+  "all filter includes matched car rows with no parsed work"
 );
 assert.deepStrictEqual(
   lineInboxQueueFilterCounts(queueFilterGroups, queueFilterToday),
-  { all: 2, today: 4, yesterday: 1, manual: 4, waiting_for_car: 1 },
-  "pending queue filter counts separate ready, manual, and waiting-car groups"
+  { all: 7, today: 4, yesterday: 1, manual: 4, waiting_for_car: 1 },
+  "pending queue filter counts all visible intake plus manual and waiting-car groups"
 );
 const receiptReply = buildLineWebhookReceiptAcknowledgementText();
 assert.strictEqual(receiptReply, "รับทราบ", "webhook receipt acknowledgement stays short");
@@ -1449,6 +1449,10 @@ const pendingQueueRoute = fs.readFileSync(
   path.join(root, "src/app/api/line-inbox/pending-queue/route.ts"),
   "utf8"
 );
+const lineWorkBoardV2 = fs.readFileSync(
+  path.join(root, "src/components/line-jobs/line-work-board-v2.tsx"),
+  "utf8"
+);
 const pendingQueueViewSource = fs.readFileSync(
   path.join(root, "src/lib/line-inbox/pending-queue-view.ts"),
   "utf8"
@@ -1508,8 +1512,12 @@ assert(
   "pending queue keeps waiting-for-car separate and counts unknown-car rows as manual review"
 );
 assert(
-  pendingQueueViewSource.includes('if (filter === "all") return lineInboxQueueGroupIsReadyActionable(group)'),
-  "pending queue default/all filter shows only ready-to-approve actionable groups"
+  pendingQueueViewSource.includes('if (filter === "all") return true'),
+  "pending queue default/all filter keeps every intake group visible"
+);
+assert(
+  lineWorkBoardV2.includes('useState<ViewTab>("review")'),
+  "LINE Jobs opens on review so unlinked intake is visible first"
 );
 assert(
   pendingQueueRoute.includes("LINE_PENDING_QUEUE_SUMMARY_ATTACHMENT_LIMIT") &&

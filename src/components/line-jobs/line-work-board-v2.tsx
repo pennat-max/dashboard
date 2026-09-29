@@ -334,7 +334,7 @@ export function LineWorkBoardV2() {
   const searchParams = useSearchParams();
   const targetJob = clean(searchParams?.get("job"));
   const [filter, setFilter] = useState<QueueFilter>("all");
-  const [tab, setTab] = useState<ViewTab>("mine");
+  const [tab, setTab] = useState<ViewTab>("review");
   const [data, setData] = useState<QueueResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
