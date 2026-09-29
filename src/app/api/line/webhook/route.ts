@@ -52,7 +52,7 @@ type LineEvent = {
   replyToken?: string;
 };
 
-type CapturableLineMessageType = "text" | "image" | "file";
+type CapturableLineMessageType = "text" | "image" | "file" | "sticker";
 type CaptureLineMessageResult = { id: string | null; duplicate: boolean };
 
 function isTruthyEnvFlag(value: string | undefined): boolean {
@@ -294,7 +294,7 @@ async function maybeSendWebhookReceiptReply(params: {
 }
 
 function normalizeCapturableMessageType(value: string | undefined): CapturableLineMessageType | null {
-  if (value === "text" || value === "image" || value === "file") return value;
+  if (value === "text" || value === "image" || value === "file" || value === "sticker") return value;
   return null;
 }
 
@@ -460,14 +460,14 @@ export async function POST(request: Request) {
       groupId: string | null,
       userId: string | null
     ): Promise<CaptureLineMessageResult> => {
-      if (messageType === "text") {
+      if (messageType === "text" || messageType === "sticker") {
         return captureTextMessage({
           destination,
           lineMessageId: mid,
           sourceType,
           groupId,
           userId,
-          rawText: text,
+          rawText: messageType === "sticker" ? "[LINE sticker]" : text,
           replyToken,
           quotedMessageId,
           quoteToken,
@@ -521,7 +521,7 @@ export async function POST(request: Request) {
           groupId: gid,
           userId: src.userId ? String(src.userId) : null,
           messageType,
-          rawText: text,
+          rawText: messageType === "sticker" ? "[LINE sticker]" : text,
           receivedAt,
           imageSet: msg.imageSet,
         });

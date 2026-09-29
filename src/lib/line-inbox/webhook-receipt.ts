@@ -18,6 +18,15 @@ function cleanLine(value: unknown): string {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
 
+export function isLineReceiptCloseMarker(value: unknown): boolean {
+  const text = cleanLine(value);
+  if (!text) return false;
+  if (isLineInboxNoiseOrSeparatorOnlyText(text)) return true;
+
+  const compact = text.replace(/\s+/g, "").toLowerCase();
+  return /^(?:จบ|จบงาน|จบคันนี้|ปิด|ปิดงาน|เรียบร้อย|เรียบร้อยแล้ว|คันต่อไป|ต่อไป|ok|okay|done|next)$/.test(compact);
+}
+
 export function extractReceiptCardDetails(text: string): {
   plate?: string;
   mileage?: string;
@@ -81,10 +90,11 @@ export function isLineImageSetComplete(
  * undefined and an image whose index equals total may arrive first.
  */
 export function shouldAttemptLineReceiptReply(input: {
-  messageType: "text" | "image" | "file";
+  messageType: "text" | "image" | "file" | "sticker";
   imageSet?: LineImageSet | null;
   rawText?: string | null;
 }): boolean {
+  if (input.messageType === "sticker") return true;
   if (input.messageType !== "text") return false;
-  return isLineInboxNoiseOrSeparatorOnlyText(cleanLine(input.rawText));
+  return isLineReceiptCloseMarker(input.rawText);
 }

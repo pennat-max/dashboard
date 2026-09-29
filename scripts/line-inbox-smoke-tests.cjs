@@ -77,6 +77,7 @@ const {
   extractReceiptCardDetails,
   isLineImageSetComplete,
   isLineReceiptVehicleText,
+  isLineReceiptCloseMarker,
   normalizeLineImageSet,
   shouldAttemptLineReceiptReply,
 } = loadTsFile(path.join(root, "src/lib/line-inbox/webhook-receipt.ts"));
@@ -330,6 +331,14 @@ assert.strictEqual(
   shouldAttemptLineReceiptReply({ messageType: "text", rawText: "----------" }),
   true,
   "webhook acknowledges when a separator/noise marker closes a vehicle job"
+);
+for (const marker of ["======", "จบ", "จบงาน", "ปิดงาน", "เรียบร้อย", "คันต่อไป", "ok", "done", "next", "(smile)"]) {
+  assert.strictEqual(isLineReceiptCloseMarker(marker), true, `close marker recognized: ${marker}`);
+}
+assert.strictEqual(
+  shouldAttemptLineReceiptReply({ messageType: "sticker" }),
+  true,
+  "a LINE sticker can close the previous vehicle job"
 );
 assert.strictEqual(
   shouldAttemptLineReceiptReply({ messageType: "text", rawText: "สว-5391 - 90300 km." }),
