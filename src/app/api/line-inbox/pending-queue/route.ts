@@ -416,7 +416,11 @@ function bangkokDayRangeIso(ymd: string): { start: string; end: string } | null 
 
 function sourceScopeKey(row: Pick<PendingQueueDbRow, "source_type" | "group_id" | "user_id">): string {
   const sourceType = cleanString(row.source_type) || "unknown";
-  const id = cleanString(row.group_id) || cleanString(row.user_id);
+  const channelId = cleanString(row.group_id);
+  const userId = cleanString(row.user_id);
+  const id = sourceType === "group" || sourceType === "room"
+    ? [channelId, userId].filter(Boolean).join(":")
+    : userId || channelId;
   return `${sourceType}:${id}`;
 }
 
@@ -494,6 +498,7 @@ function findNearbyTextContext(row: PendingQueueDbRow, rows: PendingQueueDbRow[]
       if (candidate.id === row.id) return false;
       if (sourceScopeKey(candidate) !== sourceKey) return false;
       if (isLineImageOnlyText(candidate.raw_text)) return false;
+      if (isLineInboxNoiseOrSeparatorOnlyText(String(candidate.raw_text ?? ""))) return false;
       const t = lineMessageTimeMs(candidate);
       if (!t) return false;
       const delta = rowTime - t;
@@ -530,6 +535,8 @@ function findFollowingImageContexts(row: PendingQueueDbRow, rows: PendingQueueDb
       if (candidate.id === row.id) return false;
       if (sourceScopeKey(candidate) !== sourceKey) return false;
       if (!isLineImageOnlyText(candidate.raw_text)) return false;
+      const nearestText = findNearbyTextContext(candidate, rows);
+      if (cleanString(nearestText?.row.id) !== cleanString(row.id)) return false;
       const t = lineMessageTimeMs(candidate);
       if (!t) return false;
       const delta = t - rowTime;
