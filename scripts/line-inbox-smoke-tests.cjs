@@ -83,6 +83,7 @@ const {
 } = loadTsFile(path.join(root, "src/lib/line-inbox/webhook-receipt.ts"));
 const {
   buildLineCarDisplayLabel,
+  buildLineJobReviewUrl,
   buildLineOrderSearchRef,
   buildLineOrderReviewUrl,
 } = loadTsFile(path.join(root, "src/lib/line-inbox/review-link.ts"));
@@ -958,6 +959,15 @@ assert.strictEqual(
   "https://vigo4u-operations.pennat.chatgpt.site/m/orders?search=51072",
   "review URL opens the saved order page with search when focused car row id is missing"
 );
+const unlinkedJobReviewUrl = buildLineJobReviewUrl({
+  inboxId: "4a056c55-d65e-4a97-845c-fbd024709f26",
+  plate: "กน-206 - 63000 KM.",
+});
+assert.strictEqual(
+  unlinkedJobReviewUrl,
+  "https://vigo4u-operations.pennat.chatgpt.site/line-jobs-v2?job=4a056c55-d65e-4a97-845c-fbd024709f26&search=206",
+  "unlinked LINE intake opens the LINE Jobs review page instead of an order search that cannot find a car"
+);
 
 const approvalReply = buildLineApprovalAcknowledgementText({
   carTitle: koTho2692CarLabel,
@@ -1510,6 +1520,11 @@ assert(
     pendingQueueViewSource.includes("lineInboxQueueMessageIsWaitingForCarRecord(message)") &&
     pendingQueueViewSource.includes("lineInboxQueueMessageIsUnknownCarManualReview"),
   "pending queue keeps waiting-for-car separate and counts unknown-car rows as manual review"
+);
+assert(
+  pendingQueueRoute.includes("buildLineJobReviewUrl") &&
+    pendingQueueRoute.includes("buildLineJobReviewUrl({ inboxId: id"),
+  "pending queue links unlinked LINE intake to the LINE Jobs review page"
 );
 assert(
   pendingQueueViewSource.includes('if (filter === "all") return true'),
